@@ -122,3 +122,97 @@ def extract_text_from_upload(filename: str, file_bytes: bytes) -> str:
         return file_bytes.decode('utf-8', errors='replace')
 
     raise ValueError(f"Unsupported file type: {filename}. Use PDF, DOCX, TXT, or MD.")
+
+
+def fetch_url_content(url: str) -> tuple:
+    """Fetch a URL and extract main article text.
+
+    Returns (title, text). Raises on network or parse errors.
+    Uses trafilatura when available (best article extraction);
+    falls back to BeautifulSoup + simple heuristics.
+    """
+    import urllib.request
+    import urllib.parse
+
+    # Sanity check the URL
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise ValueError("URL must start with http:// or https://")
+
+    # Fetch with a real user-agent (some sites block default Python UA)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                          "AppleWebKit/537.36 (KHTML, like Gecko) "
+                          "Chrome/120.0.0.0 Safari/537.36"
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            html_bytes = response.read()
+            content_type = response.headers.get("Content-Type", "")
+    except Exception as e:
+        raise RuntimeError(f"Could not fetch URL: {e}")
+
+    # Decode HTML
+    encoding = "utf-8"
+    if "charset=" in content_type:
+        encoding = content_type.split("charset=")[-1].split(";")[0].strip()
+    try:
+        html = html_bytes.decode(encoding, errors="replace")
+    except Exception:
+        html = html_bytes.decode("utf-8", errors="replace")
+
+    # Prefer trafilatura for clean article extraction if available
+    try:
+        import trafilatura
+        text = trafilatura.extract(html, include_comments=False, include_tables=False)
+        title = ""
+        meta = trafilatura.extract_metadata(html)
+        if meta:
+            title = meta.title or ""
+        if not text:
+            raise RuntimeError("trafilatura returned no content")
+        return (title or url, text)
+    except ImportError:
+        pass
+    except Exception:
+        pass  # fall through to BeautifulSoup
+
+    # Fallback: BeautifulSoup
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        raise RuntimeError("Neither trafilatura nor beautifulsoup4 are installed")
+
+    soup = BeautifulSoup(html, "html.parser")
+
+    # Strip script/style/nav/footer to clean things up
+    for tag in soup(["script", "style", "nav", "header", "footer", "aside", "form", "noscript"]):
+        tag.decompose()
+
+    title = ""
+    if soup.title and soup.title.string:
+        title = soup.title.string.strip()
+
+    # Try to find the main article container
+    main = (soup.find("article")
+            or soup.find("main")
+            or soup.find(attrs={"role": "main"})
+            or soup.body
+            or soup)
+
+    # Get text, prefer paragraph-level joining
+    paragraphs = [p.get_text(" ", strip=True) for p in main.find_all(["p", "li", "h1", "h2", "h3", "h4"])]
+    paragraphs = [p for p in paragraphs if len(p) > 20]  # drop nav fragments
+    text = "\n\n".join(paragraphs)
+
+    if not text.strip():
+        # Last resort: dump everything
+        text = main.get_text("\n", strip=True)
+
+    if not text.strip():
+        raise RuntimeError("Could not extract any text from this page")
+
+    return (title or url, text)

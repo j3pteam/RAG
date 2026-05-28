@@ -704,6 +704,16 @@ input[type="text"] { flex: 1; min-width: 200px; }
   </div>
 
   <div class="section">
+    <h2>Add Knowledge from URL</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">Paste a link to an article, blog post, or web page. The main article text will be extracted and embedded. Works best with article-style pages (not paywalled, login-required, or JavaScript-only sites).</p>
+    <form method="POST" action="/admin/upload-url" class="upload">
+      <input type="url" name="url" placeholder="https://example.com/article" required style="flex: 1.5; min-width: 280px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit;" />
+      <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
+      <button type="submit" class="btn">Fetch & Embed</button>
+    </form>
+  </div>
+
+  <div class="section">
     <h2>Knowledge Base ({{ docs|length }} documents)</h2>
     {% if docs %}
     <table>
@@ -821,6 +831,45 @@ def admin_upload():
     except Exception as e:
         app.logger.error(f"Upload failed: {e}")
         flash(f"Upload failed: {str(e)[:200]}")
+
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/upload-url", methods=["POST"])
+@admin_required
+def admin_upload_url():
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot ingest URL: RAG not fully configured.")
+        return redirect(url_for("admin_dashboard"))
+
+    url = (request.form.get("url") or "").strip()
+    custom_title = (request.form.get("url_title") or "").strip()
+
+    if not url:
+        flash("No URL provided.")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        extracted_title, text = emb.fetch_url_content(url)
+        title = custom_title or extracted_title or url
+
+        if not text.strip():
+            flash("No text could be extracted from this URL.")
+            return redirect(url_for("admin_dashboard"))
+
+        chunks = emb.chunk_text(text)
+        if not chunks:
+            flash("URL produced no chunks (page too short or empty).")
+            return redirect(url_for("admin_dashboard"))
+
+        vectors = emb.embed_batch(chunks)
+        pairs = list(zip(chunks, vectors))
+        doc_id = db.insert_document(title, url, pairs)
+
+        flash(f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id}).")
+    except Exception as e:
+        app.logger.error(f"URL ingest failed: {e}")
+        flash(f"URL ingest failed: {str(e)[:200]}")
 
     return redirect(url_for("admin_dashboard"))
 
