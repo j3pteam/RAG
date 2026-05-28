@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
- 
+
 NEW since persona template:
   - Document upload / chunking / embedding pipeline
   - Semantic search retrieves relevant chunks before each response
   - Admin page (password-protected) for uploads, doc management, feedback review
   - Feedback persisted to Postgres instead of just logs
- 
+
 NEW environment variables:
   DATABASE_URL          Auto-set by Railway when you add a Postgres plugin
   OPENAI_API_KEY        For embeddings (~$0.02/1M tokens, very cheap)
   ADMIN_PASSWORD        Password for /admin page
- 
+
 All other env vars from the persona template still apply.
 """
 import os
@@ -23,15 +23,15 @@ from flask import (
     send_from_directory, redirect, url_for, flash,
 )
 import anthropic
- 
+
 import database as db
 import embeddings as emb
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
- 
+
 def load_system_prompt():
     inline = os.environ.get("PERSONA_SYSTEM_PROMPT")
     if inline:
@@ -45,8 +45,8 @@ def load_system_prompt():
     except ImportError:
         pass
     return "You are a helpful assistant."
- 
- 
+
+
 CONFIG = {
     "persona_name": os.environ.get("PERSONA_NAME", "J3P Advisor"),
     "opening": os.environ.get(
@@ -55,13 +55,13 @@ CONFIG = {
     ),
     "placeholder": os.environ.get("PERSONA_PLACEHOLDER", "How can I help you?"),
     "system_prompt": load_system_prompt(),
- 
+
     "logo_url": os.environ.get("BRAND_LOGO_URL", "/full_logo.png"),
     "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
     "navy": os.environ.get("BRAND_NAVY", "#27334A"),
     "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
     "paper": os.environ.get("BRAND_PAPER", "#FAF6F0"),
- 
+
     "footer_disclaimer": os.environ.get(
         "FOOTER_DISCLAIMER",
         "For informational purposes only. Not medical, legal, or financial advice.",
@@ -74,24 +74,24 @@ CONFIG = {
         "FOOTER_CTA_URL",
         "https://j3phealth.as.me/schedule/81cec0b7",
     ),
- 
+
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
     "max_tokens": int(os.environ.get("MAX_TOKENS", "1024")),
     "rag_top_k": int(os.environ.get("RAG_TOP_K", "4")),
     "rag_min_similarity": float(os.environ.get("RAG_MIN_SIMILARITY", "0.3")),
     "admin_password": os.environ.get("ADMIN_PASSWORD", ""),
 }
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # App setup — initialize DB schema on startup
 # ---------------------------------------------------------------------------
- 
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB upload cap
 client = anthropic.Anthropic()
- 
+
 # Initialize DB schema once at startup (idempotent)
 try:
     if db.is_enabled():
@@ -101,12 +101,12 @@ try:
         app.logger.warning("Database not configured — RAG and feedback persistence disabled")
 except Exception as e:
     app.logger.error(f"DB init failed: {e}")
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Auth helper for admin routes
 # ---------------------------------------------------------------------------
- 
+
 def admin_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -116,12 +116,12 @@ def admin_required(f):
             return redirect(url_for("admin_login"))
         return f(*args, **kwargs)
     return wrapper
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Main chat HTML
 # ---------------------------------------------------------------------------
- 
+
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -275,13 +275,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
     <button id="reset-btn">New conversation</button>
   </header>
- 
+
   <div id="chat-wrap">
     <div id="chat">
       <div class="msg assistant">{{ cfg.opening }}</div>
     </div>
   </div>
- 
+
   <div class="composer-wrap">
     <form id="chat-form">
       <div class="input-wrap">
@@ -302,7 +302,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       {{ cfg.footer_cta_text }} <a href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">click here</a>.
     </div>
   </div>
- 
+
   <script>
     const chat = document.getElementById("chat");
     const form = document.getElementById("chat-form");
@@ -311,7 +311,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const resetBtn = document.getElementById("reset-btn");
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
- 
+
     function addMessage(text, role, withFeedback = false) {
       const div = document.createElement("div");
       div.className = "msg " + role;
@@ -323,7 +323,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       chatWrap.scrollTop = chatWrap.scrollHeight;
       return div;
     }
- 
+
     function attachFeedback(msgDiv, replyText) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
@@ -362,7 +362,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
       msgDiv.appendChild(wrap);
     }
- 
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
@@ -388,7 +388,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         input.focus();
       }
     });
- 
+
     resetBtn.addEventListener("click", async () => {
       await fetch("/reset", { method: "POST" });
       chat.innerHTML = "";
@@ -398,7 +398,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       chat.appendChild(div);
       input.focus();
     });
- 
+
     // Voice input
     const micBtn = document.getElementById("mic-btn");
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -433,12 +433,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
 </body>
 </html>
 """
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Chat routes
 # ---------------------------------------------------------------------------
- 
+
 def retrieve_context(query: str) -> str:
     """Search the knowledge base for chunks relevant to the user's query.
     Returns formatted context string, or empty string if RAG unavailable/no results."""
@@ -458,24 +458,24 @@ def retrieve_context(query: str) -> str:
     except Exception as e:
         app.logger.error(f"RAG retrieval failed: {e}")
         return ""
- 
- 
+
+
 @app.route("/")
 def index():
     session["messages"] = []
     return render_template_string(INDEX_HTML, cfg=CONFIG)
- 
- 
+
+
 @app.route("/chat", methods=["POST"])
 def chat():
     data = request.get_json(silent=True) or {}
     user_input = (data.get("message") or "").strip()
     if not user_input:
         return jsonify({"error": "Empty message"}), 400
- 
+
     messages = session.get("messages", [])
     messages.append({"role": "user", "content": user_input})
- 
+
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
     context = retrieve_context(user_input)
@@ -489,7 +489,7 @@ def chat():
         )
     else:
         composed_prompt = base_prompt
- 
+
     try:
         response = client.messages.create(
             model=CONFIG["model"],
@@ -507,22 +507,22 @@ def chat():
         return jsonify({"error": f"API error: {str(e)}"}), 500
     except Exception as e:
         return jsonify({"error": f"Server error: {str(e)}"}), 500
- 
+
     assistant_text = next(
         (block.text for block in response.content if block.type == "text"), ""
     )
- 
+
     messages.append({"role": "assistant", "content": assistant_text})
     session["messages"] = messages
     return jsonify({"reply": assistant_text})
- 
- 
+
+
 @app.route("/reset", methods=["POST"])
 def reset():
     session["messages"] = []
     return jsonify({"ok": True})
- 
- 
+
+
 @app.route("/feedback", methods=["POST"])
 def feedback():
     data = request.get_json(silent=True) or {}
@@ -530,14 +530,14 @@ def feedback():
     reply = (data.get("reply") or "")[:2000]
     if rating not in ("up", "down"):
         return jsonify({"error": "Invalid rating"}), 400
- 
+
     messages = session.get("messages", [])
     last_user_msg = ""
     for m in reversed(messages):
         if m.get("role") == "user":
             last_user_msg = (m.get("content") or "")[:2000]
             break
- 
+
     # Persist to DB if available, always log to stdout
     try:
         db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"])
@@ -548,8 +548,8 @@ def feedback():
         CONFIG["persona_name"], rating, last_user_msg, reply,
     )
     return jsonify({"ok": True})
- 
- 
+
+
 @app.route("/health")
 def health():
     return jsonify({
@@ -557,41 +557,41 @@ def health():
         "persona": CONFIG["persona_name"],
         "rag_enabled": db.is_enabled() and emb.is_enabled(),
     })
- 
- 
+
+
 @app.route("/debug")
 def debug_env():
     """Diagnostic endpoint — reports presence of key env vars without revealing values."""
     return jsonify({
         "DATABASE_URL_set": bool(os.environ.get("DATABASE_URL")),
         "DATABASE_URL_starts_with": (os.environ.get("DATABASE_URL", "")[:20] + "..." if os.environ.get("DATABASE_URL") else None),
-        "OPENAI_API_KEY_set": bool(os.environ.get("OPENAI_API_KEY")),
-        "OPENAI_API_KEY_starts_with": (os.environ.get("OPENAI_API_KEY", "")[:7] + "..." if os.environ.get("OPENAI_API_KEY") else None),
+        "VOYAGE_API_KEY_set": bool(os.environ.get("VOYAGE_API_KEY")),
+        "VOYAGE_API_KEY_starts_with": (os.environ.get("VOYAGE_API_KEY", "")[:7] + "..." if os.environ.get("VOYAGE_API_KEY") else None),
         "ADMIN_PASSWORD_set": bool(os.environ.get("ADMIN_PASSWORD")),
         "FLASK_SECRET_KEY_set": bool(os.environ.get("FLASK_SECRET_KEY")),
         "ANTHROPIC_API_KEY_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "db_is_enabled": db.is_enabled(),
         "emb_is_enabled": emb.is_enabled(),
         "psycopg_imported": db.HAS_PSYCOPG,
-        "openai_imported": emb.HAS_OPENAI,
+        "voyage_imported": emb.HAS_VOYAGE,
     })
- 
- 
+
+
 # Serve image assets from project root
 @app.route("/<path:filename>.png")
 def serve_png(filename):
     return send_from_directory(".", f"{filename}.png")
- 
- 
+
+
 @app.route("/<path:filename>.jpg")
 def serve_jpg(filename):
     return send_from_directory(".", f"{filename}.jpg")
- 
- 
+
+
 # ---------------------------------------------------------------------------
 # Admin panel
 # ---------------------------------------------------------------------------
- 
+
 ADMIN_LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login</title>
 <style>
 body { font-family: -apple-system, sans-serif; background: #27334A; color: #fff;
@@ -612,7 +612,7 @@ button:hover { background: #D2BC8D; color: #27334A; }
   <input type="password" name="password" placeholder="Password" autofocus required />
   <button type="submit">Sign in</button>
 </form></body></html>"""
- 
+
 ADMIN_HTML = """<!DOCTYPE html><html><head>
 <title>Admin — {{ cfg.persona_name }}</title>
 <link rel="icon" href="{{ cfg.favicon_url }}" />
@@ -658,7 +658,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% with messages = get_flashed_messages() %}
     {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
   {% endwith %}
- 
+
   {% if not rag_ready %}
   <div class="warn">
     <strong>RAG is not fully configured.</strong>
@@ -667,7 +667,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
     Once both are set, redeploy and you can upload documents.
   </div>
   {% endif %}
- 
+
   <div class="section">
     <h2>Feedback Overview</h2>
     <div class="stats">
@@ -691,7 +691,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
       </div>
     </div>
   </div>
- 
+
   {% if rag_ready %}
   <div class="section">
     <h2>Upload Document</h2>
@@ -702,7 +702,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <button type="submit" class="btn">Upload & Embed</button>
     </form>
   </div>
- 
+
   <div class="section">
     <h2>Knowledge Base ({{ docs|length }} documents)</h2>
     {% if docs %}
@@ -728,7 +728,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
     {% endif %}
   </div>
   {% endif %}
- 
+
   <div class="section">
     <h2>Recent Feedback (last 50)</h2>
     {% if feedback_rows %}
@@ -749,8 +749,8 @@ input[type="text"] { flex: 1; min-width: 200px; }
   </div>
 </div>
 </body></html>"""
- 
- 
+
+
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
     if not CONFIG["admin_password"]:
@@ -763,14 +763,14 @@ def admin_login():
     if session.get("is_admin"):
         return redirect(url_for("admin_dashboard"))
     return render_template_string(ADMIN_LOGIN_HTML, error=None)
- 
- 
+
+
 @app.route("/admin/logout")
 def admin_logout():
     session.pop("is_admin", None)
     return redirect(url_for("admin_login"))
- 
- 
+
+
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
@@ -784,47 +784,47 @@ def admin_dashboard():
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
     )
- 
- 
+
+
 @app.route("/admin/upload", methods=["POST"])
 @admin_required
 def admin_upload():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot upload: RAG not fully configured.")
         return redirect(url_for("admin_dashboard"))
- 
+
     file = request.files.get("file")
     if not file or not file.filename:
         flash("No file selected.")
         return redirect(url_for("admin_dashboard"))
- 
+
     title = (request.form.get("title") or "").strip() or file.filename
- 
+
     try:
         file_bytes = file.read()
         text = emb.extract_text_from_upload(file.filename, file_bytes)
         if not text.strip():
             flash(f"No text could be extracted from {file.filename}.")
             return redirect(url_for("admin_dashboard"))
- 
+
         chunks = emb.chunk_text(text)
         if not chunks:
             flash("Document produced no chunks (too short or empty).")
             return redirect(url_for("admin_dashboard"))
- 
+
         # Embed all chunks in batch
         vectors = emb.embed_batch(chunks)
         pairs = list(zip(chunks, vectors))
         doc_id = db.insert_document(title, file.filename, pairs)
- 
+
         flash(f"✓ Uploaded '{title}' — {len(chunks)} chunks embedded (doc #{doc_id}).")
     except Exception as e:
         app.logger.error(f"Upload failed: {e}")
         flash(f"Upload failed: {str(e)[:200]}")
- 
+
     return redirect(url_for("admin_dashboard"))
- 
- 
+
+
 @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
 @admin_required
 def admin_delete(doc_id):
@@ -834,8 +834,8 @@ def admin_delete(doc_id):
     except Exception as e:
         flash(f"Delete failed: {str(e)[:200]}")
     return redirect(url_for("admin_dashboard"))
- 
- 
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)

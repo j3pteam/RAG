@@ -22,7 +22,7 @@ except ImportError:
 
 
 DATABASE_URL = os.environ.get("DATABASE_URL")
-EMBEDDING_DIM = 1536  # text-embedding-3-small
+EMBEDDING_DIM = 512  # voyage-3-lite
 
 
 def is_enabled() -> bool:
@@ -43,7 +43,9 @@ def get_conn():
 
 
 def init_schema():
-    """Create tables and pgvector extension if they don't exist. Idempotent."""
+    """Create tables and pgvector extension if they don't exist. Idempotent.
+    If an existing chunks table has the wrong embedding dimension, drops & recreates it.
+    """
     if not is_enabled():
         return False
     with get_conn() as conn:
@@ -58,6 +60,27 @@ def init_schema():
                     chunk_count INT DEFAULT 0
                 );
             """)
+            # Check if chunks table exists with mismatched embedding dimension
+            cur.execute("""
+                SELECT atttypmod FROM pg_attribute
+                WHERE attrelid = 'chunks'::regclass AND attname = 'embedding';
+            """) if _table_exists(cur, 'chunks') else None
+
+            needs_recreate = False
+            if _table_exists(cur, 'chunks'):
+                cur.execute("""
+                    SELECT a.atttypmod FROM pg_attribute a
+                    JOIN pg_class c ON a.attrelid = c.oid
+                    WHERE c.relname = 'chunks' AND a.attname = 'embedding';
+                """)
+                row = cur.fetchone()
+                if row and row.get("atttypmod") and row["atttypmod"] != EMBEDDING_DIM:
+                    needs_recreate = True
+
+            if needs_recreate:
+                cur.execute("DROP TABLE IF EXISTS chunks CASCADE;")
+                cur.execute("DELETE FROM documents;")  # clear stale doc rows since chunks are gone
+
             cur.execute(f"""
                 CREATE TABLE IF NOT EXISTS chunks (
                     id SERIAL PRIMARY KEY,
@@ -67,7 +90,6 @@ def init_schema():
                     embedding vector({EMBEDDING_DIM})
                 );
             """)
-            # HNSW index for fast cosine similarity search
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS chunks_embedding_idx
                 ON chunks USING hnsw (embedding vector_cosine_ops);
@@ -84,6 +106,14 @@ def init_schema():
             """)
         conn.commit()
     return True
+
+
+def _table_exists(cur, table_name: str) -> bool:
+    cur.execute(
+        "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_name = %s);",
+        (table_name,),
+    )
+    return cur.fetchone()["exists"]
 
 
 def insert_document(title: str, source: str, chunks_with_embeddings: list) -> int:

@@ -1,86 +1,80 @@
 """
-Embedding + chunking utilities.
+Embedding + chunking utilities — Voyage AI version.
 
-Uses OpenAI's text-embedding-3-small model (1536 dimensions, ~$0.02/1M tokens).
-Requires OPENAI_API_KEY environment variable.
+Uses Voyage AI's voyage-3-lite model (512 dimensions, free tier: 50M tokens).
+Requires VOYAGE_API_KEY environment variable.
 
-Falls back gracefully when no key is set.
+Get a key at: https://www.voyageai.com
 """
 import os
 import re
 from typing import Optional
 
 try:
-    from openai import OpenAI
-    HAS_OPENAI = True
+    import voyageai
+    HAS_VOYAGE = True
 except ImportError:
-    HAS_OPENAI = False
+    HAS_VOYAGE = False
 
+# Maintain the same interface as before — app.py imports `HAS_OPENAI` etc.
+# but we'll keep the constant names generic for forward compatibility.
+HAS_OPENAI = HAS_VOYAGE  # alias for backward compat with app.py
 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-EMBEDDING_MODEL = "text-embedding-3-small"
+VOYAGE_API_KEY = os.environ.get("VOYAGE_API_KEY")
+EMBEDDING_MODEL = "voyage-3-lite"  # 512 dims, generous free tier
+EMBEDDING_DIM = 512
 
-# Lazy client init so missing key doesn't crash app startup
-_client: Optional["OpenAI"] = None
+_client: Optional["voyageai.Client"] = None
 
 
 def is_enabled() -> bool:
-    return HAS_OPENAI and bool(OPENAI_API_KEY)
+    return HAS_VOYAGE and bool(VOYAGE_API_KEY)
 
 
 def _get_client():
     global _client
     if _client is None and is_enabled():
-        _client = OpenAI(api_key=OPENAI_API_KEY)
+        _client = voyageai.Client(api_key=VOYAGE_API_KEY)
     return _client
 
 
 def embed_text(text: str) -> list:
-    """Get embedding vector for a single piece of text."""
+    """Get embedding vector for a single piece of text (used for queries)."""
     client = _get_client()
     if client is None:
-        raise RuntimeError("OpenAI API key not configured")
-    response = client.embeddings.create(model=EMBEDDING_MODEL, input=text)
-    return response.data[0].embedding
+        raise RuntimeError("Voyage API key not configured")
+    result = client.embed([text], model=EMBEDDING_MODEL, input_type="query")
+    return result.embeddings[0]
 
 
 def embed_batch(texts: list) -> list:
-    """Embed many texts in one API call (cheaper, faster). Max ~2048 inputs per call."""
+    """Embed many texts in batches (used for document upload, type=document)."""
     client = _get_client()
     if client is None:
-        raise RuntimeError("OpenAI API key not configured")
-    # OpenAI accepts up to 2048 inputs per request; chunk if needed
+        raise RuntimeError("Voyage API key not configured")
     results = []
-    batch_size = 100  # conservative for stability
+    batch_size = 100  # Voyage allows up to 128
     for i in range(0, len(texts), batch_size):
         batch = texts[i:i + batch_size]
-        response = client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
-        results.extend([item.embedding for item in response.data])
+        result = client.embed(batch, model=EMBEDDING_MODEL, input_type="document")
+        results.extend(result.embeddings)
     return results
 
 
 def chunk_text(text: str, target_words: int = 350, overlap_words: int = 50) -> list:
-    """
-    Split text into ~350-word chunks with ~50 words of overlap.
-    Tries to break on paragraph boundaries when possible, falls back to sentences.
-    """
-    # Normalize whitespace
+    """Split text into ~350-word chunks with ~50 words of overlap."""
     text = re.sub(r'\r\n', '\n', text)
     text = re.sub(r'\n{3,}', '\n\n', text)
     text = text.strip()
     if not text:
         return []
 
-    # Split by paragraphs first
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-
     chunks = []
     current_words = []
 
     for para in paragraphs:
         para_words = para.split()
-
-        # If this paragraph alone exceeds target, split it further on sentences
         if len(para_words) > target_words * 1.5:
             sentences = re.split(r'(?<=[.!?])\s+', para)
             for sent in sentences:
@@ -88,7 +82,6 @@ def chunk_text(text: str, target_words: int = 350, overlap_words: int = 50) -> l
                 if len(current_words) + len(sent_words) > target_words:
                     if current_words:
                         chunks.append(' '.join(current_words))
-                        # Carry overlap from end of previous chunk
                         current_words = current_words[-overlap_words:] if overlap_words else []
                 current_words.extend(sent_words)
         else:
@@ -99,12 +92,11 @@ def chunk_text(text: str, target_words: int = 350, overlap_words: int = 50) -> l
 
     if current_words:
         chunks.append(' '.join(current_words))
-
     return chunks
 
 
 def extract_text_from_upload(filename: str, file_bytes: bytes) -> str:
-    """Extract text from a file based on extension. Returns plain text."""
+    """Extract text from PDF, DOCX, TXT, or MD."""
     name_lower = filename.lower()
 
     if name_lower.endswith('.pdf'):
