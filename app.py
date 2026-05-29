@@ -585,6 +585,38 @@ def chat():
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
     context = retrieve_context(user_input)
+
+    # Scope-limiting instructions appended on EVERY request
+    scope_guard = (
+        "\n\n---\n"
+        "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
+        "1. You answer ONLY questions related to J3P Health's areas of expertise: "
+        "leadership development, organizational behavior, behavioral assessment, "
+        "physician/healthcare leadership, team dynamics, executive coaching, "
+        "communication, self-awareness, negotiation, career navigation, "
+        "and related professional development topics within healthcare and "
+        "high-stakes organizational settings.\n\n"
+        "2. If the user asks about ANYTHING outside this scope — including but "
+        "not limited to: general trivia, animals, science, history, cooking, "
+        "sports, entertainment, politics, current events, math, coding, weather, "
+        "personal recommendations unrelated to professional growth, or any topic "
+        "where J3P would have no specific expertise — you MUST politely decline "
+        "and redirect.\n\n"
+        "3. Your off-topic decline should be brief and warm, in the J3P voice. "
+        "Use this format (adapt naturally):\n"
+        "   \"That's outside what I'm here to help with as the J3P Advisor. "
+        "I'm focused on leadership, team dynamics, professional growth, and "
+        "navigating challenges in healthcare and high-stakes work. "
+        "Is there something along those lines I can help you with?\"\n\n"
+        "4. Do NOT attempt to bridge an off-topic question into J3P territory. "
+        "Do NOT answer the off-topic question even briefly before redirecting. "
+        "Decline cleanly.\n\n"
+        "5. Greetings, small talk, and meta-questions about what you do are fine "
+        "to engage with naturally.\n\n"
+        "6. When in doubt about whether a question is in scope, lean toward "
+        "declining rather than answering.\n"
+    )
+
     if context:
         composed_prompt = (
             base_prompt
@@ -592,9 +624,10 @@ def chat():
             + context
             + "\n\n---\nUse this context to inform your answer when relevant. "
               "Stay in your assigned voice and frameworks."
+            + scope_guard
         )
     else:
-        composed_prompt = base_prompt
+        composed_prompt = base_prompt + scope_guard
 
     try:
         response = client.messages.create(
