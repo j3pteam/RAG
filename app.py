@@ -776,7 +776,14 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% endif %}
 
   <div class="section">
-    <h2>Feedback Overview</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line);">
+      <h2 style="margin: 0; border: none; padding: 0;">Feedback Overview</h2>
+      {% if stats.total > 0 %}
+      <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
+        ↓ Export CSV
+      </a>
+      {% endif %}
+    </div>
     <div class="stats">
       <div class="stat">
         <div class="stat-value">{{ stats.up }}</div>
@@ -993,6 +1000,50 @@ def admin_delete(doc_id):
     except Exception as e:
         flash(f"Delete failed: {str(e)[:200]}")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/export/feedback.csv")
+@admin_required
+def admin_export_feedback():
+    """Stream all feedback as a CSV download."""
+    import csv
+    import io
+    from flask import Response
+
+    rows = db.list_feedback(limit=10000) if db.is_enabled() else []
+
+    output = io.StringIO()
+    writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    writer.writerow([
+        "ID", "Timestamp", "Rating", "User Question", "Bot Reply",
+        "Comment", "Persona"
+    ])
+    for r in rows:
+        writer.writerow([
+            r.get("id", ""),
+            r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
+            r.get("rating", ""),
+            r.get("user_message", "") or "",
+            r.get("bot_reply", "") or "",
+            r.get("comment", "") or "",
+            r.get("persona", "") or "",
+        ])
+
+    csv_content = output.getvalue()
+    output.close()
+
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"j3p_feedback_{timestamp}.csv"
+
+    return Response(
+        csv_content,
+        mimetype="text/csv",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 if __name__ == "__main__":
