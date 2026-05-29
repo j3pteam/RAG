@@ -100,9 +100,14 @@ def init_schema():
                     rating TEXT CHECK (rating IN ('up', 'down')),
                     user_message TEXT,
                     bot_reply TEXT,
+                    comment TEXT,
                     persona TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+            """)
+            # Add comment column to existing tables that pre-date it
+            cur.execute("""
+                ALTER TABLE feedback ADD COLUMN IF NOT EXISTS comment TEXT;
             """)
         conn.commit()
     return True
@@ -183,16 +188,16 @@ def delete_document(doc_id: int):
         conn.commit()
 
 
-def log_feedback(rating: str, user_message: str, bot_reply: str, persona: str = ""):
-    """Persist a thumbs up/down rating with context."""
+def log_feedback(rating: str, user_message: str, bot_reply: str, persona: str = "", comment: str = ""):
+    """Persist a thumbs up/down rating with optional comment."""
     if not is_enabled():
         return  # silently no-op; logging-only mode
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO feedback (rating, user_message, bot_reply, persona) "
-                "VALUES (%s, %s, %s, %s);",
-                (rating, user_message[:2000], bot_reply[:2000], persona[:100]),
+                "INSERT INTO feedback (rating, user_message, bot_reply, comment, persona) "
+                "VALUES (%s, %s, %s, %s, %s);",
+                (rating, user_message[:2000], bot_reply[:2000], comment[:2000], persona[:100]),
             )
         conn.commit()
 
