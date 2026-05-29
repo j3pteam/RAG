@@ -217,6 +217,63 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-btn.selected-down { background: var(--rust); border-color: var(--rust); color: #fff; }
     .feedback-btn:disabled { cursor: default; }
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
+    .feedback-comment {
+      margin-top: 0.7rem;
+      padding-top: 0.7rem;
+      border-top: 1px dashed var(--line);
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .feedback-comment label {
+      font-size: 0.72rem;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .feedback-comment textarea {
+      width: 100%;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      font-family: inherit;
+      font-size: 0.9rem;
+      outline: none;
+      resize: vertical;
+      min-height: 64px;
+      background: var(--paper);
+      color: var(--text);
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .feedback-comment textarea:focus {
+      border-color: var(--rust);
+      box-shadow: 0 0 0 3px rgba(157, 67, 44, 0.12);
+    }
+    .feedback-comment-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .feedback-comment-btn {
+      background: var(--rust);
+      color: #fff;
+      border: 1px solid var(--rust);
+      border-radius: 2px;
+      padding: 0.45rem 0.95rem;
+      font-size: 0.7rem;
+      font-family: inherit;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: opacity 0.15s ease;
+    }
+    .feedback-comment-btn:hover:not(:disabled) { opacity: 0.85; }
+    .feedback-comment-btn.secondary {
+      background: transparent;
+      color: var(--muted);
+      border-color: var(--line);
+    }
+    .feedback-comment-btn:disabled { opacity: 0.5; cursor: default; }
     .composer-wrap { background: var(--paper-2); border-top: 1px solid var(--line); }
     form { display: flex; gap: 0.6rem; padding: 1rem 1.5rem; max-width: 760px; margin: 0 auto; }
     .input-wrap { flex: 1; position: relative; display: flex; align-items: center; }
@@ -340,24 +397,73 @@ INDEX_HTML = r"""<!DOCTYPE html>
           </svg>
         </button>
       `;
+
+      async function sendFeedback(rating, comment) {
+        try {
+          await fetch("/feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ rating, reply: replyText, comment: comment || "" }),
+          });
+        } catch (err) {
+          console.error("Feedback error:", err);
+        }
+      }
+
       const buttons = wrap.querySelectorAll(".feedback-btn");
       buttons.forEach(btn => {
         btn.addEventListener("click", async () => {
           if (btn.disabled) return;
           const rating = btn.dataset.rating;
-          buttons.forEach(b => { b.disabled = true; });
-          btn.classList.add(rating === "up" ? "selected-up" : "selected-down");
-          const thanks = document.createElement("span");
-          thanks.className = "feedback-thanks";
-          thanks.textContent = "Thanks for the feedback";
-          wrap.appendChild(thanks);
-          try {
-            await fetch("/feedback", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ rating, reply: replyText }),
+
+          if (rating === "up") {
+            // Thumbs up: simple submit, no comment needed
+            buttons.forEach(b => { b.disabled = true; });
+            btn.classList.add("selected-up");
+            await sendFeedback("up", "");
+            const thanks = document.createElement("span");
+            thanks.className = "feedback-thanks";
+            thanks.textContent = "Thanks for the feedback";
+            wrap.appendChild(thanks);
+          } else {
+            // Thumbs down: show comment field, don't submit yet
+            buttons.forEach(b => { b.disabled = true; });
+            btn.classList.add("selected-down");
+
+            const commentBox = document.createElement("div");
+            commentBox.className = "feedback-comment";
+            commentBox.innerHTML = `
+              <label>What was wrong? (optional)</label>
+              <textarea placeholder="Tell us what would have been more helpful..." maxlength="2000"></textarea>
+              <div class="feedback-comment-actions">
+                <button type="button" class="feedback-comment-btn" data-action="submit">Submit feedback</button>
+                <button type="button" class="feedback-comment-btn secondary" data-action="skip">Skip</button>
+              </div>
+            `;
+            wrap.appendChild(commentBox);
+
+            const textarea = commentBox.querySelector("textarea");
+            textarea.focus();
+
+            const submitBtn = commentBox.querySelector('[data-action="submit"]');
+            const skipBtn = commentBox.querySelector('[data-action="skip"]');
+
+            async function finalize(commentText) {
+              submitBtn.disabled = true;
+              skipBtn.disabled = true;
+              textarea.disabled = true;
+              await sendFeedback("down", commentText);
+              commentBox.innerHTML = '<span class="feedback-thanks">Thanks for the feedback</span>';
+            }
+
+            submitBtn.addEventListener("click", () => finalize(textarea.value.trim()));
+            skipBtn.addEventListener("click", () => finalize(""));
+            textarea.addEventListener("keydown", (e) => {
+              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                finalize(textarea.value.trim());
+              }
             });
-          } catch (err) { console.error("Feedback error:", err); }
+          }
         });
       });
       msgDiv.appendChild(wrap);
@@ -528,6 +634,7 @@ def feedback():
     data = request.get_json(silent=True) or {}
     rating = data.get("rating")
     reply = (data.get("reply") or "")[:2000]
+    comment = (data.get("comment") or "")[:2000]
     if rating not in ("up", "down"):
         return jsonify({"error": "Invalid rating"}), 400
 
@@ -540,12 +647,12 @@ def feedback():
 
     # Persist to DB if available, always log to stdout
     try:
-        db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"])
+        db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"], comment)
     except Exception as e:
         app.logger.error(f"DB feedback log failed: {e}")
     app.logger.info(
-        "FEEDBACK persona=%s rating=%s user_msg=%r reply=%r",
-        CONFIG["persona_name"], rating, last_user_msg, reply,
+        "FEEDBACK persona=%s rating=%s user_msg=%r reply=%r comment=%r",
+        CONFIG["persona_name"], rating, last_user_msg, reply, comment,
     )
     return jsonify({"ok": True})
 
@@ -743,13 +850,16 @@ input[type="text"] { flex: 1; min-width: 200px; }
     <h2>Recent Feedback (last 50)</h2>
     {% if feedback_rows %}
     <table>
-      <tr><th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th></tr>
+      <tr><th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Comment</th></tr>
       {% for f in feedback_rows %}
       <tr>
         <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
         <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}</td>
         <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
         <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
+        <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
+          {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
+        </td>
       </tr>
       {% endfor %}
     </table>
