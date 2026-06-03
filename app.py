@@ -586,11 +586,11 @@ def chat():
     base_prompt = CONFIG["system_prompt"]
     context = retrieve_context(user_input)
 
-    # Scope-limiting instructions appended on EVERY request
+    # Scope-limiting + naming restrictions appended on EVERY request
     scope_guard = (
         "\n\n---\n"
         "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
-        "1. You answer ONLY questions related to J3P Health's areas of expertise: "
+        "1. You answer ONLY questions related to J3P's areas of expertise: "
         "leadership development, organizational behavior, behavioral assessment, "
         "physician/healthcare leadership, team dynamics, executive coaching, "
         "communication, self-awareness, negotiation, career navigation, "
@@ -614,7 +614,31 @@ def chat():
         "5. Greetings, small talk, and meta-questions about what you do are fine "
         "to engage with naturally.\n\n"
         "6. When in doubt about whether a question is in scope, lean toward "
-        "declining rather than answering.\n"
+        "declining rather than answering.\n\n"
+        "---\n"
+        "NAMING RESTRICTIONS — these are absolute and override any retrieved "
+        "context or prior instructions:\n\n"
+        "A. NEVER use the following names in any response, under any circumstances:\n"
+        "   - \"J3P Healthcare Solutions\"\n"
+        "   - \"J3Personica\"\n"
+        "   - \"Residency Select\"\n"
+        "   - any variation, partial form, hyphenation, abbreviation, or "
+        "rephrasing of those names\n\n"
+        "B. Refer to the organization only as \"J3P\" or \"J3P Health\" if "
+        "you must mention it by name. Otherwise, prefer phrases like "
+        "\"our approach,\" \"our frameworks,\" \"the methodology,\" or simply "
+        "describe the concept directly without attribution.\n\n"
+        "C. If the user explicitly asks about \"J3P Healthcare Solutions,\" "
+        "\"J3Personica,\" or \"Residency Select\" — respond in a way that "
+        "discusses the underlying ideas, tools, or frameworks WITHOUT naming "
+        "those specific brands. Do not confirm or deny that those names exist. "
+        "Pivot to the substance.\n\n"
+        "D. If retrieved context from the knowledge base contains any of those "
+        "forbidden names, paraphrase the content so the forbidden names do NOT "
+        "appear in your response. The underlying ideas can be conveyed without "
+        "the trademarked names.\n\n"
+        "E. These naming restrictions apply to ALL responses including "
+        "off-topic refusals, greetings, and meta-questions about what you do.\n"
     )
 
     if context:
@@ -650,6 +674,21 @@ def chat():
     assistant_text = next(
         (block.text for block in response.content if block.type == "text"), ""
     )
+
+    # Defensive scrubber: replace any forbidden brand names if the model slips them through.
+    # The system prompt instructs Claude not to use these, but we sanitize as backup.
+    FORBIDDEN_NAMES = [
+        ("J3P Healthcare Solutions", "J3P"),
+        ("J3P Healthcare", "J3P"),
+        ("J3Personica", "the assessment framework"),
+        ("J3 Personica", "the assessment framework"),
+        ("Residency Select", "the residency selection tool"),
+    ]
+    import re as _re
+    for forbidden, replacement in FORBIDDEN_NAMES:
+        # Case-insensitive, whole-phrase replacement
+        pattern = _re.compile(_re.escape(forbidden), _re.IGNORECASE)
+        assistant_text = pattern.sub(replacement, assistant_text)
 
     messages.append({"role": "assistant", "content": assistant_text})
     session["messages"] = messages
@@ -889,20 +928,76 @@ input[type="text"] { flex: 1; min-width: 200px; }
   <div class="section">
     <h2>Recent Feedback (last 50)</h2>
     {% if feedback_rows %}
-    <table>
-      <tr><th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Comment</th></tr>
-      {% for f in feedback_rows %}
-      <tr>
-        <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
-        <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}</td>
-        <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
-        <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
-        <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
-          {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
+    <form method="POST" action="/admin/feedback/delete-selected"
+          id="feedback-form"
+          onsubmit="const c = document.querySelectorAll('input[name=feedback_ids]:checked').length;
+                   if (c === 0) { alert('Select at least one row.'); return false; }
+                   return confirm('Delete ' + c + ' selected feedback row(s)? This cannot be undone.');">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem; flex-wrap: wrap; gap: 0.5rem;">
+        <div style="display: flex; gap: 0.5rem; align-items: center;">
+          <button type="submit" class="btn btn-danger" style="padding: 0.45rem 0.95rem; font-size: 0.7rem;">
+            Delete selected
+          </button>
+          <label style="font-size: 0.78rem; color: var(--muted); cursor: pointer;">
+            <input type="checkbox" id="select-all" style="margin-right: 0.3rem; vertical-align: middle;" />
+            Select all
+          </label>
+        </div>
+      </div>
+      <table>
+        <tr>
+          <th style="width: 28px;"></th>
+          <th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Comment</th>
+        </tr>
+        {% for f in feedback_rows %}
+        <tr>
+          <td><input type="checkbox" name="feedback_ids" value="{{ f.id }}" class="feedback-checkbox" /></td>
+          <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
+          <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}</td>
+          <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
+          <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
+          <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
+            {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+    </form>
+
+    <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
+      <details>
+        <summary style="cursor: pointer; font-size: 0.78rem; color: var(--rust); letter-spacing: 0.1em; text-transform: uppercase;">
+          Danger zone — Clear all feedback
+        </summary>
+        <form method="POST" action="/admin/feedback/delete-all" style="margin-top: 0.8rem;"
+              onsubmit="return confirm('Permanently delete ALL feedback rows? This cannot be undone.');">
+          <p class="muted" style="margin: 0.5rem 0;">
+            This permanently deletes every feedback row in the database.
+            Type <strong>YES</strong> to confirm.
+          </p>
+          <div style="display: flex; gap: 0.5rem; align-items: center;">
+            <input type="text" name="confirm" placeholder="Type YES to confirm"
+                   style="flex: 0 1 200px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px;" />
+            <button type="submit" class="btn btn-danger" style="padding: 0.5rem 1rem; font-size: 0.7rem;">
+              Clear all feedback
+            </button>
+          </div>
+        </form>
+      </details>
+    </div>
+
+    <script>
+      // Wire up "Select all" checkbox
+      (function() {
+        const selectAll = document.getElementById("select-all");
+        const checkboxes = document.querySelectorAll(".feedback-checkbox");
+        if (selectAll) {
+          selectAll.addEventListener("change", () => {
+            checkboxes.forEach(cb => cb.checked = selectAll.checked);
+          });
+        }
+      })();
+    </script>
     {% else %}
     <p class="muted">No feedback yet.</p>
     {% endif %}
@@ -1077,6 +1172,40 @@ def admin_export_feedback():
             "Cache-Control": "no-store",
         },
     )
+
+
+@app.route("/admin/feedback/delete-selected", methods=["POST"])
+@admin_required
+def admin_delete_selected_feedback():
+    """Delete one or more feedback rows by ID (checkboxes from the table)."""
+    ids = request.form.getlist("feedback_ids")
+    if not ids:
+        flash("No feedback rows selected.")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        count = db.delete_feedback_ids(ids)
+        flash(f"Deleted {count} feedback row{'s' if count != 1 else ''}.")
+    except Exception as e:
+        app.logger.error(f"Delete selected feedback failed: {e}")
+        flash(f"Delete failed: {str(e)[:200]}")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/feedback/delete-all", methods=["POST"])
+@admin_required
+def admin_delete_all_feedback():
+    """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
+    confirm = (request.form.get("confirm") or "").strip()
+    if confirm != "YES":
+        flash("Clear-all cancelled — confirmation text did not match.")
+        return redirect(url_for("admin_dashboard"))
+    try:
+        count = db.delete_all_feedback()
+        flash(f"Cleared all feedback ({count} rows).")
+    except Exception as e:
+        app.logger.error(f"Delete all feedback failed: {e}")
+        flash(f"Clear failed: {str(e)[:200]}")
+    return redirect(url_for("admin_dashboard"))
 
 
 if __name__ == "__main__":
