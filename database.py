@@ -222,6 +222,33 @@ def list_feedback(limit: int = 100, rating: Optional[str] = None) -> list:
             return list(cur.fetchall())
 
 
+def delete_feedback_ids(ids: list) -> int:
+    """Delete specific feedback rows by ID. Returns count deleted."""
+    if not is_enabled() or not ids:
+        return 0
+    clean_ids = [int(i) for i in ids if str(i).isdigit()]
+    if not clean_ids:
+        return 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM feedback WHERE id = ANY(%s);", (clean_ids,))
+            count = cur.rowcount
+        conn.commit()
+        return count
+
+
+def delete_all_feedback() -> int:
+    """Wipe all feedback rows. Returns count deleted."""
+    if not is_enabled():
+        return 0
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM feedback;")
+            count = cur.rowcount
+        conn.commit()
+        return count
+
+
 def feedback_stats() -> dict:
     """Aggregate counts for the admin dashboard."""
     if not is_enabled():

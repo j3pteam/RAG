@@ -825,6 +825,57 @@ input[type="text"] { flex: 1; min-width: 200px; }
 .muted { color: #6B7280; font-size: 0.8rem; }
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .expand-btn {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--navy);
+      padding: 0.25rem 0.55rem;
+      border-radius: 2px;
+      cursor: pointer;
+      font-size: 0.7rem;
+      font-family: inherit;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      transition: background 0.15s ease;
+    }
+    .expand-btn:hover { background: var(--gold); color: var(--navy); }
+    .feedback-detail {
+      background: var(--paper);
+      border-top: 1px dashed var(--line);
+    }
+    .feedback-detail td { padding: 1rem 1.2rem !important; }
+    .feedback-detail-block { margin-bottom: 1rem; }
+    .feedback-detail-block:last-child { margin-bottom: 0; }
+    .feedback-detail-label {
+      font-size: 0.7rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 0.3rem;
+      font-weight: 500;
+    }
+    .feedback-detail-content {
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      padding: 0.8rem 1rem;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      font-size: 0.88rem;
+      line-height: 1.55;
+      color: var(--navy);
+      max-height: 400px;
+      overflow-y: auto;
+    }
+    .feedback-detail-content.comment-highlight {
+      background: #FFF9E6;
+      border-color: var(--gold);
+    }
+    .feedback-detail-meta {
+      font-size: 0.75rem;
+      color: var(--muted);
+      font-style: italic;
+    }
 </style></head><body>
 <header>
   <h1>{{ cfg.persona_name }} — Admin</h1>
@@ -948,9 +999,10 @@ input[type="text"] { flex: 1; min-width: 200px; }
         <tr>
           <th style="width: 28px;"></th>
           <th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Comment</th>
+          <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
-        <tr>
+        <tr id="row-{{ f.id }}">
           <td><input type="checkbox" name="feedback_ids" value="{{ f.id }}" class="feedback-checkbox" /></td>
           <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
           <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}</td>
@@ -959,10 +1011,58 @@ input[type="text"] { flex: 1; min-width: 200px; }
           <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
             {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
           </td>
+          <td>
+            <button type="button" class="expand-btn" data-target="detail-{{ f.id }}">
+              View
+            </button>
+          </td>
+        </tr>
+        <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
+          <td colspan="7">
+            <div class="feedback-detail-meta">
+              Feedback ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
+              · Rating: <strong>{% if f.rating == 'up' %}Helpful 👍{% else %}Not helpful 👎{% endif %}</strong>
+              {% if f.persona %}· Persona: {{ f.persona }}{% endif %}
+            </div>
+
+            <div class="feedback-detail-block" style="margin-top: 0.9rem;">
+              <div class="feedback-detail-label">User question</div>
+              <div class="feedback-detail-content">{{ f.user_message or '(empty)' }}</div>
+            </div>
+
+            <div class="feedback-detail-block">
+              <div class="feedback-detail-label">Bot reply</div>
+              <div class="feedback-detail-content">{{ f.bot_reply or '(empty)' }}</div>
+            </div>
+
+            <div class="feedback-detail-block">
+              <div class="feedback-detail-label">User comment</div>
+              {% if f.comment %}
+                <div class="feedback-detail-content comment-highlight">{{ f.comment }}</div>
+              {% else %}
+                <div class="feedback-detail-content" style="font-style: italic; color: var(--muted);">No comment provided.</div>
+              {% endif %}
+            </div>
+          </td>
         </tr>
         {% endfor %}
       </table>
     </form>
+
+    <script>
+      // Toggle expanded feedback detail rows
+      (function() {
+        document.querySelectorAll('.expand-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const target = document.getElementById(btn.dataset.target);
+            if (!target) return;
+            const isOpen = target.style.display !== 'none';
+            target.style.display = isOpen ? 'none' : 'table-row';
+            btn.textContent = isOpen ? 'View' : 'Close';
+          });
+        });
+      })();
+    </script>
 
     <div style="margin-top: 1.5rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
       <details>
