@@ -899,12 +899,20 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% endif %}
 
   <div class="section">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line);">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
       <h2 style="margin: 0; border: none; padding: 0;">Feedback Overview</h2>
       {% if stats.total > 0 %}
-      <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
-        ↓ Export CSV
-      </a>
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <span class="muted" style="font-size: 0.78rem; margin-right: 0.3rem;">
+          Export {{ stats.total }} record{{ 's' if stats.total != 1 else '' }}:
+        </span>
+        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
+          ↓ CSV
+        </a>
+        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none;">
+          ↓ Excel
+        </a>
+      </div>
       {% endif %}
     </div>
     <div class="stats">
@@ -1233,7 +1241,7 @@ def admin_delete(doc_id):
 @app.route("/admin/export/feedback.csv")
 @admin_required
 def admin_export_feedback():
-    """Stream all feedback as a CSV download."""
+    """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
     import csv
     import io
     from flask import Response
@@ -1257,7 +1265,8 @@ def admin_export_feedback():
             r.get("persona", "") or "",
         ])
 
-    csv_content = output.getvalue()
+    # Prepend UTF-8 BOM so Excel decodes em-dashes, smart quotes, accented characters correctly
+    csv_content = "\ufeff" + output.getvalue()
     output.close()
 
     from datetime import datetime
@@ -1266,7 +1275,104 @@ def admin_export_feedback():
 
     return Response(
         csv_content,
-        mimetype="text/csv",
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.route("/admin/export/feedback.xlsx")
+@admin_required
+def admin_export_feedback_xlsx():
+    """Stream all feedback as an Excel (.xlsx) download with formatting."""
+    from flask import Response
+    from datetime import datetime
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        return ("Excel export unavailable: openpyxl not installed. "
+                "Use CSV export instead, or add 'openpyxl' to requirements.txt."), 500
+
+    rows = db.list_feedback(limit=10000) if db.is_enabled() else []
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Feedback"
+
+    headers = ["ID", "Timestamp", "Rating", "User Question", "Bot Reply", "Comment", "Persona"]
+    ws.append(headers)
+
+    # Header styling — navy background, gold text, bold
+    header_font = Font(bold=True, color="D2BC8D", size=11)
+    header_fill = PatternFill("solid", fgColor="27334A")
+    header_align = Alignment(horizontal="left", vertical="center", wrap_text=False)
+    thin_border = Border(
+        bottom=Side(style="medium", color="27334A"),
+    )
+    for col_idx, _ in enumerate(headers, start=1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+    # Data rows
+    wrap_align = Alignment(vertical="top", wrap_text=True)
+    down_fill = PatternFill("solid", fgColor="FEEAE5")  # subtle rust tint for thumbs-down rows
+    for r in rows:
+        ws.append([
+            r.get("id", ""),
+            r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
+            r.get("rating", ""),
+            r.get("user_message", "") or "",
+            r.get("bot_reply", "") or "",
+            r.get("comment", "") or "",
+            r.get("persona", "") or "",
+        ])
+        row_idx = ws.max_row
+        # Highlight thumbs-down rows so they're easy to spot when reviewing
+        if r.get("rating") == "down":
+            for col_idx in range(1, len(headers) + 1):
+                ws.cell(row=row_idx, column=col_idx).fill = down_fill
+        # Wrap long text cells
+        for col_idx in [4, 5, 6]:  # User Question, Bot Reply, Comment
+            ws.cell(row=row_idx, column=col_idx).alignment = wrap_align
+
+    # Column widths — sized for readable browsing in Excel
+    column_widths = {
+        "A": 8,    # ID
+        "B": 20,   # Timestamp
+        "C": 8,    # Rating
+        "D": 50,   # User Question
+        "E": 80,   # Bot Reply
+        "F": 40,   # Comment
+        "G": 18,   # Persona
+    }
+    for col_letter, width in column_widths.items():
+        ws.column_dimensions[col_letter].width = width
+
+    # Freeze the header row so it stays visible while scrolling
+    ws.freeze_panes = "A2"
+
+    # AutoFilter on the header so user can sort/filter in Excel
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+
+    # Stream to a BytesIO
+    import io
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"j3p_feedback_{timestamp}.xlsx"
+
+    return Response(
+        buffer.read(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
             "Cache-Control": "no-store",
