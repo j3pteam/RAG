@@ -899,22 +899,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% endif %}
 
   <div class="section">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
-      <h2 style="margin: 0; border: none; padding: 0;">Feedback Overview</h2>
-      {% if stats.total > 0 %}
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <span class="muted" style="font-size: 0.78rem; margin-right: 0.3rem;">
-          Export {{ stats.total }} record{{ 's' if stats.total != 1 else '' }}:
-        </span>
-        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
-          ↓ CSV
-        </a>
-        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none;">
-          ↓ Excel
-        </a>
-      </div>
-      {% endif %}
-    </div>
+    <h2>Feedback Overview</h2>
     <div class="stats">
       <div class="stat">
         <div class="stat-value">{{ stats.up }}</div>
@@ -985,7 +970,22 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% endif %}
 
   <div class="section">
-    <h2>Recent Feedback (last 50)</h2>
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
+      <h2 style="margin: 0; border: none; padding: 0;">Recent Feedback (last 50)</h2>
+      {% if stats.total > 0 %}
+      <div style="display: flex; gap: 0.5rem; align-items: center;">
+        <span class="muted" style="font-size: 0.78rem; margin-right: 0.3rem;">
+          Export {{ stats.total }} record{{ 's' if stats.total != 1 else '' }}:
+        </span>
+        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
+          ↓ CSV
+        </a>
+        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none;">
+          ↓ Excel
+        </a>
+      </div>
+      {% endif %}
+    </div>
     {% if feedback_rows %}
     <form method="POST" action="/admin/feedback/delete-selected"
           id="feedback-form"
