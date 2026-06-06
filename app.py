@@ -705,8 +705,8 @@ def reset():
 def feedback():
     data = request.get_json(silent=True) or {}
     rating = data.get("rating")
-    reply = (data.get("reply") or "")[:2000]
-    comment = (data.get("comment") or "")[:2000]
+    reply = (data.get("reply") or "")[:20000]
+    comment = (data.get("comment") or "")[:4000]
     if rating not in ("up", "down"):
         return jsonify({"error": "Invalid rating"}), 400
 
@@ -714,7 +714,7 @@ def feedback():
     last_user_msg = ""
     for m in reversed(messages):
         if m.get("role") == "user":
-            last_user_msg = (m.get("content") or "")[:2000]
+            last_user_msg = (m.get("content") or "")[:8000]
             break
 
     # Persist to DB if available, always log to stdout

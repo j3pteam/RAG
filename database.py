@@ -197,7 +197,7 @@ def log_feedback(rating: str, user_message: str, bot_reply: str, persona: str = 
             cur.execute(
                 "INSERT INTO feedback (rating, user_message, bot_reply, comment, persona) "
                 "VALUES (%s, %s, %s, %s, %s);",
-                (rating, user_message[:2000], bot_reply[:2000], comment[:2000], persona[:100]),
+                (rating, user_message[:8000], bot_reply[:20000], comment[:4000], persona[:100]),
             )
         conn.commit()
 
