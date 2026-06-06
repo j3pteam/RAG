@@ -104,6 +104,23 @@ def extract_text_from_upload(filename: str, file_bytes: bytes) -> str:
             from pypdf import PdfReader
             from io import BytesIO
             reader = PdfReader(BytesIO(file_bytes))
+            # Detect encrypted PDFs and try empty-password decrypt first
+            if reader.is_encrypted:
+                try:
+                    if not reader.decrypt(""):
+                        raise RuntimeError(
+                            "This PDF is password-protected. Please remove the "
+                            "password before uploading (open the PDF, choose "
+                            "File → Export, and save without password)."
+                        )
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    raise RuntimeError(
+                        "This PDF appears to be encrypted and could not be "
+                        f"opened automatically ({type(e).__name__}). Please remove "
+                        "the password before uploading."
+                    )
             pages = [page.extract_text() or "" for page in reader.pages]
             return '\n\n'.join(pages)
         except ImportError:
