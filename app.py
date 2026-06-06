@@ -1414,6 +1414,143 @@ def admin_delete_all_feedback():
     return redirect(url_for("admin_dashboard"))
 
 
+@app.route("/webhook/email", methods=["POST"])
+def email_webhook():
+    """
+    Postmark inbound email webhook.
+
+    Configure in Postmark: Servers → Inbound → Server settings → set webhook URL to
+    https://web-production-901d85.up.railway.app/webhook/email
+
+    Security model:
+      - Subject line MUST contain the secret keyword from EMAIL_INGEST_KEYWORD env var
+        (case-insensitive substring match). Without that, the email is rejected.
+      - This protects against anyone who guesses the inbound email address.
+
+    What gets ingested:
+      - Email body (text version) becomes one document
+      - Each PDF / DOCX / TXT / MD attachment becomes its own separate document
+      - Each document is titled with the email subject + filename for attachments
+
+    Postmark returns 200 to ANY response. We always return 200 even on rejected emails
+    so Postmark doesn't retry — but we log the rejection reason.
+    """
+    if not (db.is_enabled() and emb.is_enabled()):
+        app.logger.error("Email webhook hit but DB or embeddings not configured")
+        return jsonify({"status": "rejected", "reason": "service-not-configured"}), 200
+
+    keyword = (os.environ.get("EMAIL_INGEST_KEYWORD") or "").strip().lower()
+    if not keyword:
+        app.logger.error("Email webhook hit but EMAIL_INGEST_KEYWORD not set — rejecting all")
+        return jsonify({"status": "rejected", "reason": "keyword-not-configured"}), 200
+
+    payload = request.get_json(silent=True) or {}
+    subject = (payload.get("Subject") or "").strip()
+    from_email = (payload.get("FromFull") or {}).get("Email") or payload.get("From") or "unknown"
+
+    # Security gate: subject MUST contain the secret keyword
+    if keyword not in subject.lower():
+        app.logger.warning(
+            f"Email webhook rejected — subject missing keyword. From: {from_email}, Subject: {subject!r}"
+        )
+        return jsonify({"status": "rejected", "reason": "missing-keyword"}), 200
+
+    # Strip the keyword from subject so the doc title is cleaner.
+    # Removes "[KEYWORD]" or "KEYWORD:" or just "KEYWORD" patterns.
+    import re
+    clean_subject = re.sub(
+        rf"\[?\b{re.escape(keyword)}\b\]?[\s:]*",
+        "",
+        subject,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not clean_subject:
+        clean_subject = "Email submission"
+
+    text_body = (payload.get("TextBody") or "").strip()
+    html_body = (payload.get("HtmlBody") or "").strip()
+    attachments = payload.get("Attachments") or []
+
+    ingested = []
+    errors = []
+
+    # ---- Ingest the email body (if it has substance) ----
+    if text_body and len(text_body) > 50:
+        try:
+            chunks = emb.chunk_text(text_body)
+            if chunks:
+                vectors = emb.embed_batch(chunks)
+                pairs = list(zip(chunks, vectors))
+                doc_id = db.insert_document(
+                    clean_subject,
+                    f"email:{from_email}",
+                    pairs,
+                )
+                ingested.append({
+                    "kind": "body",
+                    "title": clean_subject,
+                    "doc_id": doc_id,
+                    "chunks": len(chunks),
+                })
+                app.logger.info(f"Email body ingested: doc #{doc_id}, {len(chunks)} chunks")
+        except Exception as e:
+            app.logger.error(f"Email body ingest failed: {e}")
+            errors.append({"kind": "body", "error": str(e)[:200]})
+
+    # ---- Ingest each attachment ----
+    import base64
+    SUPPORTED_EXT = (".pdf", ".docx", ".txt", ".md")
+    for att in attachments:
+        att_name = att.get("Name") or "attachment"
+        content_b64 = att.get("Content") or ""
+        if not content_b64:
+            continue
+        if not att_name.lower().endswith(SUPPORTED_EXT):
+            errors.append({
+                "kind": "attachment",
+                "name": att_name,
+                "error": "unsupported-extension",
+            })
+            continue
+        try:
+            file_bytes = base64.b64decode(content_b64)
+            text = emb.extract_text_from_upload(att_name, file_bytes)
+            if not text.strip():
+                errors.append({"kind": "attachment", "name": att_name, "error": "no-text-extracted"})
+                continue
+            chunks = emb.chunk_text(text)
+            if not chunks:
+                errors.append({"kind": "attachment", "name": att_name, "error": "no-chunks"})
+                continue
+            vectors = emb.embed_batch(chunks)
+            pairs = list(zip(chunks, vectors))
+            # Title uses subject + filename so multiple attachments are distinguishable
+            doc_title = f"{clean_subject} — {att_name}" if clean_subject else att_name
+            doc_id = db.insert_document(doc_title, f"email:{from_email}:{att_name}", pairs)
+            ingested.append({
+                "kind": "attachment",
+                "title": doc_title,
+                "doc_id": doc_id,
+                "chunks": len(chunks),
+            })
+            app.logger.info(f"Email attachment ingested: {att_name} -> doc #{doc_id}, {len(chunks)} chunks")
+        except Exception as e:
+            app.logger.error(f"Email attachment ingest failed for {att_name}: {e}")
+            errors.append({"kind": "attachment", "name": att_name, "error": str(e)[:200]})
+
+    app.logger.info(
+        f"Email webhook complete. From: {from_email}, Subject: {clean_subject}, "
+        f"Ingested: {len(ingested)}, Errors: {len(errors)}"
+    )
+    return jsonify({
+        "status": "ok",
+        "from": from_email,
+        "subject": clean_subject,
+        "ingested": ingested,
+        "errors": errors,
+    }), 200
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
