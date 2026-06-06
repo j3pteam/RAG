@@ -1163,6 +1163,18 @@ def admin_upload():
 
     title = (request.form.get("title") or "").strip() or file.filename
 
+    # Duplicate check BEFORE expensive embedding work.
+    # We compare both title and filename (source) against existing docs.
+    duplicate = db.find_duplicate_document(title=title, source=file.filename)
+    if duplicate:
+        flash(
+            f"⚠ Duplicate detected — '{duplicate['title']}' was already uploaded "
+            f"on {duplicate['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
+            f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
+            f"if you want to replace it."
+        )
+        return redirect(url_for("admin_dashboard"))
+
     try:
         file_bytes = file.read()
         text = emb.extract_text_from_upload(file.filename, file_bytes)
@@ -1202,9 +1214,33 @@ def admin_upload_url():
         flash("No URL provided.")
         return redirect(url_for("admin_dashboard"))
 
+    # Duplicate check on the URL itself BEFORE fetching/embedding.
+    # We check the URL as source. Title check happens later if custom_title is set.
+    duplicate = db.find_duplicate_document(source=url)
+    if duplicate:
+        flash(
+            f"⚠ Duplicate URL — this link was already ingested as "
+            f"'{duplicate['title']}' on {duplicate['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
+            f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
+            f"if you want to re-ingest."
+        )
+        return redirect(url_for("admin_dashboard"))
+
     try:
         extracted_title, text = emb.fetch_url_content(url)
         title = custom_title or extracted_title or url
+
+        # Second duplicate check on the resolved title (in case a URL changed but
+        # the article title is the same as something already in the KB).
+        title_dup = db.find_duplicate_document(title=title)
+        if title_dup:
+            flash(
+                f"⚠ Duplicate title — '{title}' was already ingested on "
+                f"{title_dup['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
+                f"({title_dup['chunk_count']} chunks). Use a different title or "
+                f"delete the existing entry first."
+            )
+            return redirect(url_for("admin_dashboard"))
 
         if not text.strip():
             flash("No text could be extracted from this URL.")
@@ -1477,22 +1513,33 @@ def email_webhook():
     # ---- Ingest the email body (if it has substance) ----
     if text_body and len(text_body) > 50:
         try:
-            chunks = emb.chunk_text(text_body)
-            if chunks:
-                vectors = emb.embed_batch(chunks)
-                pairs = list(zip(chunks, vectors))
-                doc_id = db.insert_document(
-                    clean_subject,
-                    f"email:{from_email}",
-                    pairs,
-                )
-                ingested.append({
+            body_dup = db.find_duplicate_document(title=clean_subject)
+            if body_dup:
+                errors.append({
                     "kind": "body",
-                    "title": clean_subject,
-                    "doc_id": doc_id,
-                    "chunks": len(chunks),
+                    "error": f"duplicate-of-doc-{body_dup['id']}",
+                    "skipped_title": clean_subject,
                 })
-                app.logger.info(f"Email body ingested: doc #{doc_id}, {len(chunks)} chunks")
+                app.logger.info(
+                    f"Email body skipped — duplicate of doc #{body_dup['id']} ({clean_subject!r})"
+                )
+            else:
+                chunks = emb.chunk_text(text_body)
+                if chunks:
+                    vectors = emb.embed_batch(chunks)
+                    pairs = list(zip(chunks, vectors))
+                    doc_id = db.insert_document(
+                        clean_subject,
+                        f"email:{from_email}",
+                        pairs,
+                    )
+                    ingested.append({
+                        "kind": "body",
+                        "title": clean_subject,
+                        "doc_id": doc_id,
+                        "chunks": len(chunks),
+                    })
+                    app.logger.info(f"Email body ingested: doc #{doc_id}, {len(chunks)} chunks")
         except Exception as e:
             app.logger.error(f"Email body ingest failed: {e}")
             errors.append({"kind": "body", "error": str(e)[:200]})
@@ -1512,6 +1559,20 @@ def email_webhook():
                 "error": "unsupported-extension",
             })
             continue
+        # Title uses subject + filename so multiple attachments are distinguishable
+        doc_title = f"{clean_subject} — {att_name}" if clean_subject else att_name
+        # Duplicate check before embedding work
+        att_dup = db.find_duplicate_document(title=doc_title)
+        if att_dup:
+            errors.append({
+                "kind": "attachment",
+                "name": att_name,
+                "error": f"duplicate-of-doc-{att_dup['id']}",
+            })
+            app.logger.info(
+                f"Email attachment skipped — duplicate of doc #{att_dup['id']} ({doc_title!r})"
+            )
+            continue
         try:
             file_bytes = base64.b64decode(content_b64)
             text = emb.extract_text_from_upload(att_name, file_bytes)
@@ -1524,8 +1585,6 @@ def email_webhook():
                 continue
             vectors = emb.embed_batch(chunks)
             pairs = list(zip(chunks, vectors))
-            # Title uses subject + filename so multiple attachments are distinguishable
-            doc_title = f"{clean_subject} — {att_name}" if clean_subject else att_name
             doc_id = db.insert_document(doc_title, f"email:{from_email}:{att_name}", pairs)
             ingested.append({
                 "kind": "attachment",

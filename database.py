@@ -121,6 +121,39 @@ def _table_exists(cur, table_name: str) -> bool:
     return cur.fetchone()["exists"]
 
 
+def find_duplicate_document(title: str = "", source: str = "") -> Optional[dict]:
+    """
+    Check whether a document with the same title OR source already exists.
+
+    Matching is case-insensitive on both fields. Either match counts as a duplicate
+    because users sometimes re-upload the same file with a different title or
+    re-ingest the same URL with a different display name.
+
+    Returns the existing document row (with id, title, source, uploaded_at, chunk_count)
+    or None if no duplicate found.
+    """
+    if not is_enabled():
+        return None
+    title_norm = (title or "").strip().lower()
+    source_norm = (source or "").strip().lower()
+    if not title_norm and not source_norm:
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, source, uploaded_at, chunk_count
+                FROM documents
+                WHERE (%s <> '' AND LOWER(TRIM(title)) = %s)
+                   OR (%s <> '' AND LOWER(TRIM(source)) = %s)
+                ORDER BY uploaded_at DESC
+                LIMIT 1;
+                """,
+                (title_norm, title_norm, source_norm, source_norm),
+            )
+            return cur.fetchone()
+
+
 def insert_document(title: str, source: str, chunks_with_embeddings: list) -> int:
     """
     Insert a document and its chunks in one transaction.
