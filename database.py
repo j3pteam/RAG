@@ -109,6 +109,19 @@ def init_schema():
             cur.execute("""
                 ALTER TABLE feedback ADD COLUMN IF NOT EXISTS comment TEXT;
             """)
+            # Add learning columns (approved-as-lesson + question embedding)
+            cur.execute(f"""
+                ALTER TABLE feedback ADD COLUMN IF NOT EXISTS approved_for_learning BOOLEAN DEFAULT FALSE;
+            """)
+            cur.execute(f"""
+                ALTER TABLE feedback ADD COLUMN IF NOT EXISTS question_embedding vector({EMBEDDING_DIM});
+            """)
+            # Index for fast similarity search on approved lessons
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS feedback_lesson_idx
+                ON feedback USING hnsw (question_embedding vector_cosine_ops)
+                WHERE approved_for_learning = TRUE AND question_embedding IS NOT NULL;
+            """)
         conn.commit()
     return True
 
@@ -280,6 +293,91 @@ def delete_all_feedback() -> int:
             count = cur.rowcount
         conn.commit()
         return count
+
+
+def approve_feedback_as_lesson(feedback_id: int, question_embedding: list) -> bool:
+    """Mark a thumbs-down feedback row as approved for use as a learning example.
+
+    The question embedding is stored at approval time (not at feedback time) so
+    that we only spend embedding tokens on items that actually get used.
+    Returns True if approved, False if row not found or not eligible.
+    """
+    if not is_enabled():
+        return False
+    embedding_str = "[" + ",".join(str(x) for x in question_embedding) + "]"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            # Only approve rows that are thumbs-down AND have a comment
+            cur.execute(
+                """
+                UPDATE feedback
+                SET approved_for_learning = TRUE,
+                    question_embedding = %s::vector
+                WHERE id = %s
+                  AND rating = 'down'
+                  AND comment IS NOT NULL
+                  AND TRIM(comment) <> '';
+                """,
+                (embedding_str, feedback_id),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        return updated > 0
+
+
+def revoke_feedback_lesson(feedback_id: int) -> bool:
+    """Remove approval — this lesson stops influencing future responses."""
+    if not is_enabled():
+        return False
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE feedback SET approved_for_learning = FALSE WHERE id = %s;",
+                (feedback_id,),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        return updated > 0
+
+
+def get_feedback(feedback_id: int) -> Optional[dict]:
+    """Fetch a single feedback row by ID."""
+    if not is_enabled():
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT * FROM feedback WHERE id = %s;", (feedback_id,))
+            return cur.fetchone()
+
+
+def search_lessons(query_embedding: list, limit: int = 3, min_similarity: float = 0.5) -> list:
+    """Find approved lessons whose user-question is semantically similar to the
+    current question. Used at chat time to inject 'what to avoid' guidance.
+
+    Returns rows with: user_message, bot_reply, comment, similarity.
+    Only returns rows above min_similarity to avoid distracting the bot with
+    weakly related lessons.
+    """
+    if not is_enabled():
+        return []
+    embedding_str = "[" + ",".join(str(x) for x in query_embedding) + "]"
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    id, user_message, bot_reply, comment,
+                    1 - (question_embedding <=> %s::vector) AS similarity
+                FROM feedback
+                WHERE approved_for_learning = TRUE
+                  AND question_embedding IS NOT NULL
+                ORDER BY question_embedding <=> %s::vector
+                LIMIT %s;
+                """,
+                (embedding_str, embedding_str, limit),
+            )
+            rows = list(cur.fetchall())
+            return [r for r in rows if r.get("similarity", 0) >= min_similarity]
 
 
 def feedback_stats() -> dict:

@@ -545,25 +545,50 @@ INDEX_HTML = r"""<!DOCTYPE html>
 # Chat routes
 # ---------------------------------------------------------------------------
 
-def retrieve_context(query: str) -> str:
-    """Search the knowledge base for chunks relevant to the user's query.
-    Returns formatted context string, or empty string if RAG unavailable/no results."""
+def retrieve_context_and_lessons(query: str) -> tuple:
+    """Search knowledge base AND approved lessons for material relevant to the query.
+
+    Returns (context_string, lessons_list).
+    - context_string: formatted KB chunks (or "")
+    - lessons_list: list of dicts with user_message/bot_reply/comment for top-3
+      semantically similar past failures (or [])
+
+    Computing the embedding once and reusing it for both lookups saves one
+    Voyage API call per chat turn.
+    """
     if not (db.is_enabled() and emb.is_enabled()):
-        return ""
+        return ("", [])
     try:
         query_embedding = emb.embed_text(query)
+    except Exception as e:
+        app.logger.error(f"Embedding failed: {e}")
+        return ("", [])
+
+    # --- Knowledge base ---
+    context = ""
+    try:
         results = db.search_chunks(query_embedding, limit=CONFIG["rag_top_k"])
-        # Filter by similarity threshold
         relevant = [r for r in results if r["similarity"] >= CONFIG["rag_min_similarity"]]
-        if not relevant:
-            return ""
-        sections = []
-        for r in relevant:
-            sections.append(f"[Source: {r['title']}]\n{r['content']}")
-        return "\n\n---\n\n".join(sections)
+        if relevant:
+            sections = [f"[Source: {r['title']}]\n{r['content']}" for r in relevant]
+            context = "\n\n---\n\n".join(sections)
     except Exception as e:
         app.logger.error(f"RAG retrieval failed: {e}")
-        return ""
+
+    # --- Approved lessons (negative-feedback memory) ---
+    lessons = []
+    try:
+        lessons = db.search_lessons(query_embedding, limit=3, min_similarity=0.5)
+    except Exception as e:
+        app.logger.error(f"Lesson retrieval failed: {e}")
+
+    return (context, lessons)
+
+
+def retrieve_context(query: str) -> str:
+    """Backward-compatible wrapper — returns only KB context."""
+    context, _ = retrieve_context_and_lessons(query)
+    return context
 
 
 @app.route("/")
@@ -584,7 +609,28 @@ def chat():
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
-    context = retrieve_context(user_input)
+    context, lessons = retrieve_context_and_lessons(user_input)
+
+    # Build lessons block: things we got wrong before and shouldn't repeat
+    lessons_block = ""
+    if lessons:
+        lesson_items = []
+        for i, lesson in enumerate(lessons, 1):
+            lesson_items.append(
+                f"Lesson {i}:\n"
+                f"  Previous question (similar to this one): {lesson['user_message'][:500]}\n"
+                f"  What I said before: {lesson['bot_reply'][:500]}\n"
+                f"  Why that was unhelpful: {lesson['comment'][:500]}"
+            )
+        lessons_block = (
+            "\n\n---\n"
+            "LESSONS FROM PRIOR FEEDBACK — these are reviewed and approved examples "
+            "of times your previous responses to similar questions were unhelpful. "
+            "Use them to avoid repeating the same mistakes. Do NOT mention these "
+            "lessons to the user; just internalize them.\n\n"
+            + "\n\n".join(lesson_items)
+            + "\n"
+        )
 
     # Scope-limiting + naming restrictions appended on EVERY request
     scope_guard = (
@@ -648,10 +694,11 @@ def chat():
             + context
             + "\n\n---\nUse this context to inform your answer when relevant. "
               "Stay in your assigned voice and frameworks."
+            + lessons_block
             + scope_guard
         )
     else:
-        composed_prompt = base_prompt + scope_guard
+        composed_prompt = base_prompt + lessons_block + scope_guard
 
     try:
         response = client.messages.create(
@@ -814,6 +861,8 @@ th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 2px solid var(--na
 td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tag-up { background: #1B998B; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
 .tag-down { background: var(--rust); color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
+.tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
+              margin-left: 0.3rem; letter-spacing: 0.05em; }
 .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
@@ -1013,7 +1062,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
         <tr id="row-{{ f.id }}">
           <td><input type="checkbox" name="feedback_ids" value="{{ f.id }}" class="feedback-checkbox" /></td>
           <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
-          <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}</td>
+          <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}{% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}</td>
           <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
           <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
           <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
@@ -1051,6 +1100,30 @@ input[type="text"] { flex: 1; min-width: 200px; }
                 <div class="feedback-detail-content" style="font-style: italic; color: var(--muted);">No comment provided.</div>
               {% endif %}
             </div>
+
+            {% if f.rating == 'down' and f.comment %}
+            <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
+              <div class="feedback-detail-label">Learning loop</div>
+              {% if f.approved_for_learning %}
+                <p style="font-size: 0.85rem; margin: 0.4rem 0;">
+                  <span class="tag-lesson">ACTIVE LESSON</span>
+                  &nbsp;The bot uses this feedback to improve answers to similar questions.
+                </p>
+                <button type="button" class="lesson-action-btn" data-action="revoke" data-id="{{ f.id }}"
+                        style="background: transparent; color: var(--rust); border: 1px solid var(--rust); padding: 0.4rem 0.85rem; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; border-radius: 2px; font-family: inherit; margin-top: 0.4rem;">
+                  Revoke lesson
+                </button>
+              {% else %}
+                <p style="font-size: 0.85rem; margin: 0.4rem 0; color: var(--muted);">
+                  Approve this as a lesson and the bot will see it as guidance when answering semantically similar questions.
+                </p>
+                <button type="button" class="lesson-action-btn" data-action="approve" data-id="{{ f.id }}"
+                        style="background: var(--navy); color: var(--gold); border: 1px solid var(--navy); padding: 0.4rem 0.85rem; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; cursor: pointer; border-radius: 2px; font-family: inherit; margin-top: 0.4rem;">
+                  ✓ Approve as lesson
+                </button>
+              {% endif %}
+            </div>
+            {% endif %}
           </td>
         </tr>
         {% endfor %}
@@ -1067,6 +1140,31 @@ input[type="text"] { flex: 1; min-width: 200px; }
             const isOpen = target.style.display !== 'none';
             target.style.display = isOpen ? 'none' : 'table-row';
             btn.textContent = isOpen ? 'View' : 'Close';
+          });
+        });
+
+        // Lesson approve/revoke buttons — submit via fetch (avoids nested form issues)
+        document.querySelectorAll('.lesson-action-btn').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            const action = btn.dataset.action;
+            const id = btn.dataset.id;
+            const verb = action === 'approve' ? 'Approve as a lesson?' :
+                         'Revoke this lesson? The bot will stop learning from it.';
+            if (!confirm(verb)) return;
+            btn.disabled = true;
+            btn.textContent = action === 'approve' ? 'Approving…' : 'Revoking…';
+            try {
+              const resp = await fetch(`/admin/feedback/${id}/${action}-lesson`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+              });
+              // Routes redirect back to admin, so reloading shows updated state
+              window.location.href = '/admin';
+            } catch (e) {
+              alert('Failed: ' + e.message);
+              btn.disabled = false;
+              btn.textContent = action === 'approve' ? '✓ Approve as lesson' : 'Revoke lesson';
+            }
           });
         });
       })();
@@ -1447,6 +1545,58 @@ def admin_delete_all_feedback():
     except Exception as e:
         app.logger.error(f"Delete all feedback failed: {e}")
         flash(f"Clear failed: {str(e)[:200]}")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
+@admin_required
+def admin_approve_lesson(feedback_id):
+    """Approve a thumbs-down feedback row as a learning example.
+
+    Embeds the user's original question and stores it on the feedback row.
+    From this point forward, the bot will see this lesson when answering
+    semantically similar questions.
+    """
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot approve lesson — database or embeddings not configured.")
+        return redirect(url_for("admin_dashboard"))
+
+    row = db.get_feedback(feedback_id)
+    if not row:
+        flash("Feedback row not found.")
+        return redirect(url_for("admin_dashboard"))
+    if row.get("rating") != "down":
+        flash("Only thumbs-down feedback can be approved as a lesson.")
+        return redirect(url_for("admin_dashboard"))
+    if not (row.get("comment") or "").strip():
+        flash("This feedback has no comment — nothing to learn from. Add a comment first.")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        question_embedding = emb.embed_text(row["user_message"] or "")
+        ok = db.approve_feedback_as_lesson(feedback_id, question_embedding)
+        if ok:
+            flash(f"✓ Lesson approved — the bot will now learn from feedback #{feedback_id}.")
+        else:
+            flash(f"Could not approve feedback #{feedback_id} (not eligible).")
+    except Exception as e:
+        app.logger.error(f"Approve lesson failed: {e}")
+        flash(f"Approve failed: {str(e)[:200]}")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
+@admin_required
+def admin_revoke_lesson(feedback_id):
+    """Stop using this feedback as a lesson going forward."""
+    try:
+        ok = db.revoke_feedback_lesson(feedback_id)
+        if ok:
+            flash(f"Lesson revoked — feedback #{feedback_id} no longer informs the bot.")
+        else:
+            flash(f"Feedback #{feedback_id} not found.")
+    except Exception as e:
+        flash(f"Revoke failed: {str(e)[:200]}")
     return redirect(url_for("admin_dashboard"))
 
 
