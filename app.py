@@ -224,6 +224,52 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-btn.selected-down { background: var(--rust); border-color: var(--rust); color: #fff; }
     .feedback-btn:disabled { cursor: default; }
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
+
+    /* Action buttons (copy + share) — mirror feedback-btn style */
+    .action-sep {
+      width: 1px; height: 22px; background: var(--line);
+      margin: 0 0.2rem;
+    }
+    .action-btn {
+      background: transparent; border: 1px solid var(--line);
+      color: var(--muted); width: 30px; height: 30px; border-radius: 50%;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      padding: 0; transition: all 0.18s ease;
+      position: relative;
+    }
+    .action-btn svg { width: 14px; height: 14px; }
+    .action-btn:hover { border-color: var(--gold); color: var(--navy); background: var(--paper); }
+    .action-btn.copied { background: var(--navy); border-color: var(--navy); color: var(--gold); }
+    .action-toast {
+      position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+      background: var(--navy); color: var(--gold);
+      font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 0.3rem 0.6rem; border-radius: 2px; white-space: nowrap;
+      opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+    }
+    .action-toast.show { opacity: 1; }
+
+    /* Share menu popover */
+    .share-wrap { position: relative; }
+    .share-menu {
+      position: absolute; bottom: calc(100% + 8px); right: 0;
+      background: var(--paper-2); border: 1px solid var(--line);
+      border-radius: 4px; box-shadow: var(--shadow);
+      padding: 0.4rem; min-width: 180px;
+      display: none; flex-direction: column; gap: 0.1rem;
+      z-index: 10;
+    }
+    .share-menu.open { display: flex; }
+    .share-menu a, .share-menu button {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.5rem 0.7rem; border-radius: 2px;
+      background: transparent; border: none; cursor: pointer;
+      color: var(--text); font-size: 0.82rem;
+      font-family: inherit; text-decoration: none;
+      text-align: left; width: 100%;
+    }
+    .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
+    .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
     .feedback-comment {
       margin-top: 0.7rem;
       padding-top: 0.7rem;
@@ -423,6 +469,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
+        <span class="action-sep"></span>
+        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span class="action-toast">Copied</span>
+        </button>
+        <span class="share-wrap">
+          <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+            </svg>
+          </button>
+          <div class="share-menu" role="menu"></div>
+        </span>
       `;
 
       async function sendFeedback(rating, comment) {
@@ -493,6 +555,113 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
         });
       });
+      // === COPY button ===
+      const copyBtn = wrap.querySelector(".copy-btn");
+      const copyToast = copyBtn.querySelector(".action-toast");
+      copyBtn.addEventListener("click", async () => {
+        try {
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            await navigator.clipboard.writeText(replyText);
+          } else {
+            // Fallback for older browsers / non-HTTPS contexts
+            const ta = document.createElement("textarea");
+            ta.value = replyText; ta.style.position = "fixed"; ta.style.opacity = "0";
+            document.body.appendChild(ta); ta.select();
+            document.execCommand("copy"); document.body.removeChild(ta);
+          }
+          copyBtn.classList.add("copied");
+          copyToast.classList.add("show");
+          copyToast.textContent = "Copied";
+          setTimeout(() => {
+            copyBtn.classList.remove("copied");
+            copyToast.classList.remove("show");
+          }, 1600);
+        } catch (err) {
+          console.error("Copy failed:", err);
+          copyToast.textContent = "Failed";
+          copyToast.classList.add("show");
+          setTimeout(() => copyToast.classList.remove("show"), 1600);
+        }
+      });
+
+      // === SHARE button ===
+      const shareBtn = wrap.querySelector(".share-btn");
+      const shareMenu = wrap.querySelector(".share-menu");
+      const shareTitle = "From J3P Advisor";
+      // Truncate share text to keep social/SMS messages under sane limits
+      const shareText = replyText.length > 600
+        ? replyText.slice(0, 600).trim() + "…"
+        : replyText;
+      const shareUrl = window.location.origin;
+
+      shareBtn.addEventListener("click", async () => {
+        // Try native share sheet first (mobile + modern desktop browsers)
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
+            return;
+          } catch (err) {
+            // User cancelled or share failed — fall through to menu
+            if (err.name === "AbortError") return;
+          }
+        }
+        // Fallback menu for desktop browsers without Web Share API
+        if (shareMenu.classList.contains("open")) {
+          shareMenu.classList.remove("open");
+          return;
+        }
+        const emailSubject = encodeURIComponent(shareTitle);
+        const emailBody = encodeURIComponent(shareText + "\\n\\n" + shareUrl);
+        const smsBody = encodeURIComponent(shareText + " " + shareUrl);
+        const twText = encodeURIComponent(shareText.slice(0, 240) + " " + shareUrl);
+        const liUrl = encodeURIComponent(shareUrl);
+        const fbUrl = encodeURIComponent(shareUrl);
+
+        shareMenu.innerHTML = `
+          <a href="mailto:?subject=${emailSubject}&body=${emailBody}" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
+            Email
+          </a>
+          <a href="sms:?body=${smsBody}" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+            Text message
+          </a>
+          <a href="https://twitter.com/intent/tweet?text=${twText}" target="_blank" rel="noopener" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+            X / Twitter
+          </a>
+          <a href="https://www.linkedin.com/sharing/share-offsite/?url=${liUrl}" target="_blank" rel="noopener" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M20.447 20.452h-3.554v-5.569c0-1.328-.027-3.037-1.852-3.037-1.853 0-2.136 1.445-2.136 2.939v5.667H9.351V9h3.414v1.561h.046c.477-.9 1.637-1.85 3.37-1.85 3.601 0 4.267 2.37 4.267 5.455v6.286zM5.337 7.433a2.062 2.062 0 01-2.063-2.065 2.063 2.063 0 112.063 2.065zm1.782 13.019H3.555V9h3.564v11.452zM22.225 0H1.771C.792 0 0 .774 0 1.729v20.542C0 23.227.792 24 1.771 24h20.451C23.2 24 24 23.227 24 22.271V1.729C24 .774 23.2 0 22.222 0h.003z"/></svg>
+            LinkedIn
+          </a>
+          <a href="https://www.facebook.com/sharer/sharer.php?u=${fbUrl}" target="_blank" rel="noopener" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
+            Facebook
+          </a>
+          <button type="button" data-action="copy-link" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+            Copy link
+          </button>
+        `;
+        shareMenu.classList.add("open");
+
+        const copyLinkBtn = shareMenu.querySelector('[data-action="copy-link"]');
+        if (copyLinkBtn) {
+          copyLinkBtn.addEventListener("click", async () => {
+            try {
+              await navigator.clipboard.writeText(shareUrl);
+              copyLinkBtn.textContent = "Link copied";
+            } catch (err) { console.error(err); }
+            setTimeout(() => shareMenu.classList.remove("open"), 700);
+          });
+        }
+      });
+
+      // Close share menu when clicking outside
+      document.addEventListener("click", (e) => {
+        if (!wrap.contains(e.target)) shareMenu.classList.remove("open");
+      });
+
       msgDiv.appendChild(wrap);
     }
 
