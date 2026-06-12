@@ -159,13 +159,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
       padding: 1rem 1.75rem;
       display: flex; justify-content: space-between; align-items: center;
       border-bottom: 2px solid var(--gold);
+      gap: 0.75rem;
     }
-    .brand { display: flex; align-items: center; gap: 1rem; }
-    .brand-logo { height: 60px; width: auto; display: block; }
-    .brand-divider { width: 1px; height: 38px; background: rgba(210, 188, 141, 0.35); }
+    .brand { display: flex; align-items: center; gap: 1rem; min-width: 0; flex: 1; }
+    .brand-logo { height: 60px; width: auto; display: block; flex-shrink: 0; }
+    .brand-divider { width: 1px; height: 38px; background: rgba(210, 188, 141, 0.35); flex-shrink: 0; }
     .brand-tag {
       font-size: 0.92rem; letter-spacing: 0.22em;
       text-transform: uppercase; color: var(--gold);
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     header button {
       background: transparent; color: var(--paper-2);
@@ -174,11 +176,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer; font-size: 0.75rem;
       font-family: inherit; letter-spacing: 0.14em;
       text-transform: uppercase; transition: all 0.2s ease;
+      flex-shrink: 0; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 0.4rem;
     }
     header button:hover {
       background: rgba(210, 188, 141, 0.08);
       border-color: var(--gold); color: var(--gold);
     }
+    /* Show full label on desktop, icon-only label on small screens */
+    .reset-icon { width: 16px; height: 16px; display: none; }
+    .reset-label { display: inline; }
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
     .msg {
@@ -317,9 +324,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .footer-note a:hover { color: var(--rust); }
     @media (max-width: 640px) {
       .user { margin-left: 8%; } .assistant { margin-right: 6%; }
-      header { padding: 0.85rem 1rem; }
-      .brand-logo { height: 48px; } .brand-tag { font-size: 0.74rem; }
-      .brand { gap: 0.7rem; } .brand-divider { height: 30px; }
+      header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
+      .brand-logo { height: 40px; }
+      .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
+      .brand { gap: 0.6rem; } .brand-divider { height: 26px; }
+      header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
+      #chat { padding: 1.5rem 1rem 0.75rem; }
+      form { padding: 0.75rem 1rem; gap: 0.4rem; }
+      input[type="text"] { padding: 0.75rem 2.9rem 0.75rem 0.9rem; font-size: 16px; }
+      button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
+      .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
+    }
+    /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
+    @media (max-width: 480px) {
+      .brand-divider, .brand-tag { display: none; }
+      .reset-label { display: none; }
+      .reset-icon { display: inline-block; }
+      header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
+                      display: inline-flex; align-items: center; justify-content: center; }
     }
   </style>
 </head>
@@ -330,7 +352,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
     </div>
-    <button id="reset-btn">New conversation</button>
+    <button id="reset-btn" aria-label="Start a new conversation" title="New conversation">
+      <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+      <span class="reset-label">New conversation</span>
+    </button>
   </header>
 
   <div id="chat-wrap">
