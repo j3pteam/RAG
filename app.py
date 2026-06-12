@@ -225,32 +225,45 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-btn:disabled { cursor: default; }
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
 
-    /* Action buttons (copy + share) — mirror feedback-btn style */
+    /* Action buttons (copy + share) — labeled pill style */
     .action-sep {
       width: 1px; height: 22px; background: var(--line);
-      margin: 0 0.2rem;
+      margin: 0 0.3rem;
     }
     .action-btn {
-      background: transparent; border: 1px solid var(--line);
-      color: var(--muted); width: 30px; height: 30px; border-radius: 50%;
-      cursor: pointer; display: flex; align-items: center; justify-content: center;
-      padding: 0; transition: all 0.18s ease;
-      position: relative;
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--muted);
+      padding: 0.4rem 0.85rem;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      font-family: inherit;
+      font-size: 0.7rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+      transition: all 0.18s ease;
+      white-space: nowrap;
     }
     .action-btn svg { width: 14px; height: 14px; }
-    .action-btn:hover { border-color: var(--gold); color: var(--navy); background: var(--paper); }
-    .action-btn.copied { background: var(--navy); border-color: var(--navy); color: var(--gold); }
-    .action-toast {
-      position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
-      background: var(--navy); color: var(--gold);
-      font-size: 0.65rem; letter-spacing: 0.1em; text-transform: uppercase;
-      padding: 0.3rem 0.6rem; border-radius: 2px; white-space: nowrap;
-      opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+    .action-btn:hover {
+      border-color: var(--gold);
+      color: var(--navy);
+      background: var(--paper);
     }
-    .action-toast.show { opacity: 1; }
+    .action-btn.copied {
+      background: var(--navy);
+      border-color: var(--navy);
+      color: var(--gold);
+    }
+    .action-btn.copied:hover {
+      background: var(--navy); color: var(--gold);
+    }
 
     /* Share menu popover */
-    .share-wrap { position: relative; }
+    .share-wrap { position: relative; display: inline-block; }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
@@ -267,9 +280,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
       color: var(--text); font-size: 0.82rem;
       font-family: inherit; text-decoration: none;
       text-align: left; width: 100%;
+      letter-spacing: 0; text-transform: none;
     }
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
+
+    /* On the feedback row, push actions to the right */
+    .feedback-actions {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
     .feedback-comment {
       margin-top: 0.7rem;
       padding-top: 0.7rem;
@@ -388,6 +410,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .reset-icon { display: inline-block; }
       header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
                       display: inline-flex; align-items: center; justify-content: center; }
+      /* Hide action button text labels — keep icons only */
+      .action-btn span { display: none; }
+      .action-btn { padding: 0.45rem 0.55rem; }
     }
   </style>
 </head>
@@ -469,21 +494,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <span class="action-sep"></span>
-        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-          <span class="action-toast">Copied</span>
-        </button>
-        <span class="share-wrap">
-          <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
+        <span class="feedback-actions">
+          <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
             </svg>
+            <span class="copy-label">Copy</span>
           </button>
-          <div class="share-menu" role="menu"></div>
+          <span class="share-wrap">
+            <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span>Share</span>
+            </button>
+            <div class="share-menu" role="menu"></div>
+          </span>
         </span>
       `;
 
@@ -557,7 +584,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
       // === COPY button ===
       const copyBtn = wrap.querySelector(".copy-btn");
-      const copyToast = copyBtn.querySelector(".action-toast");
+      const copyLabel = copyBtn.querySelector(".copy-label");
       copyBtn.addEventListener("click", async () => {
         try {
           if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -570,17 +597,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
             document.execCommand("copy"); document.body.removeChild(ta);
           }
           copyBtn.classList.add("copied");
-          copyToast.classList.add("show");
-          copyToast.textContent = "Copied";
+          copyLabel.textContent = "Copied";
           setTimeout(() => {
             copyBtn.classList.remove("copied");
-            copyToast.classList.remove("show");
+            copyLabel.textContent = "Copy";
           }, 1600);
         } catch (err) {
           console.error("Copy failed:", err);
-          copyToast.textContent = "Failed";
-          copyToast.classList.add("show");
-          setTimeout(() => copyToast.classList.remove("show"), 1600);
+          copyLabel.textContent = "Failed";
+          setTimeout(() => { copyLabel.textContent = "Copy"; }, 1600);
         }
       });
 
