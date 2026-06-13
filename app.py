@@ -205,8 +205,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .typing { color: var(--muted); font-style: italic; }
     .feedback {
-      display: flex; gap: 0.4rem; margin-top: 0.6rem;
-      padding-top: 0.6rem; border-top: 1px solid var(--line); align-items: center;
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 0.5rem; margin-top: 0.6rem;
+      padding-top: 0.6rem; border-top: 1px solid var(--line);
+      flex-wrap: wrap;
+    }
+    .feedback-left, .feedback-actions {
+      display: flex; align-items: center; gap: 0.5rem;
     }
     .feedback-label {
       font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase;
@@ -287,8 +292,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     /* On the feedback row, push actions to the right */
     .feedback-actions {
-      margin-left: auto;
-      display: inline-flex;
+      display: flex;
       align-items: center;
       gap: 0.5rem;
     }
@@ -483,17 +487,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       const wrap = document.createElement("div");
       wrap.className = "feedback";
       wrap.innerHTML = `
-        <span class="feedback-label">Helpful?</span>
-        <button class="feedback-btn" data-rating="up" aria-label="Thumbs up" title="Yes, helpful">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7v-12L11.69 2.5a2 2 0 0 1 3.31 3.38z"/>
-          </svg>
-        </button>
-        <button class="feedback-btn" data-rating="down" aria-label="Thumbs down" title="No, not helpful">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
-          </svg>
-        </button>
+        <span class="feedback-left">
+          <span class="feedback-label">Helpful?</span>
+          <button class="feedback-btn" data-rating="up" aria-label="Thumbs up" title="Yes, helpful">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M7 10v12"/><path d="M15 5.88 14 10h5.83a2 2 0 0 1 1.92 2.56l-2.33 8A2 2 0 0 1 17.5 22H7v-12L11.69 2.5a2 2 0 0 1 3.31 3.38z"/>
+            </svg>
+          </button>
+          <button class="feedback-btn" data-rating="down" aria-label="Thumbs down" title="No, not helpful">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
+            </svg>
+          </button>
+        </span>
         <span class="feedback-actions">
           <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
