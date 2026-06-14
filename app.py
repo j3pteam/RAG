@@ -486,6 +486,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return div;
     }
 
+
     function attachFeedback(msgDiv, replyText) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
