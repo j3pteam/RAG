@@ -228,6 +228,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
 
     /* Action buttons (copy + share) — labeled pill style */
+    .msg-actions {
+      margin-left: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+    }
     .action-sep {
       width: 1px; height: 22px; background: var(--line);
       margin: 0 0.3rem;
@@ -495,7 +501,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
+        <span class="msg-actions">
+        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
@@ -510,6 +517,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <span>Share</span>
           </button>
           <div class="share-menu" role="menu"></div>
+        </span>
         </span>
       `;
 
