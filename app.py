@@ -2,6 +2,7 @@
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
 
+
 NEW since persona template:
   - Document upload / chunking / embedding pipeline
   - Semantic search retrieves relevant chunks before each response
