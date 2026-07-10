@@ -2,7 +2,6 @@
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
 
-
 NEW since persona template:
   - Document upload / chunking / embedding pipeline
   - Semantic search retrieves relevant chunks before each response
@@ -229,12 +228,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
 
     /* Action buttons (copy + share) — labeled pill style */
-    .msg-actions {
-      margin-left: auto;
-      display: inline-flex;
-      align-items: center;
-      gap: 0.4rem;
-    }
     .action-sep {
       width: 1px; height: 22px; background: var(--line);
       margin: 0 0.3rem;
@@ -360,8 +353,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .composer-wrap { background: var(--paper-2); border-top: 1px solid var(--line); }
     form { display: flex; gap: 0.6rem; padding: 1rem 1.5rem; max-width: 760px; margin: 0 auto; }
     .input-wrap { flex: 1; position: relative; display: flex; align-items: center; }
+    .attach-btn {
+      position: absolute; right: 3rem; top: 50%; transform: translateY(-50%);
+      background: transparent; border: none;
+      color: var(--muted); cursor: pointer;
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s ease; padding: 0;
+    }
+    .attach-btn:hover { color: var(--navy); background: var(--paper); }
+    .attach-btn svg { width: 18px; height: 18px; }
+    #file-input { display: none; }
+    .attached-file {
+      display: none; align-items: center; gap: 0.5rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 4px; padding: 0.4rem 0.6rem;
+      margin: 0 1.75rem 0.5rem; font-size: 0.82rem;
+      color: var(--navy);
+    }
+    .attached-file.visible { display: inline-flex; }
+    .attached-file svg { width: 14px; height: 14px; color: var(--muted); flex-shrink: 0; }
+    .attached-file .filename { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .attached-file .filesize { color: var(--muted); font-size: 0.72rem; }
+    .attached-file button {
+      background: transparent; border: none; cursor: pointer;
+      color: var(--muted); padding: 2px; display: flex;
+      align-items: center; justify-content: center;
+    }
+    .attached-file button:hover { color: var(--rust); }
+    .attached-file button svg { width: 14px; height: 14px; }
     input[type="text"] {
-      flex: 1; padding: 0.85rem 3.2rem 0.85rem 1.1rem;
+      flex: 1; padding: 0.85rem 5.4rem 0.85rem 1.1rem;
       border: 1px solid var(--line); border-radius: 2px;
       font-size: 0.95rem; font-family: inherit; outline: none;
       background: var(--paper); color: var(--text); width: 100%;
@@ -407,7 +429,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
       #chat { padding: 1.5rem 1rem 0.75rem; }
       form { padding: 0.75rem 1rem; gap: 0.4rem; }
-      input[type="text"] { padding: 0.75rem 2.9rem 0.75rem 0.9rem; font-size: 16px; }
+      input[type="text"] { padding: 0.75rem 5rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
     }
@@ -446,9 +468,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="composer-wrap">
+    <div id="attached-file" class="attached-file" aria-live="polite">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="filename" id="attached-file-name">document.pdf</span>
+      <span class="filesize" id="attached-file-size"></span>
+      <button type="button" id="remove-file-btn" aria-label="Remove attachment" title="Remove">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
     <form id="chat-form">
       <div class="input-wrap">
-        <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus required />
+        <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
+        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md" />
+        <button type="button" id="attach-btn" class="attach-btn" aria-label="Attach file" title="Attach a document">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
+          </svg>
+        </button>
         <button type="button" id="mic-btn" class="mic-btn" aria-label="Voice input" title="Click to speak">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -487,7 +523,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return div;
     }
 
-
     function attachFeedback(msgDiv, replyText) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
@@ -503,8 +538,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <span class="msg-actions">
-        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
+        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
@@ -519,7 +553,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <span>Share</span>
           </button>
           <div class="share-menu" role="menu"></div>
-        </span>
         </span>
       `;
 
@@ -699,19 +732,75 @@ INDEX_HTML = r"""<!DOCTYPE html>
       msgDiv.appendChild(wrap);
     }
 
+    // Attach file handling
+    const fileInput = document.getElementById("file-input");
+    const attachBtn = document.getElementById("attach-btn");
+    const attachedFileDiv = document.getElementById("attached-file");
+    const attachedFileName = document.getElementById("attached-file-name");
+    const attachedFileSize = document.getElementById("attached-file-size");
+    const removeFileBtn = document.getElementById("remove-file-btn");
+    const MAX_FILE_MB = 25;
+
+    function formatFileSize(bytes) {
+      if (bytes < 1024) return bytes + " B";
+      if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+      return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+    }
+    function clearAttachment() {
+      fileInput.value = "";
+      attachedFileDiv.classList.remove("visible");
+    }
+    attachBtn.addEventListener("click", () => fileInput.click());
+    removeFileBtn.addEventListener("click", clearAttachment);
+    fileInput.addEventListener("change", () => {
+      const f = fileInput.files[0];
+      if (!f) return;
+      const okExt = /\.(pdf|docx|txt|md)$/i.test(f.name);
+      if (!okExt) {
+        alert("Please attach a PDF, DOCX, TXT, or MD file.");
+        clearAttachment(); return;
+      }
+      if (f.size > MAX_FILE_MB * 1024 * 1024) {
+        alert(`File is too large. Max ${MAX_FILE_MB} MB.`);
+        clearAttachment(); return;
+      }
+      attachedFileName.textContent = f.name;
+      attachedFileSize.textContent = "· " + formatFileSize(f.size);
+      attachedFileDiv.classList.add("visible");
+    });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      if (!text) return;
-      addMessage(text, "user");
+      const file = fileInput.files[0] || null;
+      // Allow sending file with no text, or text with no file, but require at least one
+      if (!text && !file) return;
+
+      // Show the user's message in chat — include attachment note if a file was sent
+      const displayText = file
+        ? (text || "[No message]") + `\n\n📎 Attached: ${file.name}`
+        : text;
+      addMessage(displayText, "user");
       input.value = "";
+      const attachedFileForRequest = file;
+      clearAttachment();
       sendBtn.disabled = true;
       const thinking = addMessage("Thinking…", "assistant typing");
+
       try {
-        const res = await fetch("/chat", {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text }),
-        });
+        let res;
+        if (attachedFileForRequest) {
+          // Multipart send when a file is attached
+          const fd = new FormData();
+          fd.append("message", text || "Please review this attached document.");
+          fd.append("file", attachedFileForRequest);
+          res = await fetch("/chat", { method: "POST", body: fd });
+        } else {
+          res = await fetch("/chat", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text }),
+          });
+        }
         const data = await res.json();
         thinking.remove();
         if (data.reply) addMessage(data.reply, "assistant", true);
@@ -829,13 +918,56 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    data = request.get_json(silent=True) or {}
-    user_input = (data.get("message") or "").strip()
-    if not user_input:
+    # Accept BOTH multipart/form-data (with optional file) and JSON.
+    # If a file is attached, extract its text and prepend as ephemeral
+    # context in the user's message. The file is NOT added to the KB —
+    # it's only visible for this single turn.
+    uploaded_file = None
+    if request.files and "file" in request.files:
+        uploaded_file = request.files["file"]
+
+    if uploaded_file:
+        user_input = (request.form.get("message") or "").strip()
+    else:
+        data = request.get_json(silent=True) or {}
+        user_input = (data.get("message") or "").strip()
+
+    if not user_input and not uploaded_file:
         return jsonify({"error": "Empty message"}), 400
 
+    # If a file was uploaded, extract text and inline it in the user message.
+    attachment_context = ""
+    if uploaded_file:
+        try:
+            file_bytes = uploaded_file.read()
+            if len(file_bytes) > 25 * 1024 * 1024:
+                return jsonify({"error": "File too large (25 MB max)."}), 400
+            filename = uploaded_file.filename or "attachment"
+            if not filename.lower().endswith(('.pdf', '.docx', '.txt', '.md')):
+                return jsonify({"error": "Unsupported file type. Please attach PDF, DOCX, TXT, or MD."}), 400
+            extracted = emb.extract_text_from_upload(filename, file_bytes)
+            if not extracted.strip():
+                return jsonify({"error": f"Could not extract text from {filename}."}), 400
+            # Cap to keep the prompt reasonable — 40k chars is plenty for a single-turn attachment
+            if len(extracted) > 40000:
+                extracted = extracted[:40000] + "\n\n[... file truncated for length ...]"
+            attachment_context = (
+                f"\n\n[The user attached a document titled '{filename}'. "
+                f"The full text of the document is below. Use it to inform your response.]\n\n"
+                f"--- BEGIN ATTACHED DOCUMENT ---\n{extracted}\n--- END ATTACHED DOCUMENT ---"
+            )
+            if not user_input:
+                user_input = "Please review this attached document."
+            app.logger.info(f"Chat attachment received: {filename} ({len(extracted)} chars extracted)")
+        except Exception as e:
+            app.logger.error(f"Attachment processing failed: {e}")
+            return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
+
+    # Combine user input with attachment context for the model
+    full_user_content = user_input + attachment_context
+
     messages = session.get("messages", [])
-    messages.append({"role": "user", "content": user_input})
+    messages.append({"role": "user", "content": full_user_content})
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
