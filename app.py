@@ -479,7 +479,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <form id="chat-form">
       <div class="input-wrap">
         <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
-        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md" />
+        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp" />
         <button type="button" id="attach-btn" class="attach-btn" aria-label="Attach file" title="Attach a document">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
@@ -755,9 +755,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
     fileInput.addEventListener("change", () => {
       const f = fileInput.files[0];
       if (!f) return;
-      const okExt = /\.(pdf|docx|txt|md)$/i.test(f.name);
+      const okExt = /\.(pdf|docx|txt|md|jpe?g|png|gif|webp)$/i.test(f.name);
       if (!okExt) {
-        alert("Please attach a PDF, DOCX, TXT, or MD file.");
+        alert("Please attach a PDF, DOCX, TXT, MD, or image (JPG, PNG, GIF, WEBP).");
         clearAttachment(); return;
       }
       if (f.size > MAX_FILE_MB * 1024 * 1024) {
@@ -919,9 +919,10 @@ def index():
 @app.route("/chat", methods=["POST"])
 def chat():
     # Accept BOTH multipart/form-data (with optional file) and JSON.
-    # If a file is attached, extract its text and prepend as ephemeral
-    # context in the user's message. The file is NOT added to the KB —
-    # it's only visible for this single turn.
+    # Two attachment paths:
+    #   - Document (PDF/DOCX/TXT/MD): extract text, prepend as context
+    #   - Image (JPG/PNG/GIF/WEBP): send to Claude as vision content
+    # In either case the attachment is ephemeral — used only in this turn.
     uploaded_file = None
     if request.files and "file" in request.files:
         uploaded_file = request.files["file"]
@@ -935,39 +936,91 @@ def chat():
     if not user_input and not uploaded_file:
         return jsonify({"error": "Empty message"}), 400
 
-    # If a file was uploaded, extract text and inline it in the user message.
-    attachment_context = ""
+    # Extension-based routing between document vs image
+    DOC_EXTS = ('.pdf', '.docx', '.txt', '.md')
+    IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
+    IMAGE_MEDIA_TYPES = {
+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+        '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+    }
+
+    attachment_context = ""    # Text extracted from a document, if any
+    image_block = None         # Anthropic image content block, if any
+    attachment_display_name = ""
+
     if uploaded_file:
         try:
             file_bytes = uploaded_file.read()
             if len(file_bytes) > 25 * 1024 * 1024:
                 return jsonify({"error": "File too large (25 MB max)."}), 400
             filename = uploaded_file.filename or "attachment"
-            if not filename.lower().endswith(('.pdf', '.docx', '.txt', '.md')):
-                return jsonify({"error": "Unsupported file type. Please attach PDF, DOCX, TXT, or MD."}), 400
-            extracted = emb.extract_text_from_upload(filename, file_bytes)
-            if not extracted.strip():
-                return jsonify({"error": f"Could not extract text from {filename}."}), 400
-            # Cap to keep the prompt reasonable — 40k chars is plenty for a single-turn attachment
-            if len(extracted) > 40000:
-                extracted = extracted[:40000] + "\n\n[... file truncated for length ...]"
-            attachment_context = (
-                f"\n\n[The user attached a document titled '{filename}'. "
-                f"The full text of the document is below. Use it to inform your response.]\n\n"
-                f"--- BEGIN ATTACHED DOCUMENT ---\n{extracted}\n--- END ATTACHED DOCUMENT ---"
-            )
-            if not user_input:
-                user_input = "Please review this attached document."
-            app.logger.info(f"Chat attachment received: {filename} ({len(extracted)} chars extracted)")
+            attachment_display_name = filename
+            ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+
+            if ext in IMAGE_EXTS:
+                # Vision path — send raw image bytes to Claude as base64
+                import base64
+                b64 = base64.standard_b64encode(file_bytes).decode("ascii")
+                image_block = {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": IMAGE_MEDIA_TYPES.get(ext, "image/jpeg"),
+                        "data": b64,
+                    },
+                }
+                if not user_input:
+                    user_input = "Please describe or analyze this image."
+                app.logger.info(f"Chat image received: {filename} ({len(file_bytes)} bytes)")
+
+            elif ext in DOC_EXTS:
+                # Text extraction path (unchanged)
+                extracted = emb.extract_text_from_upload(filename, file_bytes)
+                if not extracted.strip():
+                    return jsonify({"error": f"Could not extract text from {filename}."}), 400
+                if len(extracted) > 40000:
+                    extracted = extracted[:40000] + "\n\n[... file truncated for length ...]"
+                attachment_context = (
+                    f"\n\n[The user attached a document titled '{filename}'. "
+                    f"The full text of the document is below. Use it to inform your response.]\n\n"
+                    f"--- BEGIN ATTACHED DOCUMENT ---\n{extracted}\n--- END ATTACHED DOCUMENT ---"
+                )
+                if not user_input:
+                    user_input = "Please review this attached document."
+                app.logger.info(f"Chat attachment received: {filename} ({len(extracted)} chars extracted)")
+
+            else:
+                return jsonify({
+                    "error": "Unsupported file type. Please attach PDF, DOCX, TXT, MD, or an image (JPG, PNG, GIF, WEBP)."
+                }), 400
+
         except Exception as e:
             app.logger.error(f"Attachment processing failed: {e}")
             return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
 
-    # Combine user input with attachment context for the model
+    # Combine user text with any attached-document context. Images are added
+    # separately as a content block when building the current-turn message below.
     full_user_content = user_input + attachment_context
 
     messages = session.get("messages", [])
-    messages.append({"role": "user", "content": full_user_content})
+    # For history: store only the text portion so the session cookie doesn't
+    # bloat with base64 image data. If an image was attached, Claude sees it
+    # this turn only; the next turn will not have access to the image.
+    if image_block:
+        # Build the current-turn message with multi-part content (image + text)
+        current_turn_content = [
+            image_block,
+            {"type": "text", "text": user_input or "Please describe or analyze this image."},
+        ]
+        # In-session history: keep a simple text note so history stays serializable
+        history_note = (user_input or "").strip()
+        if attachment_display_name:
+            history_note = (history_note + f"\n\n[Attached image: {attachment_display_name}]").strip()
+        messages_for_api = messages + [{"role": "user", "content": current_turn_content}]
+        messages.append({"role": "user", "content": history_note or f"[Attached image: {attachment_display_name}]"})
+    else:
+        messages.append({"role": "user", "content": full_user_content})
+        messages_for_api = messages
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
@@ -1073,7 +1126,7 @@ def chat():
                     "cache_control": {"type": "ephemeral"},
                 }
             ],
-            messages=messages,
+            messages=messages_for_api,
         )
     except anthropic.APIError as e:
         return jsonify({"error": f"API error: {str(e)}"}), 500
