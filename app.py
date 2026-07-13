@@ -72,7 +72,7 @@ CONFIG = {
     ),
     "footer_cta_url": os.environ.get(
         "FOOTER_CTA_URL",
-        "https://j3phealth.as.me/schedule/81cec0b7",
+        "https://calendly.com/afriedmanj3p/30min?month=2026-07",
     ),
 
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
