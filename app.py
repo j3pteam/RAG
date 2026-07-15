@@ -241,6 +241,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 0.4rem;
       font-family: inherit;
       font-size: 0.7rem;
@@ -248,6 +249,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       text-transform: uppercase;
       transition: all 0.18s ease;
       white-space: nowrap;
+      width: 96px;
+      box-sizing: border-box;
     }
     .action-btn svg { width: 14px; height: 14px; }
     .action-btn:hover {
@@ -265,7 +268,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     /* Share menu popover */
-    .share-wrap { position: relative; display: inline-block; }
+    .share-wrap { position: relative; display: inline-flex; }
+    .share-wrap .action-btn { width: 100%; }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
