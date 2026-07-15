@@ -287,11 +287,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
-    /* On the feedback row, push actions to the right */
+    /* On the feedback row, push actions to the right as one evenly-spaced group */
     .feedback-actions {
       display: flex;
       align-items: center;
       gap: 0.5rem;
+      margin-left: auto;
     }
     .feedback-comment {
       margin-top: 0.7rem;
@@ -538,22 +539,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-          </svg>
-          <span class="copy-label">Copy</span>
-        </button>
-        <span class="share-wrap">
-          <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
+        <div class="feedback-actions">
+          <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
             </svg>
-            <span>Share</span>
+            <span class="copy-label">Copy</span>
           </button>
-          <div class="share-menu" role="menu"></div>
-        </span>
+          <span class="share-wrap">
+            <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
+              </svg>
+              <span>Share</span>
+            </button>
+            <div class="share-menu" role="menu"></div>
+          </span>
+        </div>
       `;
 
       async function sendFeedback(rating, comment) {
