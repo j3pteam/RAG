@@ -241,7 +241,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      justify-content: center;
       gap: 0.4rem;
       font-family: inherit;
       font-size: 0.7rem;
@@ -249,8 +248,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
       text-transform: uppercase;
       transition: all 0.18s ease;
       white-space: nowrap;
-      width: 96px;
-      box-sizing: border-box;
     }
     .action-btn svg { width: 14px; height: 14px; }
     .action-btn:hover {
@@ -268,8 +265,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     /* Share menu popover */
-    .share-wrap { position: relative; display: inline-flex; }
-    .share-wrap .action-btn { width: 100%; }
+    .share-wrap { position: relative; display: inline-block; }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
@@ -291,12 +287,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
-    /* On the feedback row, push actions to the right as one evenly-spaced group */
+    /* On the feedback row, push actions to the right */
     .feedback-actions {
       display: flex;
       align-items: center;
       gap: 0.5rem;
-      margin-left: auto;
     }
     .feedback-comment {
       margin-top: 0.7rem;
@@ -543,24 +538,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <div class="feedback-actions">
-          <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
+        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span class="copy-label">Copy</span>
+        </button>
+        <span class="share-wrap">
+          <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
             </svg>
-            <span class="copy-label">Copy</span>
+            <span>Share</span>
           </button>
-          <span class="share-wrap">
-            <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-              </svg>
-              <span>Share</span>
-            </button>
-            <div class="share-menu" role="menu"></div>
-          </span>
-        </div>
+          <div class="share-menu" role="menu"></div>
+        </span>
       `;
 
       async function sendFeedback(rating, comment) {
@@ -1405,6 +1398,63 @@ input[type="text"] { flex: 1; min-width: 200px; }
   </div>
 
   <div class="section">
+    <h2>Upload Folder</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Select an entire folder. All supported files inside it (including subfolders) will be uploaded and embedded in one batch.
+      Unsupported files and duplicates are skipped automatically. Maximum 50 files per batch.
+    </p>
+    <form method="POST" action="/admin/upload-folder" enctype="multipart/form-data" class="upload" id="folder-upload-form">
+      <input type="file" name="files" id="folder-input" webkitdirectory directory multiple required />
+      <button type="submit" class="btn" id="folder-upload-btn">Upload Folder</button>
+    </form>
+    <p id="folder-preview" class="muted" style="margin: 0.75rem 0 0 0; font-size: 0.85rem; display: none;"></p>
+    <script>
+      (function() {
+        const folderInput = document.getElementById("folder-input");
+        const preview = document.getElementById("folder-preview");
+        const btn = document.getElementById("folder-upload-btn");
+        const form = document.getElementById("folder-upload-form");
+        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
+
+        folderInput.addEventListener("change", () => {
+          const all = Array.from(folderInput.files || []);
+          const supported = all.filter(f => SUPPORTED.test(f.name));
+          const skipped = all.length - supported.length;
+          if (all.length === 0) {
+            preview.style.display = "none";
+            return;
+          }
+          let msg = `${supported.length} supported file${supported.length === 1 ? '' : 's'} ready to upload`;
+          if (skipped > 0) msg += ` · ${skipped} unsupported file${skipped === 1 ? '' : 's'} will be skipped`;
+          if (supported.length > 50) {
+            msg += ` · ⚠ Only the first 50 will be processed`;
+          }
+          if (supported.length === 0) {
+            msg = "⚠ No supported files found in this folder (PDF, DOCX, TXT, MD only).";
+            btn.disabled = true;
+          } else {
+            btn.disabled = false;
+          }
+          preview.textContent = msg;
+          preview.style.display = "block";
+        });
+
+        form.addEventListener("submit", (e) => {
+          const all = Array.from(folderInput.files || []);
+          const supported = all.filter(f => SUPPORTED.test(f.name));
+          if (supported.length === 0) {
+            e.preventDefault();
+            alert("No supported files found in this folder.");
+            return;
+          }
+          btn.textContent = "Uploading… (this may take a while)";
+          btn.disabled = true;
+        });
+      })();
+    </script>
+  </div>
+
+  <div class="section">
     <h2>Add Knowledge from URL</h2>
     <p class="muted" style="margin: 0 0 1rem 0;">Paste a link to an article, blog post, or web page. The main article text will be extracted and embedded. Works best with article-style pages (not paywalled, login-required, or JavaScript-only sites).</p>
     <form method="POST" action="/admin/upload-url" class="upload">
@@ -1720,7 +1770,100 @@ def admin_upload():
     return redirect(url_for("admin_dashboard"))
 
 
-@app.route("/admin/upload-url", methods=["POST"])
+@app.route("/admin/upload-folder", methods=["POST"])
+@admin_required
+def admin_upload_folder():
+    """Bulk-upload all supported files from a folder in one request.
+
+    Each file goes through the same pipeline as single-file upload:
+    duplicate check → extract → chunk → embed → insert. Files that
+    fail any step are logged but do not stop the batch. Returns a
+    summary of successes, skipped files (duplicates or unsupported),
+    and failures.
+    """
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot upload: RAG not fully configured.")
+        return redirect(url_for("admin_dashboard"))
+
+    files = request.files.getlist("files")
+    if not files:
+        flash("No files were selected.")
+        return redirect(url_for("admin_dashboard"))
+
+    SUPPORTED_EXT = ('.pdf', '.docx', '.txt', '.md')
+    MAX_BATCH = 50   # keep request under Railway 5-min timeout for typical files
+    MAX_BYTES = 25 * 1024 * 1024
+
+    # Filter to supported extensions first
+    supported_files = [f for f in files if f.filename and f.filename.lower().endswith(SUPPORTED_EXT)]
+    unsupported_count = len(files) - len(supported_files)
+
+    # Cap the batch size — anything above the limit is silently skipped for this run
+    over_limit = max(0, len(supported_files) - MAX_BATCH)
+    process_files = supported_files[:MAX_BATCH]
+
+    uploaded = []       # list of (title, chunk_count, doc_id)
+    duplicates = []     # list of (filename, existing_title)
+    failed = []         # list of (filename, error)
+
+    for file in process_files:
+        # webkitdirectory paths look like "folder/subfolder/file.pdf"
+        # Use just the basename as the source and title default.
+        full_path = file.filename or "unknown"
+        basename = full_path.rsplit("/", 1)[-1]
+
+        try:
+            # Duplicate check first
+            dup = db.find_duplicate_document(title=basename, source=basename)
+            if dup:
+                duplicates.append((basename, dup["title"]))
+                continue
+
+            file_bytes = file.read()
+            if len(file_bytes) > MAX_BYTES:
+                failed.append((basename, "too large (>25 MB)"))
+                continue
+            if not file_bytes:
+                failed.append((basename, "empty file"))
+                continue
+
+            text = emb.extract_text_from_upload(basename, file_bytes)
+            if not text.strip():
+                failed.append((basename, "no text extracted"))
+                continue
+
+            chunks = emb.chunk_text(text)
+            if not chunks:
+                failed.append((basename, "too short to chunk"))
+                continue
+
+            vectors = emb.embed_batch(chunks)
+            pairs = list(zip(chunks, vectors))
+            doc_id = db.insert_document(basename, basename, pairs)
+            uploaded.append((basename, len(chunks), doc_id))
+            app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
+
+        except Exception as e:
+            app.logger.error(f"Folder upload failed for {basename}: {e}")
+            failed.append((basename, str(e)[:100]))
+
+    # Build a summary flash message
+    parts = []
+    if uploaded:
+        parts.append(f"✓ {len(uploaded)} file{'s' if len(uploaded) != 1 else ''} uploaded")
+    if duplicates:
+        parts.append(f"⏭ {len(duplicates)} skipped as duplicates")
+    if failed:
+        # Show first 3 failure reasons so the user has something to act on
+        detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
+        parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
+    if unsupported_count:
+        parts.append(f"({unsupported_count} unsupported file type{'s' if unsupported_count != 1 else ''} ignored)")
+    if over_limit:
+        parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
+
+    flash(" · ".join(parts) if parts else "No files were processed.")
+    return redirect(url_for("admin_dashboard"))
 @admin_required
 def admin_upload_url():
     if not (db.is_enabled() and emb.is_enabled()):
