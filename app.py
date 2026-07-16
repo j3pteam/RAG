@@ -363,7 +363,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .attach-btn:hover { color: var(--navy); background: var(--paper); }
     .attach-btn svg { width: 18px; height: 18px; }
-    #file-input { display: none; }
+    .folder-btn {
+      position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
+      background: transparent; border: none;
+      color: var(--muted); cursor: pointer;
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s ease; padding: 0;
+    }
+    .folder-btn:hover { color: var(--navy); background: var(--paper); }
+    .folder-btn svg { width: 18px; height: 18px; }
+    #file-input, #folder-input-chat { display: none; }
     .attached-file {
       display: none; align-items: center; gap: 0.5rem;
       background: var(--paper); border: 1px solid var(--line);
@@ -383,7 +393,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .attached-file button:hover { color: var(--rust); }
     .attached-file button svg { width: 14px; height: 14px; }
     input[type="text"] {
-      flex: 1; padding: 0.85rem 5.4rem 0.85rem 1.1rem;
+      flex: 1; padding: 0.85rem 7.6rem 0.85rem 1.1rem;
       border: 1px solid var(--line); border-radius: 2px;
       font-size: 0.95rem; font-family: inherit; outline: none;
       background: var(--paper); color: var(--text); width: 100%;
@@ -429,7 +439,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
       #chat { padding: 1.5rem 1rem 0.75rem; }
       form { padding: 0.75rem 1rem; gap: 0.4rem; }
-      input[type="text"] { padding: 0.75rem 5rem 0.75rem 0.9rem; font-size: 16px; }
+      input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
     }
@@ -480,7 +490,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <div class="input-wrap">
         <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
         <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp" />
-        <button type="button" id="attach-btn" class="attach-btn" aria-label="Attach file" title="Attach a document">
+        <input type="file" id="folder-input-chat" webkitdirectory directory multiple />
+        <button type="button" id="folder-btn" class="folder-btn" aria-label="Attach folder" title="Attach a folder of documents">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+          </svg>
+        </button>
+        <button type="button" id="attach-btn" class="attach-btn" aria-label="Attach file" title="Attach a document or image">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
@@ -732,14 +748,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
       msgDiv.appendChild(wrap);
     }
 
-    // Attach file handling
+    // Attach file / folder handling
     const fileInput = document.getElementById("file-input");
+    const folderInput = document.getElementById("folder-input-chat");
     const attachBtn = document.getElementById("attach-btn");
+    const folderBtn = document.getElementById("folder-btn");
     const attachedFileDiv = document.getElementById("attached-file");
     const attachedFileName = document.getElementById("attached-file-name");
     const attachedFileSize = document.getElementById("attached-file-size");
     const removeFileBtn = document.getElementById("remove-file-btn");
     const MAX_FILE_MB = 25;
+    const MAX_FOLDER_FILES = 20;
+    const DOC_RE = /\.(pdf|docx|txt|md)$/i;
+    // Track state: either a single file OR a list of folder files, never both
+    let attachedFolderFiles = [];   // list of File objects when a folder is picked
+    let attachedFolderName = "";
 
     function formatFileSize(bytes) {
       if (bytes < 1024) return bytes + " B";
@@ -748,10 +771,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     function clearAttachment() {
       fileInput.value = "";
+      folderInput.value = "";
+      attachedFolderFiles = [];
+      attachedFolderName = "";
       attachedFileDiv.classList.remove("visible");
     }
-    attachBtn.addEventListener("click", () => fileInput.click());
+
+    attachBtn.addEventListener("click", () => {
+      clearAttachment();          // clear any prior folder selection
+      fileInput.click();
+    });
+    folderBtn.addEventListener("click", () => {
+      clearAttachment();          // clear any prior single-file selection
+      folderInput.click();
+    });
     removeFileBtn.addEventListener("click", clearAttachment);
+
     fileInput.addEventListener("change", () => {
       const f = fileInput.files[0];
       if (!f) return;
@@ -769,31 +804,70 @@ INDEX_HTML = r"""<!DOCTYPE html>
       attachedFileDiv.classList.add("visible");
     });
 
+    folderInput.addEventListener("change", () => {
+      const all = Array.from(folderInput.files || []);
+      // Filter to documents only (images not supported in folder-attach mode)
+      const docs = all.filter(f => DOC_RE.test(f.name));
+      if (docs.length === 0) {
+        alert("No supported documents found in this folder (PDF, DOCX, TXT, MD).");
+        clearAttachment(); return;
+      }
+      const capped = docs.slice(0, MAX_FOLDER_FILES);
+      // webkitRelativePath looks like "FolderName/sub/file.pdf" — extract the top-level folder name
+      const first = capped[0].webkitRelativePath || capped[0].name;
+      const folderName = first.split("/")[0] || "Folder";
+      attachedFolderFiles = capped;
+      attachedFolderName = folderName;
+      let msg = `${folderName} · ${capped.length} file${capped.length === 1 ? "" : "s"}`;
+      if (docs.length > MAX_FOLDER_FILES) msg += ` (first ${MAX_FOLDER_FILES} only)`;
+      if (docs.length < all.length) msg += ` · ${all.length - docs.length} skipped`;
+      attachedFileName.textContent = msg;
+      attachedFileSize.textContent = "";
+      attachedFileDiv.classList.add("visible");
+    });
+
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
       const file = fileInput.files[0] || null;
-      // Allow sending file with no text, or text with no file, but require at least one
-      if (!text && !file) return;
+      const folderFiles = attachedFolderFiles.slice();
+      const folderName = attachedFolderName;
+      // Require at least one of: text, single file, or folder
+      if (!text && !file && folderFiles.length === 0) return;
 
-      // Show the user's message in chat — include attachment note if a file was sent
-      const displayText = file
-        ? (text || "[No message]") + `\n\n📎 Attached: ${file.name}`
-        : text;
+      // Build the message shown in chat
+      let displayText;
+      if (folderFiles.length > 0) {
+        displayText = (text || "[No message]") +
+          `\n\n📂 Attached folder: ${folderName} (${folderFiles.length} file${folderFiles.length === 1 ? "" : "s"})`;
+      } else if (file) {
+        displayText = (text || "[No message]") + `\n\n📎 Attached: ${file.name}`;
+      } else {
+        displayText = text;
+      }
       addMessage(displayText, "user");
+
       input.value = "";
-      const attachedFileForRequest = file;
+      const singleFileForRequest = file;
+      const folderFilesForRequest = folderFiles;
+      const folderNameForRequest = folderName;
       clearAttachment();
       sendBtn.disabled = true;
       const thinking = addMessage("Thinking…", "assistant typing");
 
       try {
         let res;
-        if (attachedFileForRequest) {
-          // Multipart send when a file is attached
+        if (folderFilesForRequest.length > 0) {
+          // Folder upload — send multiple files
+          const fd = new FormData();
+          fd.append("message", text || "Please review these attached documents.");
+          fd.append("folder_name", folderNameForRequest);
+          folderFilesForRequest.forEach(f => fd.append("files", f, f.name));
+          res = await fetch("/chat", { method: "POST", body: fd });
+        } else if (singleFileForRequest) {
           const fd = new FormData();
           fd.append("message", text || "Please review this attached document.");
-          fd.append("file", attachedFileForRequest);
+          fd.append("file", singleFileForRequest);
           res = await fetch("/chat", { method: "POST", body: fd });
         } else {
           res = await fetch("/chat", {
@@ -918,22 +992,29 @@ def index():
 
 @app.route("/chat", methods=["POST"])
 def chat():
-    # Accept BOTH multipart/form-data (with optional file) and JSON.
-    # Two attachment paths:
-    #   - Document (PDF/DOCX/TXT/MD): extract text, prepend as context
-    #   - Image (JPG/PNG/GIF/WEBP): send to Claude as vision content
-    # In either case the attachment is ephemeral — used only in this turn.
+    # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
+    # Attachment paths:
+    #   - Single document (PDF/DOCX/TXT/MD): extract text, prepend as context
+    #   - Single image (JPG/PNG/GIF/WEBP): send to Claude as vision content
+    #   - Folder of documents: concatenate extracted text from all supported files
+    # All attachments are ephemeral — used only in this turn.
     uploaded_file = None
-    if request.files and "file" in request.files:
-        uploaded_file = request.files["file"]
+    folder_files = []
+    folder_name = ""
+    if request.files:
+        if "file" in request.files:
+            uploaded_file = request.files["file"]
+        if "files" in request.files:
+            folder_files = request.files.getlist("files")
+            folder_name = (request.form.get("folder_name") or "Folder").strip()
 
-    if uploaded_file:
+    if uploaded_file or folder_files:
         user_input = (request.form.get("message") or "").strip()
     else:
         data = request.get_json(silent=True) or {}
         user_input = (data.get("message") or "").strip()
 
-    if not user_input and not uploaded_file:
+    if not user_input and not uploaded_file and not folder_files:
         return jsonify({"error": "Empty message"}), 400
 
     # Extension-based routing between document vs image
@@ -997,6 +1078,67 @@ def chat():
         except Exception as e:
             app.logger.error(f"Attachment processing failed: {e}")
             return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
+
+    # === Folder attachment (multiple docs at once) ===
+    folder_stats = None  # (uploaded_count, skipped_count) if a folder was attached
+    if folder_files:
+        MAX_FOLDER_FILES = 20
+        MAX_COMBINED_CHARS = 80000  # cap to keep the prompt reasonable
+        supported = [f for f in folder_files if (f.filename or "").lower().endswith(DOC_EXTS)]
+        supported = supported[:MAX_FOLDER_FILES]  # hard cap
+        if not supported:
+            return jsonify({"error": "No supported documents in the attached folder."}), 400
+
+        combined_parts = []
+        total_chars = 0
+        used_count = 0
+        skipped_count = 0
+        for f in supported:
+            try:
+                fname = (f.filename or "unknown").rsplit("/", 1)[-1]
+                bytes_ = f.read()
+                if len(bytes_) > 25 * 1024 * 1024:
+                    skipped_count += 1
+                    continue
+                extracted = emb.extract_text_from_upload(fname, bytes_)
+                if not extracted.strip():
+                    skipped_count += 1
+                    continue
+                # Trim per-file if we're getting close to the combined cap
+                remaining = MAX_COMBINED_CHARS - total_chars
+                if remaining <= 0:
+                    skipped_count += 1
+                    continue
+                if len(extracted) > remaining:
+                    extracted = extracted[:remaining] + "\n[... file truncated for length ...]"
+                combined_parts.append(
+                    f"--- FILE: {fname} ---\n{extracted}"
+                )
+                total_chars += len(extracted)
+                used_count += 1
+            except Exception as e:
+                app.logger.error(f"Folder file skipped ({f.filename}): {e}")
+                skipped_count += 1
+
+        if not combined_parts:
+            return jsonify({"error": "Could not extract text from any files in the folder."}), 400
+
+        attachment_context = (
+            f"\n\n[The user attached a folder named '{folder_name}' containing "
+            f"{used_count} document{'s' if used_count != 1 else ''}. "
+            f"The concatenated content of all files is below. Use it to inform your response.]\n\n"
+            f"--- BEGIN ATTACHED FOLDER ---\n"
+            + "\n\n".join(combined_parts) +
+            f"\n--- END ATTACHED FOLDER ---"
+        )
+        if not user_input:
+            user_input = "Please review these attached documents."
+        attachment_display_name = f"{folder_name} ({used_count} files)"
+        folder_stats = (used_count, skipped_count)
+        app.logger.info(
+            f"Chat folder attachment: {folder_name} — {used_count} used, "
+            f"{skipped_count} skipped, {total_chars} total chars"
+        )
 
     # Combine user text with any attached-document context. Images are added
     # separately as a content block when building the current-turn message below.
