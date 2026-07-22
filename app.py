@@ -241,6 +241,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
       display: inline-flex;
       align-items: center;
+      justify-content: center;
       gap: 0.4rem;
       font-family: inherit;
       font-size: 0.7rem;
@@ -248,6 +249,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       text-transform: uppercase;
       transition: all 0.18s ease;
       white-space: nowrap;
+      min-width: 6.25rem;
     }
     .action-btn svg { width: 14px; height: 14px; }
     .action-btn:hover {
@@ -452,7 +454,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                       display: inline-flex; align-items: center; justify-content: center; }
       /* Hide action button text labels — keep icons only */
       .action-btn span { display: none; }
-      .action-btn { padding: 0.45rem 0.55rem; }
+      .action-btn { padding: 0.45rem 0.55rem; min-width: 0; }
     }
   </style>
 </head>
