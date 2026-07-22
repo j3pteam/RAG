@@ -266,12 +266,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .action-group {
       display: inline-flex;
       align-items: center;
+      align-self: center;
+      height: 30px;
       gap: 0.5rem;
       margin-left: auto;
     }
 
     /* Share menu popover */
-    .share-wrap { position: relative; display: inline-block; }
+    .share-wrap { position: relative; display: inline-flex; align-items: center; height: 30px; }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
