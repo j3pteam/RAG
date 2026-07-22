@@ -236,24 +236,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       background: transparent;
       border: 1px solid var(--line);
       color: var(--muted);
-      padding: 0 0.85rem;
+      width: 30px;
       height: 30px;
-      width: 6.5rem;
-      border-radius: 4px;
+      border-radius: 50%;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 0.4rem;
+      padding: 0;
       font-family: inherit;
-      font-size: 0.7rem;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
       transition: all 0.18s ease;
-      white-space: nowrap;
-      overflow: hidden;
     }
     .action-btn svg { width: 14px; height: 14px; }
+    .action-btn span { display: none; }
     .action-btn:hover {
       border-color: var(--gold);
       color: var(--navy);
@@ -461,9 +456,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .reset-icon { display: inline-block; }
       header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
                       display: inline-flex; align-items: center; justify-content: center; }
-      /* Hide action button text labels — keep icons only */
-      .action-btn span { display: none; }
-      .action-btn { padding: 0; width: 30px; }
+      /* Action buttons are icon-only by default now; nothing extra needed here */
     }
   </style>
 </head>
