@@ -236,7 +236,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       background: transparent;
       border: 1px solid var(--line);
       color: var(--muted);
-      padding: 0.4rem 0.85rem;
+      padding: 0 0.85rem;
+      height: 30px;
       border-radius: 4px;
       cursor: pointer;
       display: inline-flex;
@@ -454,7 +455,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                       display: inline-flex; align-items: center; justify-content: center; }
       /* Hide action button text labels — keep icons only */
       .action-btn span { display: none; }
-      .action-btn { padding: 0.45rem 0.55rem; min-width: 0; }
+      .action-btn { padding: 0; width: 30px; min-width: 0; }
     }
   </style>
 </head>
