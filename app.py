@@ -432,7 +432,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     button[type="submit"]:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
     button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
     .footer-cta {
-      text-align: center; font-size: 1.05rem; font-weight: 600;
+      text-align: center; font-size: 1.35rem; font-weight: 600;
       color: var(--navy); padding: 0.9rem 1rem 0.4rem; line-height: 1.5;
     }
     .footer-cta a {
@@ -457,7 +457,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
-      .footer-cta { font-size: 0.92rem; }
+      .footer-cta { font-size: 1.1rem; }
     }
     /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
     @media (max-width: 480px) {
