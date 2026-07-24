@@ -431,13 +431,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     button[type="submit"]:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
     button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+    .footer-cta {
+      text-align: center; font-size: 1.05rem; font-weight: 600;
+      color: var(--navy); padding: 0.9rem 1rem 0.4rem; line-height: 1.5;
+    }
+    .footer-cta a {
+      color: var(--navy); text-decoration: none;
+      border-bottom: 2px solid var(--gold); padding-bottom: 1px;
+    }
+    .footer-cta a:hover { color: var(--rust); border-bottom-color: var(--rust); }
     .footer-note {
       text-align: center; font-size: 0.68rem; color: var(--muted);
       padding: 0 1rem 0.9rem; letter-spacing: 0.14em;
       text-transform: uppercase; line-height: 1.7;
     }
-    .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
-    .footer-note a:hover { color: var(--rust); }
     @media (max-width: 640px) {
       .user { margin-left: 8%; } .assistant { margin-right: 6%; }
       header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
@@ -450,6 +457,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
+      .footer-cta { font-size: 0.92rem; }
     }
     /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
     @media (max-width: 480px) {
@@ -518,9 +526,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <button type="submit" id="send-btn">Send</button>
     </form>
-    <div class="footer-note">
-      {{ cfg.footer_disclaimer }}<br />
+    <div class="footer-cta">
       {{ cfg.footer_cta_text }} <a href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">click here</a>.
+    </div>
+    <div class="footer-note">
+      {{ cfg.footer_disclaimer }}
     </div>
   </div>
 
