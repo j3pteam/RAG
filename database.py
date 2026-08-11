@@ -122,6 +122,15 @@ def init_schema():
                 ON feedback USING hnsw (question_embedding vector_cosine_ops)
                 WHERE approved_for_learning = TRUE AND question_embedding IS NOT NULL;
             """)
+            # Attachment metadata (e.g. "resume.pdf" or "3 files: notes.docx, ...")
+            cur.execute("""
+                ALTER TABLE feedback ADD COLUMN IF NOT EXISTS attachment_info TEXT;
+            """)
+            # Index for chronological reads (admin log page)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS feedback_created_idx
+                ON feedback (created_at DESC);
+            """)
         conn.commit()
     return True
 
@@ -235,7 +244,11 @@ def delete_document(doc_id: int):
 
 
 def log_feedback(rating: str, user_message: str, bot_reply: str, persona: str = "", comment: str = ""):
-    """Persist a thumbs up/down rating with optional comment."""
+    """Persist a thumbs up/down rating with optional comment.
+
+    Kept for backward compatibility. Prefer log_interaction() + update_feedback_rating()
+    for new code — that flow logs every chat exchange, then attaches feedback later.
+    """
     if not is_enabled():
         return  # silently no-op; logging-only mode
     with get_conn() as conn:
@@ -248,8 +261,51 @@ def log_feedback(rating: str, user_message: str, bot_reply: str, persona: str = 
         conn.commit()
 
 
+def log_interaction(user_message: str, bot_reply: str, persona: str = "",
+                    attachment_info: str = "") -> Optional[int]:
+    """Log every chat exchange (rating NULL until user provides feedback).
+    Returns the new row's id so the frontend can attach feedback later."""
+    if not is_enabled():
+        return None
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO feedback (rating, user_message, bot_reply, persona, attachment_info) "
+                "VALUES (NULL, %s, %s, %s, %s) RETURNING id;",
+                (user_message[:8000], bot_reply[:20000], persona[:100], (attachment_info or "")[:500]),
+            )
+            row = cur.fetchone()
+        conn.commit()
+        return row.get("id") if row else None
+
+
+def update_feedback_rating(interaction_id: int, rating: str, comment: str = "") -> bool:
+    """Attach a rating (and optional comment) to a previously logged interaction.
+    Returns True on success, False if the row wasn't found."""
+    if not is_enabled():
+        return False
+    if rating not in ("up", "down"):
+        return False
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE feedback SET rating = %s, comment = %s WHERE id = %s;",
+                (rating, (comment or "")[:4000], interaction_id),
+            )
+            updated = cur.rowcount
+        conn.commit()
+        return updated > 0
+
+
 def list_feedback(limit: int = 100, rating: Optional[str] = None) -> list:
-    """Return recent feedback for the admin view."""
+    """Return recent conversation log entries for the admin view.
+
+    rating options:
+        - None or 'all': every logged exchange (rated or not)
+        - 'rated': only exchanges that got a rating
+        - 'up' / 'down': specific ratings only
+        - 'unrated': exchanges with no rating yet
+    """
     if not is_enabled():
         return []
     with get_conn() as conn:
@@ -259,6 +315,18 @@ def list_feedback(limit: int = 100, rating: Optional[str] = None) -> list:
                     "SELECT * FROM feedback WHERE rating = %s "
                     "ORDER BY created_at DESC LIMIT %s;",
                     (rating, limit),
+                )
+            elif rating == "rated":
+                cur.execute(
+                    "SELECT * FROM feedback WHERE rating IS NOT NULL "
+                    "ORDER BY created_at DESC LIMIT %s;",
+                    (limit,),
+                )
+            elif rating == "unrated":
+                cur.execute(
+                    "SELECT * FROM feedback WHERE rating IS NULL "
+                    "ORDER BY created_at DESC LIMIT %s;",
+                    (limit,),
                 )
             else:
                 cur.execute(
