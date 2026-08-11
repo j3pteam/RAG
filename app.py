@@ -26,6 +26,14 @@ import anthropic
 
 import database as db
 import embeddings as emb
+import paywall
+
+
+# Ensure paywall schema exists (no-op if DB unavailable)
+try:
+    paywall.ensure_schema()
+except Exception as _e:
+    print(f"[paywall] Schema init warning: {_e}")
 
 
 # ---------------------------------------------------------------------------
@@ -236,19 +244,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
       background: transparent;
       border: 1px solid var(--line);
       color: var(--muted);
-      width: 30px;
-      height: 30px;
-      border-radius: 50%;
+      padding: 0.4rem 0.85rem;
+      border-radius: 4px;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
-      justify-content: center;
-      padding: 0;
+      gap: 0.4rem;
       font-family: inherit;
+      font-size: 0.7rem;
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
       transition: all 0.18s ease;
+      white-space: nowrap;
     }
     .action-btn svg { width: 14px; height: 14px; }
-    .action-btn span { display: none; }
     .action-btn:hover {
       border-color: var(--gold);
       color: var(--navy);
@@ -263,17 +272,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       background: var(--navy); color: var(--gold);
     }
 
-    .action-group {
-      display: inline-flex;
-      align-items: center;
-      align-self: center;
-      height: 30px;
-      gap: 0.5rem;
-      margin-left: auto;
-    }
-
     /* Share menu popover */
-    .share-wrap { position: relative; display: inline-flex; align-items: center; height: 30px; }
+    .share-wrap { position: relative; display: inline-block; }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
@@ -431,20 +431,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     button[type="submit"]:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
     button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
-    .footer-cta {
-      text-align: center; font-size: 1.35rem; font-weight: 600;
-      color: var(--navy); padding: 0.9rem 1rem 0.4rem; line-height: 1.5;
-    }
-    .footer-cta a {
-      color: var(--navy); text-decoration: none;
-      border-bottom: 2px solid var(--gold); padding-bottom: 1px;
-    }
-    .footer-cta a:hover { color: var(--rust); border-bottom-color: var(--rust); }
     .footer-note {
       text-align: center; font-size: 0.68rem; color: var(--muted);
       padding: 0 1rem 0.9rem; letter-spacing: 0.14em;
       text-transform: uppercase; line-height: 1.7;
     }
+    .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
+    .footer-note a:hover { color: var(--rust); }
     @media (max-width: 640px) {
       .user { margin-left: 8%; } .assistant { margin-right: 6%; }
       header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
@@ -457,7 +450,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
       input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
-      .footer-cta { font-size: 1.1rem; }
     }
     /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
     @media (max-width: 480px) {
@@ -466,7 +458,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .reset-icon { display: inline-block; }
       header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
                       display: inline-flex; align-items: center; justify-content: center; }
-      /* Action buttons are icon-only by default now; nothing extra needed here */
+      /* Hide action button text labels — keep icons only */
+      .action-btn span { display: none; }
+      .action-btn { padding: 0.45rem 0.55rem; }
     }
   </style>
 </head>
@@ -526,11 +520,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <button type="submit" id="send-btn">Send</button>
     </form>
-    <div class="footer-cta">
-      {{ cfg.footer_cta_text }} <a href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">click here</a>.
-    </div>
     <div class="footer-note">
-      {{ cfg.footer_disclaimer }}
+      {{ cfg.footer_disclaimer }}<br />
+      {{ cfg.footer_cta_text }} <a href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">click here</a>.
     </div>
   </div>
 
@@ -570,23 +562,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <span class="action-group">
-          <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
+        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+          </svg>
+          <span class="copy-label">Copy</span>
+        </button>
+        <span class="share-wrap">
+          <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
             </svg>
-            <span class="copy-label">Copy</span>
+            <span>Share</span>
           </button>
-          <span class="share-wrap">
-            <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/>
-                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
-              </svg>
-              <span>Share</span>
-            </button>
-            <div class="share-menu" role="menu"></div>
-          </span>
+          <div class="share-menu" role="menu"></div>
         </span>
       `;
 
@@ -1003,12 +993,14 @@ def retrieve_context(query: str) -> str:
 
 
 @app.route("/")
+@paywall.paywall_required
 def index():
     session["messages"] = []
     return render_template_string(INDEX_HTML, cfg=CONFIG)
 
 
 @app.route("/chat", methods=["POST"])
+@paywall.paywall_required
 def chat():
     # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
     # Attachment paths:
@@ -1318,12 +1310,14 @@ def chat():
 
 
 @app.route("/reset", methods=["POST"])
+@paywall.paywall_required
 def reset():
     session["messages"] = []
     return jsonify({"ok": True})
 
 
 @app.route("/feedback", methods=["POST"])
+@paywall.paywall_required
 def feedback():
     data = request.get_json(silent=True) or {}
     rating = data.get("rating")
@@ -1375,7 +1369,162 @@ def debug_env():
         "emb_is_enabled": emb.is_enabled(),
         "psycopg_imported": db.HAS_PSYCOPG,
         "voyage_imported": emb.HAS_VOYAGE,
+        "paywall_enabled": paywall.PAYWALL_ENABLED,
+        "paywall_configured": paywall.is_configured(),
+        "paywall_active": paywall.is_active(),
     })
+
+
+# ---------------------------------------------------------------------------
+# Paywall — auth (magic link) and billing (Stripe) routes
+# ---------------------------------------------------------------------------
+
+def _paywall_price_display():
+    """Price shown on the checkout landing page. Reads from env or defaults."""
+    return os.environ.get("PAYWALL_PRICE_DISPLAY", "29")
+
+
+def _paywall_base_url():
+    return paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")
+
+
+@app.route("/auth/login", methods=["GET"])
+def auth_login():
+    return render_template_string(
+        paywall.LOGIN_HTML,
+        brand=CONFIG["persona_name"],
+        notice=request.args.get("notice"),
+        notice_type=request.args.get("notice_type", "ok"),
+        sent=False,
+    )
+
+
+@app.route("/auth/send-link", methods=["POST"])
+def auth_send_link():
+    email = (request.form.get("email") or "").strip().lower()
+    if not email or "@" not in email:
+        return render_template_string(
+            paywall.LOGIN_HTML,
+            brand=CONFIG["persona_name"],
+            notice="Please enter a valid email address.",
+            notice_type="error",
+            sent=False,
+        )
+    if not paywall.is_configured():
+        return render_template_string(
+            paywall.LOGIN_HTML,
+            brand=CONFIG["persona_name"],
+            notice="Paywall is not fully configured. Contact the administrator.",
+            notice_type="error",
+            sent=False,
+        )
+    magic_url = paywall.make_magic_link(email, _paywall_base_url())
+    ok = paywall.send_magic_link_email(email, magic_url)
+    if not ok:
+        return render_template_string(
+            paywall.LOGIN_HTML,
+            brand=CONFIG["persona_name"],
+            notice="We couldn't send the email. Please try again in a moment.",
+            notice_type="error",
+            sent=False,
+        )
+    return render_template_string(
+        paywall.LOGIN_HTML,
+        brand=CONFIG["persona_name"],
+        notice=f"Sign-in link sent to {email}. Check your inbox (and spam folder).",
+        notice_type="ok",
+        sent=True,
+    )
+
+
+@app.route("/auth/verify", methods=["GET"])
+def auth_verify():
+    token = request.args.get("token", "")
+    email = paywall.verify_magic_link(token)
+    if not email:
+        return render_template_string(
+            paywall.LOGIN_HTML,
+            brand=CONFIG["persona_name"],
+            notice="That sign-in link is invalid or has expired. Please request a new one.",
+            notice_type="error",
+            sent=False,
+        ), 400
+    session["authenticated_email"] = email
+    # Ensure user record exists
+    paywall._upsert_user(email)
+    # If they have a subscription, go to the bot. If not, go to checkout.
+    if paywall.is_user_subscribed(email):
+        return redirect(url_for("index"))
+    return redirect(url_for("billing_checkout"))
+
+
+@app.route("/auth/logout", methods=["GET", "POST"])
+def auth_logout():
+    session.pop("authenticated_email", None)
+    session["messages"] = []
+    return redirect(url_for("auth_login"))
+
+
+@app.route("/billing/checkout", methods=["GET", "POST"])
+def billing_checkout():
+    email = session.get("authenticated_email")
+    if not email:
+        return redirect(url_for("auth_login"))
+    # If already subscribed, no need for checkout
+    if paywall.is_user_subscribed(email):
+        return redirect(url_for("index"))
+    if request.method == "POST":
+        checkout_url = paywall.create_checkout_session(email, _paywall_base_url())
+        if not checkout_url:
+            return "Stripe checkout is not configured. Contact the administrator.", 500
+        return redirect(checkout_url)
+    # GET — show landing page with a "Continue" button
+    return render_template_string(
+        paywall.CHECKOUT_LANDING_HTML,
+        brand=CONFIG["persona_name"],
+        email=email,
+        price=_paywall_price_display(),
+    )
+
+
+@app.route("/billing/success", methods=["GET"])
+def billing_success():
+    email = session.get("authenticated_email")
+    if email:
+        # The webhook usually beats us here, but sync as a fallback so the user
+        # doesn't get bounced back to checkout on their next click.
+        try:
+            paywall.sync_user_from_stripe(email)
+        except Exception as e:
+            app.logger.error(f"[paywall] post-checkout sync failed: {e}")
+    return redirect(url_for("index"))
+
+
+@app.route("/billing/canceled", methods=["GET"])
+def billing_canceled():
+    return redirect(url_for("billing_checkout"))
+
+
+@app.route("/billing/portal", methods=["GET", "POST"])
+def billing_portal():
+    email = session.get("authenticated_email")
+    if not email:
+        return redirect(url_for("auth_login"))
+    portal_url = paywall.create_portal_session(email, _paywall_base_url())
+    if not portal_url:
+        return "Customer portal not available yet — no active subscription found.", 400
+    return redirect(portal_url)
+
+
+@app.route("/billing/webhook", methods=["POST"])
+def billing_webhook():
+    payload = request.get_data()
+    sig = request.headers.get("Stripe-Signature", "")
+    ok, msg = paywall.handle_stripe_webhook(payload, sig)
+    if not ok:
+        app.logger.error(f"[paywall] webhook error: {msg}")
+        return jsonify({"error": msg}), 400
+    return jsonify({"ok": True, "msg": msg})
 
 
 # Serve image assets from project root
