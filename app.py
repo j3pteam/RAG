@@ -535,19 +535,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
 
-    function addMessage(text, role, withFeedback = false) {
+    function addMessage(text, role, withFeedback = false, interactionId = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
+      if (interactionId) div.dataset.interactionId = String(interactionId);
       const textNode = document.createElement("div");
       textNode.textContent = text;
       div.appendChild(textNode);
-      if (withFeedback) attachFeedback(div, text);
+      if (withFeedback) attachFeedback(div, text, interactionId);
       chat.appendChild(div);
       chatWrap.scrollTop = chatWrap.scrollHeight;
       return div;
     }
 
-    function attachFeedback(msgDiv, replyText) {
+    function attachFeedback(msgDiv, replyText, interactionId) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
       wrap.innerHTML = `
@@ -585,7 +586,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
           await fetch("/feedback", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ rating, reply: replyText, comment: comment || "" }),
+            body: JSON.stringify({
+              rating, reply: replyText, comment: comment || "",
+              interaction_id: interactionId || null,
+            }),
           });
         } catch (err) {
           console.error("Feedback error:", err);
@@ -885,7 +889,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
         const data = await res.json();
         thinking.remove();
-        if (data.reply) addMessage(data.reply, "assistant", true);
+        if (data.reply) addMessage(data.reply, "assistant", true, data.interaction_id || null);
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
       } catch (err) {
         thinking.remove();
@@ -1306,7 +1310,27 @@ def chat():
 
     messages.append({"role": "assistant", "content": assistant_text})
     session["messages"] = messages
-    return jsonify({"reply": assistant_text})
+
+    # Auto-log every exchange to the DB (rating stays NULL until user gives feedback).
+    # We log the visible parts only — the raw user text and the bot's reply.
+    # Attachment context is not stored because it can be enormous; we store a
+    # short description of what was attached instead.
+    interaction_id = None
+    try:
+        attachment_note = attachment_display_name or ""
+        if not attachment_note and folder_stats:
+            used, _ = folder_stats
+            attachment_note = f"Folder: {folder_name} ({used} file{'s' if used != 1 else ''})"
+        interaction_id = db.log_interaction(
+            user_message=user_input,   # raw question, without the inlined document text
+            bot_reply=assistant_text,
+            persona=CONFIG["persona_name"],
+            attachment_info=attachment_note,
+        )
+    except Exception as e:
+        app.logger.error(f"log_interaction failed: {e}")
+
+    return jsonify({"reply": assistant_text, "interaction_id": interaction_id})
 
 
 @app.route("/reset", methods=["POST"])
@@ -1323,6 +1347,7 @@ def feedback():
     rating = data.get("rating")
     reply = (data.get("reply") or "")[:20000]
     comment = (data.get("comment") or "")[:4000]
+    interaction_id = data.get("interaction_id")
     if rating not in ("up", "down"):
         return jsonify({"error": "Invalid rating"}), 400
 
@@ -1333,14 +1358,20 @@ def feedback():
             last_user_msg = (m.get("content") or "")[:8000]
             break
 
-    # Persist to DB if available, always log to stdout
+    # Preferred path: update the row that was auto-logged when the bot replied.
+    # Fallback path: if we don't have an interaction_id (e.g. reply predates this
+    # feature, or DB was unavailable at log time), insert a fresh row.
+    updated = False
     try:
-        db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"], comment)
+        if interaction_id:
+            updated = db.update_feedback_rating(int(interaction_id), rating, comment)
+        if not updated:
+            db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"], comment)
     except Exception as e:
         app.logger.error(f"DB feedback log failed: {e}")
     app.logger.info(
-        "FEEDBACK persona=%s rating=%s user_msg=%r reply=%r comment=%r",
-        CONFIG["persona_name"], rating, last_user_msg, reply, comment,
+        "FEEDBACK persona=%s rating=%s interaction_id=%s user_msg=%r reply=%r comment=%r",
+        CONFIG["persona_name"], rating, interaction_id, last_user_msg, reply, comment,
     )
     return jsonify({"ok": True})
 
@@ -1801,21 +1832,29 @@ input[type="text"] { flex: 1; min-width: 200px; }
 
   <div class="section">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
-      <h2 style="margin: 0; border: none; padding: 0;">Recent Feedback (last 50)</h2>
-      {% if stats.total > 0 %}
-      <div style="display: flex; gap: 0.5rem; align-items: center;">
-        <span class="muted" style="font-size: 0.78rem; margin-right: 0.3rem;">
-          Export {{ stats.total }} record{{ 's' if stats.total != 1 else '' }}:
-        </span>
-        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none;">
-          ↓ CSV
-        </a>
-        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none;">
-          ↓ Excel
-        </a>
+      <h2 style="margin: 0; border: none; padding: 0;">Conversation Log</h2>
+      <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <form method="GET" action="/admin" style="display: inline-flex; gap: 0.4rem; align-items: center; margin: 0;">
+          <label for="filter-select" style="font-size: 0.78rem; color: var(--muted);">Show:</label>
+          <select id="filter-select" name="filter" onchange="this.form.submit()"
+                  style="padding: 0.35rem 0.55rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.8rem; background: white; cursor: pointer;">
+            <option value="all"     {% if log_filter == 'all'     %}selected{% endif %}>All conversations</option>
+            <option value="rated"   {% if log_filter == 'rated'   %}selected{% endif %}>Rated only</option>
+            <option value="unrated" {% if log_filter == 'unrated' %}selected{% endif %}>Unrated only</option>
+            <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
+            <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
+          </select>
+        </form>
+        {% if stats.total > 0 %}
+        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none; padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ CSV</a>
+        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none; padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ Excel</a>
+        {% endif %}
       </div>
-      {% endif %}
     </div>
+    <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
+      Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
+      Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}.
+    </p>
     {% if feedback_rows %}
     <form method="POST" action="/admin/feedback/delete-selected"
           id="feedback-form"
@@ -1836,17 +1875,25 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
         <tr id="row-{{ f.id }}">
           <td><input type="checkbox" name="feedback_ids" value="{{ f.id }}" class="feedback-checkbox" /></td>
           <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
-          <td>{% if f.rating == 'up' %}<span class="tag-up">UP</span>{% else %}<span class="tag-down">DOWN</span>{% endif %}{% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}</td>
+          <td>
+            {% if f.rating == 'up' %}<span class="tag-up">UP</span>
+            {% elif f.rating == 'down' %}<span class="tag-down">DOWN</span>
+            {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
+            {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
+          </td>
           <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
           <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
-          <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 280px;">
+          <td class="truncate" title="{{ f.attachment_info or '' }}" style="max-width: 160px; font-size: 0.78rem;">
+            {% if f.attachment_info %}📎 {{ f.attachment_info }}{% else %}<span class="muted">—</span>{% endif %}
+          </td>
+          <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 240px;">
             {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
           </td>
           <td>
@@ -1856,11 +1903,16 @@ input[type="text"] { flex: 1; min-width: 200px; }
           </td>
         </tr>
         <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
-          <td colspan="7">
+          <td colspan="8">
             <div class="feedback-detail-meta">
-              Feedback ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
-              · Rating: <strong>{% if f.rating == 'up' %}Helpful 👍{% else %}Not helpful 👎{% endif %}</strong>
+              Log ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
+              · Rating: <strong>
+                {% if f.rating == 'up' %}Helpful 👍
+                {% elif f.rating == 'down' %}Not helpful 👎
+                {% else %}Unrated{% endif %}
+              </strong>
               {% if f.persona %}· Persona: {{ f.persona }}{% endif %}
+              {% if f.attachment_info %}· Attachment: {{ f.attachment_info }}{% endif %}
             </div>
 
             <div class="feedback-detail-block" style="margin-top: 0.9rem;">
@@ -2020,11 +2072,20 @@ def admin_dashboard():
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
     docs = db.list_documents() if db_ok else []
-    feedback_rows = db.list_feedback(limit=50) if db_ok else []
+    # Filter for the conversation log — default shows everything.
+    # Accepted values: all | rated | up | down | unrated
+    log_filter = (request.args.get("filter") or "all").lower()
+    if log_filter not in ("all", "rated", "up", "down", "unrated"):
+        log_filter = "all"
+    feedback_rows = db.list_feedback(
+        limit=100,
+        rating=(None if log_filter == "all" else log_filter),
+    ) if db_ok else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
+        log_filter=log_filter,
     )
 
 
@@ -2637,3 +2698,4 @@ def email_webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
+
