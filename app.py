@@ -271,6 +271,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .action-btn.copied:hover {
       background: var(--navy); color: var(--gold);
     }
+    .action-btn.speaking {
+      background: var(--navy);
+      border-color: var(--navy);
+      color: var(--gold);
+      animation: speak-pulse 1.4s ease-in-out infinite;
+    }
+    .action-btn.speaking:hover { background: var(--navy); color: var(--gold); }
+    .action-btn.paused {
+      background: var(--paper);
+      border-color: var(--gold);
+      color: var(--navy);
+    }
+    @keyframes speak-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(210, 188, 141, 0); }
+      50%      { box-shadow: 0 0 0 6px rgba(210, 188, 141, 0.28); }
+    }
 
     /* Share menu popover */
     .share-wrap { position: relative; display: inline-block; }
@@ -563,7 +579,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
+        <button class="action-btn speak-btn" style="margin-left: auto;" aria-label="Read answer aloud" title="Read answer aloud">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+          </svg>
+          <span class="speak-label">Speak</span>
+        </button>
+        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
@@ -652,6 +676,84 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
         });
       });
+      // === SPEAK button (browser text-to-speech) ===
+      const speakBtn = wrap.querySelector(".speak-btn");
+      const speakLabel = speakBtn ? speakBtn.querySelector(".speak-label") : null;
+      const canSpeak = typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
+      if (!canSpeak && speakBtn) {
+        // Browser doesn't support speech synthesis — hide the button entirely
+        speakBtn.style.display = "none";
+      } else if (speakBtn) {
+        // Strip markdown so the reader doesn't literally say "star star bold star star"
+        const stripMarkdown = (t) => (t || "")
+          .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
+          .replace(/\*\*(.+?)\*\*/g, "$1")             // **bold**
+          .replace(/__([^_]+?)__/g, "$1")              // __bold__
+          .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "$1")  // *italic*
+          .replace(/(?<!_)_(?!_)([^_]+?)(?<!_)_(?!_)/g, "$1")     // _italic_
+          .replace(/^#{1,6}\s+/gm, "")                 // # headers
+          .replace(/`([^`]+?)`/g, "$1")                // `inline code`
+          .replace(/^[-*+]\s+/gm, "")                  // bullet markers
+          .replace(/^\d+\.\s+/gm, "")                  // numbered list markers
+          .replace(/\[([^\]]+?)\]\([^)]+?\)/g, "$1")   // [text](url) -> text
+          .replace(/^-{3,}\s*$/gm, ". ")               // horizontal rules
+          .replace(/\n{2,}/g, ". ")                    // paragraph breaks -> pause
+          .replace(/\n/g, " ")                         // remaining newlines
+          .replace(/\s{2,}/g, " ")
+          .trim();
+
+        function resetSpeakUI() {
+          speakBtn.classList.remove("speaking", "paused");
+          if (speakLabel) speakLabel.textContent = "Speak";
+        }
+
+        speakBtn.addEventListener("click", () => {
+          const synth = window.speechSynthesis;
+
+          // If THIS button is currently speaking or paused → toggle
+          if (window.__activeSpeakBtn === speakBtn) {
+            if (synth.paused) {
+              synth.resume();
+              speakBtn.classList.add("speaking");
+              speakBtn.classList.remove("paused");
+              if (speakLabel) speakLabel.textContent = "Speaking";
+            } else if (synth.speaking) {
+              synth.pause();
+              speakBtn.classList.remove("speaking");
+              speakBtn.classList.add("paused");
+              if (speakLabel) speakLabel.textContent = "Paused";
+            }
+            return;
+          }
+
+          // A different message was speaking — stop it first
+          if (window.__activeSpeakBtn && window.__activeSpeakBtn !== speakBtn) {
+            const prev = window.__activeSpeakBtn;
+            prev.classList.remove("speaking", "paused");
+            const prevLabel = prev.querySelector(".speak-label");
+            if (prevLabel) prevLabel.textContent = "Speak";
+          }
+          synth.cancel();
+
+          const utter = new SpeechSynthesisUtterance(stripMarkdown(replyText));
+          utter.rate = 1.0;
+          utter.pitch = 1.0;
+          utter.volume = 1.0;
+          utter.onend = () => {
+            resetSpeakUI();
+            if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+          };
+          utter.onerror = () => {
+            resetSpeakUI();
+            if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+          };
+          synth.speak(utter);
+          window.__activeSpeakBtn = speakBtn;
+          speakBtn.classList.add("speaking");
+          if (speakLabel) speakLabel.textContent = "Speaking";
+        });
+      }
+
       // === COPY button ===
       const copyBtn = wrap.querySelector(".copy-btn");
       const copyLabel = copyBtn.querySelector(".copy-label");
@@ -901,6 +1003,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
     });
 
     resetBtn.addEventListener("click", async () => {
+      // Stop any in-progress speech before wiping the chat
+      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      window.__activeSpeakBtn = null;
       await fetch("/reset", { method: "POST" });
       chat.innerHTML = "";
       const div = document.createElement("div");
@@ -2698,4 +2803,3 @@ def email_webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
-
