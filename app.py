@@ -28,6 +28,7 @@ import database as db
 import embeddings as emb
 import paywall
 import exports
+import exports
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
@@ -302,7 +303,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     /* Share menu popover */
-    .share-wrap { position: relative; display: inline-block; }
+    .share-wrap, .download-wrap {
+      position: relative; display: inline-flex;
+      align-items: center; line-height: 0;
+    }
     .share-menu {
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
@@ -501,13 +505,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
     </div>
-    <button id="autospeak-btn" aria-label="Toggle auto read-aloud" title="Toggle auto read-aloud for every response">
+    <button id="autospeak-btn" aria-label="Toggle listen mode" title="Listen — read every response aloud">
       <svg class="autospeak-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
         <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
         <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
       </svg>
-      <span class="autospeak-label">Auto-speak</span>
+      <span class="autospeak-label">Listen</span>
     </button>
     <button id="reset-btn" aria-label="Start a new conversation" title="New conversation">
       <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -617,10 +621,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (!autoSpeakBtn) return;
       if (autoSpeakEnabled) {
         autoSpeakBtn.classList.add("on");
-        autoSpeakBtn.title = "Auto read-aloud is ON — click to turn off";
+        autoSpeakBtn.title = "Listen is ON — every response is read aloud. Click to turn off";
       } else {
         autoSpeakBtn.classList.remove("on");
-        autoSpeakBtn.title = "Auto read-aloud is OFF — click to turn on";
+        autoSpeakBtn.title = "Listen is OFF — click to have every response read aloud";
       }
     }
     refreshAutoSpeakUI();
@@ -700,6 +704,32 @@ INDEX_HTML = r"""<!DOCTYPE html>
           </svg>
           <span class="copy-label">Copy</span>
         </button>
+        <span class="download-wrap">
+          <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+            <span class="download-label">Save</span>
+          </button>
+          <div class="share-menu download-menu" role="menu">
+            <button type="button" data-fmt="docx" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+              Word (.docx)
+            </button>
+            <button type="button" data-fmt="pptx" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+              PowerPoint (.pptx)
+            </button>
+            <button type="button" data-fmt="xlsx" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/></svg>
+              Excel (.xlsx)
+            </button>
+            <button type="button" data-fmt="pdf" role="menuitem">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="9" y1="15" x2="15" y2="15"/></svg>
+              PDF (.pdf)
+            </button>
+          </div>
+        </span>
         <span class="share-wrap">
           <button class="action-btn share-btn" aria-label="Share answer" title="Share answer">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -891,9 +921,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       });
 
+      // === SAVE / DOWNLOAD button ===
+      const downloadBtn = wrap.querySelector(".download-btn");
+      const downloadMenu = wrap.querySelector(".download-menu");
+      const downloadLabel = downloadBtn.querySelector(".download-label");
+
+      downloadBtn.addEventListener("click", () => {
+        // Close the share menu if it's open, then toggle this one
+        const sm = wrap.querySelector(".share-wrap > .share-menu");
+        if (sm) sm.classList.remove("open");
+        downloadMenu.classList.toggle("open");
+      });
+
+      downloadMenu.querySelectorAll("[data-fmt]").forEach(item => {
+        item.addEventListener("click", async () => {
+          const fmt = item.dataset.fmt;
+          downloadMenu.classList.remove("open");
+          downloadBtn.classList.add("copied");
+          downloadLabel.textContent = "Building\u2026";
+          try {
+            const resp = await fetch(`/export/${fmt}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: replyText, title: "" }),
+            });
+            if (!resp.ok) {
+              let msg = `Export failed (${resp.status})`;
+              try { const j = await resp.json(); if (j.error) msg = j.error; } catch (e) {}
+              throw new Error(msg);
+            }
+            // Pull the server-generated filename out of Content-Disposition
+            let filename = `j3p_response.${fmt}`;
+            const cd = resp.headers.get("Content-Disposition") || "";
+            const match = cd.match(/filename="?([^"]+)"?/);
+            if (match) filename = match[1];
+
+            const blob = await resp.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 4000);
+
+            downloadLabel.textContent = "Saved";
+          } catch (err) {
+            console.error("Export failed:", err);
+            downloadLabel.textContent = "Failed";
+            alert(err.message || "Could not generate the document.");
+          } finally {
+            setTimeout(() => {
+              downloadBtn.classList.remove("copied");
+              downloadLabel.textContent = "Save";
+            }, 1800);
+          }
+        });
+      });
+
       // === SHARE button ===
       const shareBtn = wrap.querySelector(".share-btn");
-      const shareMenu = wrap.querySelector(".share-menu");
+      const shareMenu = wrap.querySelector(".share-wrap > .share-menu");
       const shareTitle = "From J3P Advisor";
       // Truncate share text to keep social/SMS messages under sane limits
       const shareText = replyText.length > 600
@@ -964,9 +1053,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       });
 
-      // Close share menu when clicking outside
+      // Close both popover menus when clicking outside
       document.addEventListener("click", (e) => {
-        if (!wrap.contains(e.target)) shareMenu.classList.remove("open");
+        if (!wrap.contains(e.target)) {
+          shareMenu.classList.remove("open");
+          downloadMenu.classList.remove("open");
+        }
       });
 
       msgDiv.appendChild(wrap);
@@ -1687,6 +1779,38 @@ def chat():
 def reset():
     session["messages"] = []
     return jsonify({"ok": True})
+
+
+@app.route("/export/<fmt>", methods=["POST"])
+@paywall.paywall_required
+def export_response(fmt):
+    """Render an assistant reply as a Word, PowerPoint, Excel, or PDF download."""
+    from flask import send_file
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    title = (data.get("title") or "").strip()
+
+    if not text:
+        return jsonify({"error": "Nothing to export."}), 400
+    if len(text) > 200_000:
+        return jsonify({"error": "Response too long to export."}), 400
+    if fmt.lower() not in exports.BUILDERS:
+        return jsonify({"error": f"Unsupported format: {fmt}"}), 400
+
+    try:
+        buffer, filename, mimetype = exports.build(fmt, text, title)
+    except Exception as e:
+        app.logger.error(f"Export failed ({fmt}): {e}")
+        return jsonify({"error": f"Could not generate {fmt.upper()}: {str(e)[:200]}"}), 500
+
+    app.logger.info(f"Export generated: {filename}")
+    return send_file(
+        buffer,
+        mimetype=mimetype,
+        as_attachment=True,
+        download_name=filename,
+    )
 
 
 @app.route("/feedback", methods=["POST"])
