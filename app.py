@@ -194,6 +194,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
     /* Show full label on desktop, icon-only label on small screens */
     .reset-icon { width: 16px; height: 16px; display: none; }
     .reset-label { display: inline; }
+    .autospeak-icon { width: 16px; height: 16px; }
+    .autospeak-label { display: inline; }
+    /* Highlight the auto-speak button when it's ON */
+    #autospeak-btn.on {
+      background: var(--gold);
+      color: var(--navy);
+      border-color: var(--gold);
+    }
+    #autospeak-btn.on:hover {
+      background: var(--gold);
+      color: var(--navy);
+    }
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
     .msg {
@@ -472,6 +484,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .brand-divider, .brand-tag { display: none; }
       .reset-label { display: none; }
       .reset-icon { display: inline-block; }
+      .autospeak-label { display: none; }
       header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
                       display: inline-flex; align-items: center; justify-content: center; }
       /* Hide action button text labels — keep icons only */
@@ -487,6 +500,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
     </div>
+    <button id="autospeak-btn" aria-label="Toggle auto read-aloud" title="Toggle auto read-aloud for every response">
+      <svg class="autospeak-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+        <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+        <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+      </svg>
+      <span class="autospeak-label">Auto-speak</span>
+    </button>
     <button id="reset-btn" aria-label="Start a new conversation" title="New conversation">
       <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 5v14M5 12h14"/>
@@ -551,6 +572,82 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
 
+    // -------------------------------------------------------------
+    // Speech synthesis: consistent voice selection + auto-speak toggle
+    // -------------------------------------------------------------
+    // Prefer named professional voices, in order. If none exist, fall back
+    // to the browser default. Chosen for clarity + a warm advisor feel.
+    const PREFERRED_VOICES = [
+      "Samantha",           // macOS / iOS (default American female)
+      "Karen",              // macOS / iOS (Australian, warmer)
+      "Google US English",  // Chrome / Android
+      "Microsoft Zira",     // Windows
+      "Microsoft Aria",     // Windows 11
+    ];
+    let __preferredVoice = null;
+    function pickVoice() {
+      if (!("speechSynthesis" in window)) return null;
+      const voices = window.speechSynthesis.getVoices() || [];
+      if (!voices.length) return null;
+      for (const name of PREFERRED_VOICES) {
+        const match = voices.find(v => v.name === name || v.name.startsWith(name));
+        if (match) return match;
+      }
+      // Fall back to first English voice, then anything
+      return voices.find(v => (v.lang || "").toLowerCase().startsWith("en"))
+          || voices[0]
+          || null;
+    }
+    // Voices may load async — refresh once they arrive
+    if ("speechSynthesis" in window) {
+      __preferredVoice = pickVoice();
+      window.speechSynthesis.onvoiceschanged = () => { __preferredVoice = pickVoice(); };
+    }
+    // Expose to speak buttons on individual messages
+    window.__pickPreferredVoice = () => __preferredVoice;
+
+    // Auto-speak state — persists across visits
+    const autoSpeakBtn = document.getElementById("autospeak-btn");
+    let autoSpeakEnabled = false;
+    try {
+      autoSpeakEnabled = localStorage.getItem("j3p_autospeak") === "1";
+    } catch (e) { /* localStorage may be blocked; fall back to session default */ }
+    function refreshAutoSpeakUI() {
+      if (!autoSpeakBtn) return;
+      if (autoSpeakEnabled) {
+        autoSpeakBtn.classList.add("on");
+        autoSpeakBtn.title = "Auto read-aloud is ON — click to turn off";
+      } else {
+        autoSpeakBtn.classList.remove("on");
+        autoSpeakBtn.title = "Auto read-aloud is OFF — click to turn on";
+      }
+    }
+    refreshAutoSpeakUI();
+    // If browser doesn't support speech, hide the toggle
+    if (!("speechSynthesis" in window)) {
+      if (autoSpeakBtn) autoSpeakBtn.style.display = "none";
+      autoSpeakEnabled = false;
+    } else if (autoSpeakBtn) {
+      autoSpeakBtn.addEventListener("click", () => {
+        autoSpeakEnabled = !autoSpeakEnabled;
+        try { localStorage.setItem("j3p_autospeak", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
+        refreshAutoSpeakUI();
+        // Turning OFF should stop anything currently speaking
+        if (!autoSpeakEnabled && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+          if (window.__activeSpeakBtn) {
+            const prev = window.__activeSpeakBtn;
+            prev.classList.remove("speaking", "paused");
+            const lbl = prev.querySelector(".speak-label");
+            if (lbl) lbl.textContent = "Speak";
+            window.__activeSpeakBtn = null;
+          }
+        }
+      });
+    }
+    // Expose to addMessage so a new bot reply can auto-play when enabled
+    window.__isAutoSpeakOn = () => autoSpeakEnabled;
+
     function addMessage(text, role, withFeedback = false, interactionId = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
@@ -561,6 +658,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (withFeedback) attachFeedback(div, text, interactionId);
       chat.appendChild(div);
       chatWrap.scrollTop = chatWrap.scrollHeight;
+      // If auto-speak is enabled and this is a fresh assistant reply (with feedback
+      // row, meaning it was just received from the API), start reading it aloud.
+      // A tiny delay gives the DOM time to attach the speak button.
+      if (withFeedback && role.startsWith("assistant") && window.__isAutoSpeakOn && window.__isAutoSpeakOn()) {
+        setTimeout(() => {
+          const sb = div.querySelector(".speak-btn");
+          if (sb) sb.click();
+        }, 60);
+      }
       return div;
     }
 
@@ -739,6 +845,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
           utter.rate = 1.0;
           utter.pitch = 1.0;
           utter.volume = 1.0;
+          // Consistent voice across devices (falls through to browser default if unavailable)
+          const pv = (typeof window.__pickPreferredVoice === "function") ? window.__pickPreferredVoice() : null;
+          if (pv) utter.voice = pv;
           utter.onend = () => {
             resetSpeakUI();
             if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
@@ -1309,6 +1418,50 @@ def chat():
         )
 
     # Scope-limiting + naming restrictions appended on EVERY request
+    # -----------------------------------------------------------------
+    # Voice differentiation — make responses feel like a real advisor,
+    # not a generic AI assistant. Applied on every request regardless
+    # of what's in the persona system prompt.
+    # -----------------------------------------------------------------
+    voice_guard = (
+        "\n\n---\n"
+        "VOICE & DIFFERENTIATION RULES — apply to every response:\n\n"
+        "1. IDENTITY. You are the J3P Advisor — a voice grounded in Alan Friedman's "
+        "leadership advisory practice. You are NOT ChatGPT, Claude, Gemini, Copilot, "
+        "or any generic AI assistant. If asked what you are, what model you are, or "
+        "who built you, say only: 'I'm the J3P Advisor.' Do not name any underlying "
+        "model, foundation model provider, or AI company. Do not discuss your training "
+        "data, capabilities as an AI, or technical architecture. Redirect back to the "
+        "user's actual question.\n\n"
+        "2. OPENING. Do not start responses with generic AI phrases like 'Great "
+        "question!', 'Certainly!', 'Absolutely!', 'I'd be happy to help', 'What a "
+        "thoughtful question', 'That's an interesting question', or any similar "
+        "sycophantic opener. Start with the substance. Answer the person.\n\n"
+        "3. CLOSING. Do not end responses with 'I hope this helps!', 'Let me know if "
+        "you have any other questions', 'Feel free to ask', 'Is there anything else I "
+        "can help you with?', or similar service-desk closers. If a follow-up question "
+        "belongs at the end, make it a substantive question that pushes the person's "
+        "thinking forward — never a service question.\n\n"
+        "4. HEDGING. Do not over-hedge. Take positions. Avoid stringing multiple "
+        "qualifiers together ('it might possibly be worth considering that perhaps'). "
+        "One direct sentence beats three cautious ones. If you genuinely don't know, "
+        "say so plainly.\n\n"
+        "5. FORMAT. Use bullet lists only when the content is genuinely list-like "
+        "(3+ parallel items). Prefer short paragraphs of prose. Do not add headers "
+        "to short responses. Do not use emoji.\n\n"
+        "6. TONE. Warm but direct. You are speaking with senior clinical leaders — "
+        "physicians, chairs, executives. Treat them as capable adults. Name the "
+        "hard thing when it needs naming. Do not add disclaimers about consulting "
+        "professionals for topics where the person clearly IS the professional.\n\n"
+        "7. NO SELF-REFERENCE AS AI. Do not begin sentences with 'As an AI...', "
+        "'I'm just an AI...', 'While I don't have feelings...', 'I don't have "
+        "personal experiences but...', or similar. Speak from the J3P frameworks "
+        "and lived-practice perspective the persona is built on.\n\n"
+        "8. NO META. Do not describe what you're about to do ('Let me walk you "
+        "through...', 'Here's my breakdown...', 'I'll structure this as...'). "
+        "Just do it.\n"
+    )
+
     scope_guard = (
         "\n\n---\n"
         "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
@@ -1372,9 +1525,10 @@ def chat():
               "Stay in your assigned voice and frameworks."
             + lessons_block
             + scope_guard
+            + voice_guard
         )
     else:
-        composed_prompt = base_prompt + lessons_block + scope_guard
+        composed_prompt = base_prompt + lessons_block + scope_guard + voice_guard
 
     try:
         response = client.messages.create(
@@ -1412,6 +1566,34 @@ def chat():
         # Case-insensitive, whole-phrase replacement
         pattern = _re.compile(_re.escape(forbidden), _re.IGNORECASE)
         assistant_text = pattern.sub(replacement, assistant_text)
+
+    # Voice scrubber: catch generic-AI phrasing that leaks past the system prompt.
+    # We strip a small set of high-signal opener/closer phrases. This runs on every
+    # response as a belt-and-suspenders backup to the voice_guard system rules.
+    STRIP_PHRASES = [
+        # Model identity — replace the whole identifying sentence with a branded one
+        (r"\b(?:I am|I'?m)\s+(?:Claude|ChatGPT|GPT-?\d*|Gemini|Bard|Copilot|an?\s+AI(?:\s+language)?\s+model|a\s+large\s+language\s+model|an?\s+AI\s+assistant)[^.!?]*[.!?]",
+         "I'm the J3P Advisor."),
+        # "As an AI [anything]..." preface — strip up to the first comma or period
+        (r"^\s*As an? AI[^,.]*[,.]\s*", ""),
+        (r"^\s*As a language model[^,.]*[,.]\s*", ""),
+        (r"^\s*As a large language model[^,.]*[,.]\s*", ""),
+        # "I was created/trained by [foundation model company]"
+        (r"\bI\s+(?:was\s+)?(?:created|built|made|developed|trained)\s+by\s+(?:Anthropic|OpenAI|Google|Microsoft|Meta|xAI)[^.!?]*[.!?]\s*", ""),
+        # Sycophantic openers
+        (r"^(?:Great|Excellent|Wonderful|Fantastic|Amazing|Terrific|That'?s a (?:great|really good|thoughtful|wonderful|excellent|interesting)|What a (?:great|thoughtful|wonderful|excellent))\s+question[!.]?\s*", ""),
+        (r"^(?:Certainly|Absolutely|Sure(?:ly)?|Of course|Definitely)[!.,]?\s+", ""),
+        (r"^I'?d be (?:happy|glad|delighted) to (?:help|assist)[^.!?]*[.!?]\s*", ""),
+        (r"^(?:Happy|Glad) to help[!.]?\s*", ""),
+        # Service-desk closers (end-of-response)
+        (r"\s*I hope (?:this|that) (?:helps|is helpful)[!.]?\s*$", ""),
+        (r"\s*(?:Please )?(?:let me know|feel free to (?:ask|reach out))[^.!?]*[.!?]?\s*$", ""),
+        (r"\s*Is there anything else I can help(?: you)? with[?.!]?\s*$", ""),
+        (r"\s*Don'?t hesitate to (?:ask|reach out)[^.!?]*[.!?]?\s*$", ""),
+    ]
+    for pattern, replacement in STRIP_PHRASES:
+        assistant_text = _re.sub(pattern, replacement, assistant_text, flags=_re.IGNORECASE)
+    assistant_text = assistant_text.strip()
 
     messages.append({"role": "assistant", "content": assistant_text})
     session["messages"] = messages
