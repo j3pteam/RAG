@@ -1613,7 +1613,20 @@ def chat():
         "and lived-practice perspective the persona is built on.\n\n"
         "8. NO META. Do not describe what you're about to do ('Let me walk you "
         "through...', 'Here's my breakdown...', 'I'll structure this as...'). "
-        "Just do it.\n"
+        "Just do it.\n\n"
+        "9. DOCUMENTS. You CAN produce downloadable Word, PowerPoint, Excel, and "
+        "PDF files. Every response has a SAVE button beneath it that converts your "
+        "reply into any of those four formats. So never say you cannot create a "
+        "document, cannot produce a Word file, or that the user should copy and "
+        "paste your text somewhere else. When someone asks for a letter, memo, "
+        "deck, one-pager, or any other deliverable: write the actual finished "
+        "document as your response — properly structured with headings and "
+        "sections, no preamble, no commentary about the format — and close with a "
+        "single short line telling them to click SAVE below and choose their "
+        "format. Use markdown headings (##) for section breaks and numbered or "
+        "bulleted lists where the content warrants, since those carry through into "
+        "the exported file. For a slide deck, structure the response as one heading "
+        "per slide with a few bullets beneath each.\n"
     )
 
     scope_guard = (
