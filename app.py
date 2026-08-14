@@ -534,7 +534,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <form id="chat-form">
       <div class="input-wrap">
         <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
-        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp" />
+        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp" multiple />
         <input type="file" id="folder-input-chat" webkitdirectory directory multiple />
         <button type="button" id="folder-btn" class="folder-btn" aria-label="Attach folder" title="Attach a folder of documents">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1011,19 +1011,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
     removeFileBtn.addEventListener("click", clearAttachment);
 
     fileInput.addEventListener("change", () => {
-      const f = fileInput.files[0];
-      if (!f) return;
-      const okExt = /\.(pdf|docx|txt|md|jpe?g|png|gif|webp)$/i.test(f.name);
-      if (!okExt) {
-        alert("Please attach a PDF, DOCX, TXT, MD, or image (JPG, PNG, GIF, WEBP).");
+      const all = Array.from(fileInput.files || []);
+      if (all.length === 0) return;
+      // Validate every file
+      const okRe = /\.(pdf|docx|txt|md|jpe?g|png|gif|webp)$/i;
+      const bad = all.filter(f => !okRe.test(f.name));
+      if (bad.length) {
+        alert("One or more files are unsupported. Please attach only PDF, DOCX, TXT, MD, or images (JPG, PNG, GIF, WEBP).");
         clearAttachment(); return;
       }
-      if (f.size > MAX_FILE_MB * 1024 * 1024) {
-        alert(`File is too large. Max ${MAX_FILE_MB} MB.`);
+      const oversized = all.filter(f => f.size > MAX_FILE_MB * 1024 * 1024);
+      if (oversized.length) {
+        alert(`One or more files exceed ${MAX_FILE_MB} MB: ${oversized.map(f => f.name).join(", ")}`);
         clearAttachment(); return;
       }
-      attachedFileName.textContent = f.name;
-      attachedFileSize.textContent = "· " + formatFileSize(f.size);
+      // Show a friendly summary in the pill
+      if (all.length === 1) {
+        attachedFileName.textContent = all[0].name;
+        attachedFileSize.textContent = "· " + formatFileSize(all[0].size);
+      } else {
+        const totalBytes = all.reduce((sum, f) => sum + f.size, 0);
+        attachedFileName.textContent = `${all.length} files: ` + all.slice(0, 3).map(f => f.name).join(", ") + (all.length > 3 ? "…" : "");
+        attachedFileSize.textContent = "· " + formatFileSize(totalBytes);
+      }
       attachedFileDiv.classList.add("visible");
     });
 
@@ -1052,26 +1062,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      const file = fileInput.files[0] || null;
+      const paperclipFiles = Array.from(fileInput.files || []);
       const folderFiles = attachedFolderFiles.slice();
       const folderName = attachedFolderName;
-      // Require at least one of: text, single file, or folder
-      if (!text && !file && folderFiles.length === 0) return;
+      // Require at least one of: text, single/multi file(s), or folder
+      if (!text && paperclipFiles.length === 0 && folderFiles.length === 0) return;
 
       // Build the message shown in chat
       let displayText;
       if (folderFiles.length > 0) {
         displayText = (text || "[No message]") +
           `\n\n📂 Attached folder: ${folderName} (${folderFiles.length} file${folderFiles.length === 1 ? "" : "s"})`;
-      } else if (file) {
-        displayText = (text || "[No message]") + `\n\n📎 Attached: ${file.name}`;
+      } else if (paperclipFiles.length === 1) {
+        displayText = (text || "[No message]") + `\n\n📎 Attached: ${paperclipFiles[0].name}`;
+      } else if (paperclipFiles.length > 1) {
+        const names = paperclipFiles.slice(0, 3).map(f => f.name).join(", ") + (paperclipFiles.length > 3 ? "…" : "");
+        displayText = (text || "[No message]") + `\n\n📎 Attached ${paperclipFiles.length} files: ${names}`;
       } else {
         displayText = text;
       }
       addMessage(displayText, "user");
 
       input.value = "";
-      const singleFileForRequest = file;
+      const paperclipFilesForRequest = paperclipFiles.slice();
       const folderFilesForRequest = folderFiles;
       const folderNameForRequest = folderName;
       clearAttachment();
@@ -1081,16 +1094,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
       try {
         let res;
         if (folderFilesForRequest.length > 0) {
-          // Folder upload — send multiple files
+          // Folder upload — send multiple files under the "files" field
           const fd = new FormData();
           fd.append("message", text || "Please review these attached documents.");
           fd.append("folder_name", folderNameForRequest);
           folderFilesForRequest.forEach(f => fd.append("files", f, f.name));
           res = await fetch("/chat", { method: "POST", body: fd });
-        } else if (singleFileForRequest) {
+        } else if (paperclipFilesForRequest.length === 1) {
+          // Single-file path (preserves image vision handling for one image)
           const fd = new FormData();
-          fd.append("message", text || "Please review this attached document.");
-          fd.append("file", singleFileForRequest);
+          fd.append("message", text || "Please review this attached file.");
+          fd.append("file", paperclipFilesForRequest[0]);
+          res = await fetch("/chat", { method: "POST", body: fd });
+        } else if (paperclipFilesForRequest.length > 1) {
+          // Multi-file paperclip — use the same multi-file field as folder,
+          // so the backend concatenates docs and adds each image as a vision block.
+          const fd = new FormData();
+          fd.append("message", text || "Please review these attached files.");
+          fd.append("attachment_label", "Attachments");   // shown in chat/logs
+          paperclipFilesForRequest.forEach(f => fd.append("files", f, f.name));
           res = await fetch("/chat", { method: "POST", body: fd });
         } else {
           res = await fetch("/chat", {
@@ -1234,7 +1256,13 @@ def chat():
             uploaded_file = request.files["file"]
         if "files" in request.files:
             folder_files = request.files.getlist("files")
-            folder_name = (request.form.get("folder_name") or "Folder").strip()
+            # Prefer the explicit folder_name; fall back to attachment_label
+            # (used when the paperclip sends multiple files rather than a folder).
+            folder_name = (
+                request.form.get("folder_name")
+                or request.form.get("attachment_label")
+                or "Attachments"
+            ).strip()
 
     if uploaded_file or folder_files:
         user_input = (request.form.get("message") or "").strip()
@@ -1254,7 +1282,7 @@ def chat():
     }
 
     attachment_context = ""    # Text extracted from a document, if any
-    image_block = None         # Anthropic image content block, if any
+    image_blocks = []          # List of Anthropic image content blocks
     attachment_display_name = ""
 
     if uploaded_file:
@@ -1270,14 +1298,14 @@ def chat():
                 # Vision path — send raw image bytes to Claude as base64
                 import base64
                 b64 = base64.standard_b64encode(file_bytes).decode("ascii")
-                image_block = {
+                image_blocks.append({
                     "type": "image",
                     "source": {
                         "type": "base64",
                         "media_type": IMAGE_MEDIA_TYPES.get(ext, "image/jpeg"),
                         "data": b64,
                     },
-                }
+                })
                 if not user_input:
                     user_input = "Please describe or analyze this image."
                 app.logger.info(f"Chat image received: {filename} ({len(file_bytes)} bytes)")
@@ -1307,65 +1335,96 @@ def chat():
             app.logger.error(f"Attachment processing failed: {e}")
             return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
 
-    # === Folder attachment (multiple docs at once) ===
-    folder_stats = None  # (uploaded_count, skipped_count) if a folder was attached
+    # === Multi-file attachment (folder OR paperclip multi-select) ===
+    # Splits incoming files into two paths:
+    #   - Documents (PDF/DOCX/TXT/MD): text extraction, concatenated into one context block
+    #   - Images (JPG/PNG/GIF/WEBP): each becomes an Anthropic vision content block
+    folder_stats = None  # (uploaded_count, skipped_count) if any files were attached
     if folder_files:
         MAX_FOLDER_FILES = 20
-        MAX_COMBINED_CHARS = 80000  # cap to keep the prompt reasonable
-        supported = [f for f in folder_files if (f.filename or "").lower().endswith(DOC_EXTS)]
-        supported = supported[:MAX_FOLDER_FILES]  # hard cap
+        MAX_COMBINED_CHARS = 80000  # keep prompt reasonable
+        MAX_IMAGES = 5              # cap image count to control cost + payload
+        supported = [f for f in folder_files
+                     if (f.filename or "").lower().endswith(DOC_EXTS + IMAGE_EXTS)]
+        supported = supported[:MAX_FOLDER_FILES]
         if not supported:
-            return jsonify({"error": "No supported documents in the attached folder."}), 400
+            return jsonify({"error": "No supported files in the attachment (PDF, DOCX, TXT, MD, or images)."}), 400
 
+        import base64
         combined_parts = []
         total_chars = 0
-        used_count = 0
+        docs_used = 0
+        images_used = 0
         skipped_count = 0
         for f in supported:
             try:
                 fname = (f.filename or "unknown").rsplit("/", 1)[-1]
+                ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
                 bytes_ = f.read()
                 if len(bytes_) > 25 * 1024 * 1024:
                     skipped_count += 1
                     continue
-                extracted = emb.extract_text_from_upload(fname, bytes_)
-                if not extracted.strip():
+                if ext in IMAGE_EXTS:
+                    # Cap number of images per turn
+                    if images_used >= MAX_IMAGES:
+                        skipped_count += 1
+                        continue
+                    b64 = base64.standard_b64encode(bytes_).decode("ascii")
+                    image_blocks.append({
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": IMAGE_MEDIA_TYPES.get(ext, "image/jpeg"),
+                            "data": b64,
+                        },
+                    })
+                    images_used += 1
+                elif ext in DOC_EXTS:
+                    extracted = emb.extract_text_from_upload(fname, bytes_)
+                    if not extracted.strip():
+                        skipped_count += 1
+                        continue
+                    remaining = MAX_COMBINED_CHARS - total_chars
+                    if remaining <= 0:
+                        skipped_count += 1
+                        continue
+                    if len(extracted) > remaining:
+                        extracted = extracted[:remaining] + "\n[... file truncated for length ...]"
+                    combined_parts.append(f"--- FILE: {fname} ---\n{extracted}")
+                    total_chars += len(extracted)
+                    docs_used += 1
+                else:
                     skipped_count += 1
-                    continue
-                # Trim per-file if we're getting close to the combined cap
-                remaining = MAX_COMBINED_CHARS - total_chars
-                if remaining <= 0:
-                    skipped_count += 1
-                    continue
-                if len(extracted) > remaining:
-                    extracted = extracted[:remaining] + "\n[... file truncated for length ...]"
-                combined_parts.append(
-                    f"--- FILE: {fname} ---\n{extracted}"
-                )
-                total_chars += len(extracted)
-                used_count += 1
             except Exception as e:
-                app.logger.error(f"Folder file skipped ({f.filename}): {e}")
+                app.logger.error(f"Multi-file attachment skipped ({f.filename}): {e}")
                 skipped_count += 1
 
-        if not combined_parts:
-            return jsonify({"error": "Could not extract text from any files in the folder."}), 400
+        used_count = docs_used + images_used
+        if used_count == 0:
+            return jsonify({"error": "Could not process any of the attached files."}), 400
 
-        attachment_context = (
-            f"\n\n[The user attached a folder named '{folder_name}' containing "
-            f"{used_count} document{'s' if used_count != 1 else ''}. "
-            f"The concatenated content of all files is below. Use it to inform your response.]\n\n"
-            f"--- BEGIN ATTACHED FOLDER ---\n"
-            + "\n\n".join(combined_parts) +
-            f"\n--- END ATTACHED FOLDER ---"
-        )
+        # Build the doc context block only if we actually used any docs
+        if combined_parts:
+            attachment_context = (
+                f"\n\n[The user attached {docs_used} document{'s' if docs_used != 1 else ''}"
+                + (f" and {images_used} image{'s' if images_used != 1 else ''}" if images_used else "")
+                + f" (grouped as '{folder_name}'). "
+                f"The concatenated content of all documents is below. Use it to inform your response.]\n\n"
+                f"--- BEGIN ATTACHED FILES ---\n"
+                + "\n\n".join(combined_parts) +
+                f"\n--- END ATTACHED FILES ---"
+            )
+
         if not user_input:
-            user_input = "Please review these attached documents."
-        attachment_display_name = f"{folder_name} ({used_count} files)"
+            user_input = "Please review these attached files."
+        pieces = []
+        if docs_used:   pieces.append(f"{docs_used} doc{'s' if docs_used != 1 else ''}")
+        if images_used: pieces.append(f"{images_used} image{'s' if images_used != 1 else ''}")
+        attachment_display_name = f"{folder_name} ({', '.join(pieces)})"
         folder_stats = (used_count, skipped_count)
         app.logger.info(
-            f"Chat folder attachment: {folder_name} — {used_count} used, "
-            f"{skipped_count} skipped, {total_chars} total chars"
+            f"Chat multi-file attachment: {folder_name} — {docs_used} docs, "
+            f"{images_used} images, {skipped_count} skipped, {total_chars} chars"
         )
 
     # Combine user text with any attached-document context. Images are added
@@ -1374,20 +1433,22 @@ def chat():
 
     messages = session.get("messages", [])
     # For history: store only the text portion so the session cookie doesn't
-    # bloat with base64 image data. If an image was attached, Claude sees it
-    # this turn only; the next turn will not have access to the image.
-    if image_block:
-        # Build the current-turn message with multi-part content (image + text)
-        current_turn_content = [
-            image_block,
-            {"type": "text", "text": user_input or "Please describe or analyze this image."},
+    # bloat with base64 image data. Any images are visible to Claude this turn
+    # only; next turn will not have access unless the user re-attaches.
+    if image_blocks:
+        # Combine one or more image blocks with the text (including any
+        # concatenated document context) into a single multi-part user message.
+        text_for_this_turn = full_user_content or user_input or "Please describe or analyze this."
+        current_turn_content = list(image_blocks) + [
+            {"type": "text", "text": text_for_this_turn},
         ]
         # In-session history: keep a simple text note so history stays serializable
         history_note = (user_input or "").strip()
         if attachment_display_name:
-            history_note = (history_note + f"\n\n[Attached image: {attachment_display_name}]").strip()
+            note_label = attachment_display_name
+            history_note = (history_note + f"\n\n[Attached: {note_label}]").strip()
         messages_for_api = messages + [{"role": "user", "content": current_turn_content}]
-        messages.append({"role": "user", "content": history_note or f"[Attached image: {attachment_display_name}]"})
+        messages.append({"role": "user", "content": history_note or f"[Attached: {attachment_display_name}]"})
     else:
         messages.append({"role": "user", "content": full_user_content})
         messages_for_api = messages
