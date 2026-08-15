@@ -225,6 +225,66 @@ INDEX_HTML = r"""<!DOCTYPE html>
       content: ""; position: absolute; left: 0; top: 0; bottom: 0;
       width: 3px; background: var(--gold);
     }
+    /* Acknowledgment gate — shown before the chat can be used */
+    .ack-overlay {
+      position: fixed; inset: 0; z-index: 100;
+      background: rgba(39, 51, 74, 0.72);
+      backdrop-filter: blur(3px);
+      display: flex; align-items: center; justify-content: center;
+      padding: 1.25rem;
+    }
+    .ack-overlay[hidden] { display: none; }
+    .ack-box {
+      background: var(--paper-2); color: var(--text);
+      border-top: 3px solid var(--gold);
+      border-radius: 4px; box-shadow: 0 18px 50px rgba(39, 51, 74, 0.3);
+      max-width: 540px; width: 100%;
+      max-height: 88vh; overflow-y: auto;
+      padding: 2rem 2.25rem 1.75rem;
+      animation: ackIn 0.28s ease-out;
+    }
+    @keyframes ackIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    .ack-brand {
+      font-size: 0.7rem; letter-spacing: 0.2em; text-transform: uppercase;
+      color: var(--gold); margin-bottom: 0.6rem;
+    }
+    .ack-box h2 {
+      margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 500;
+      color: var(--navy); letter-spacing: 0.01em;
+    }
+    .ack-text p { margin: 0 0 0.85rem 0; font-size: 0.92rem; line-height: 1.6; }
+    .ack-check {
+      display: flex; align-items: flex-start; gap: 0.65rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 4px; padding: 0.85rem 1rem;
+      margin: 1.1rem 0 1.25rem; cursor: pointer;
+      font-size: 0.88rem; line-height: 1.5;
+      transition: border-color 0.15s ease;
+    }
+    .ack-check:hover { border-color: var(--gold); }
+    .ack-check input {
+      margin: 0.2rem 0 0 0; width: 17px; height: 17px;
+      accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
+    }
+    #ack-continue {
+      width: 100%; padding: 0.85rem 1rem;
+      background: var(--navy); color: var(--gold);
+      border: 1px solid var(--navy); border-radius: 2px;
+      font-family: inherit; font-size: 0.78rem;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      cursor: pointer; transition: all 0.2s ease;
+    }
+    #ack-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
+    #ack-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+    @media (max-width: 640px) {
+      .ack-box { padding: 1.5rem 1.35rem 1.35rem; }
+      .ack-box h2 { font-size: 1.1rem; }
+      .ack-text p { font-size: 0.88rem; }
+    }
+
     .typing { color: var(--muted); font-style: italic; }
 
     /* Rendered markdown inside assistant replies */
@@ -525,6 +585,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </style>
 </head>
 <body>
+  <div id="ack-overlay" class="ack-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="ack-title" aria-describedby="ack-body" hidden>
+    <div class="ack-box">
+      <div class="ack-brand">{{ cfg.persona_name }}</div>
+      <h2 id="ack-title">Before you begin</h2>
+      <div id="ack-body" class="ack-text">
+        <p>
+          {{ cfg.persona_name }} provides general information and reflection prompts
+          on leadership, team dynamics, and professional development. It is not a
+          licensed professional and does not know your full circumstances.
+        </p>
+        <p>
+          Nothing here is legal, medical, psychological, mental health, or financial
+          advice, and using this tool does not create a professional or
+          clinician&ndash;patient relationship. For advice specific to your situation,
+          consult a qualified professional. If this is an emergency, contact your
+          local emergency services.
+        </p>
+      </div>
+      <label class="ack-check" for="ack-checkbox">
+        <input type="checkbox" id="ack-checkbox" />
+        <span>
+          I understand and acknowledge that {{ cfg.persona_name }} does not replace
+          legal, medical, psychological, or financial advice from a qualified
+          professional.
+        </span>
+      </label>
+      <button type="button" id="ack-continue" disabled>Continue</button>
+    </div>
+  </div>
+
   <header>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
@@ -596,6 +687,58 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <script>
     const chat = document.getElementById("chat");
+
+    // -------------------------------------------------------------
+    // Acknowledgment gate — must be accepted before the chat is usable
+    // -------------------------------------------------------------
+    // Bump this key if the disclaimer wording changes and everyone should
+    // be asked to acknowledge the new version.
+    const ACK_KEY = "j3p_ack_v1";
+    (function initAckGate() {
+      const overlay = document.getElementById("ack-overlay");
+      const checkbox = document.getElementById("ack-checkbox");
+      const continueBtn = document.getElementById("ack-continue");
+      if (!overlay) return;
+
+      let alreadyAcked = false;
+      try {
+        alreadyAcked = !!localStorage.getItem(ACK_KEY);
+      } catch (e) {
+        // localStorage blocked (private mode / strict settings) — show the
+        // gate every visit rather than silently skipping it.
+        alreadyAcked = false;
+      }
+      if (alreadyAcked) return;
+
+      // Block the composer while the gate is up
+      const composer = document.querySelector(".composer-wrap");
+      if (composer) composer.setAttribute("aria-hidden", "true");
+
+      overlay.hidden = false;
+      setTimeout(() => checkbox.focus(), 120);
+
+      checkbox.addEventListener("change", () => {
+        continueBtn.disabled = !checkbox.checked;
+      });
+
+      continueBtn.addEventListener("click", () => {
+        if (!checkbox.checked) return;
+        try {
+          localStorage.setItem(ACK_KEY, new Date().toISOString());
+        } catch (e) { /* not persistable — gate will show again next visit */ }
+        overlay.hidden = true;
+        if (composer) composer.removeAttribute("aria-hidden");
+        const input = document.getElementById("message");
+        if (input) input.focus();
+      });
+
+      // Enter on the checkbox accepts; Esc must not dismiss the gate
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && checkbox.checked) continueBtn.click();
+        if (e.key === "Escape") e.preventDefault();
+      });
+    })();
+
     const form = document.getElementById("chat-form");
     const input = document.getElementById("message");
     const sendBtn = document.getElementById("send-btn");
