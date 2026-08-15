@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env python3
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
@@ -789,38 +787,244 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const OPENING = {{ cfg.opening|tojson }};
 
     // -------------------------------------------------------------
-    // Speech synthesis: consistent voice selection + auto-speak toggle
+    // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
     // -------------------------------------------------------------
-    // Prefer named professional voices, in order. If none exist, fall back
-    // to the browser default. Chosen for clarity + a warm advisor feel.
-    const PREFERRED_VOICES = [
-      "Samantha",           // macOS / iOS (default American female)
-      "Karen",              // macOS / iOS (Australian, warmer)
-      "Google US English",  // Chrome / Android
-      "Microsoft Zira",     // Windows
-      "Microsoft Aria",     // Windows 11
-    ];
-    let __preferredVoice = null;
-    function pickVoice() {
-      if (!("speechSynthesis" in window)) return null;
-      const voices = window.speechSynthesis.getVoices() || [];
-      if (!voices.length) return null;
-      for (const name of PREFERRED_VOICES) {
-        const match = voices.find(v => v.name === name || v.name.startsWith(name));
-        if (match) return match;
+    // The Web Speech API behaves differently on every platform. This wrapper
+    // normalizes the known problems:
+    //
+    //   1. Chrome (all desktop OSes) silently stops speaking after ~15 seconds
+    //      on a long utterance. Fixed by splitting text into sentence-sized
+    //      chunks played in sequence, plus a periodic pause/resume keepalive.
+    //   2. iOS Safari refuses speak() unless it originates from a user gesture,
+    //      which breaks auto-speak. Fixed by "priming" the engine with a silent
+    //      utterance on the first tap anywhere on the page.
+    //   3. Chrome and Android populate getVoices() asynchronously and
+    //      onvoiceschanged sometimes never fires. Fixed by polling with a cap.
+    //   4. pause()/resume() are unreliable on iOS and Android. Detected up
+    //      front; on those platforms the control becomes stop-only.
+    //   5. Calling speak() immediately after cancel() drops the utterance in
+    //      some builds. Fixed with a short delay between the two.
+    const J3PSpeech = (function () {
+      const supported =
+        typeof window !== "undefined" &&
+        "speechSynthesis" in window &&
+        "SpeechSynthesisUtterance" in window;
+
+      const ua = (navigator.userAgent || "");
+      const isIOS = /iPad|iPhone|iPod/.test(ua) ||
+                    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+      const isAndroid = /Android/.test(ua);
+      const isChrome = /Chrome|CriOS|Chromium/.test(ua) && !/Edg|OPR/.test(ua);
+      // pause/resume is broken or a no-op on mobile WebKit and Android
+      const canPause = supported && !isIOS && !isAndroid;
+      // Chrome's watchdog is only needed where the 15s cutoff exists
+      const needsKeepalive = supported && isChrome && !isAndroid;
+
+      // Preferred voices per platform, best first. Falls through to any
+      // English voice, then whatever the device offers.
+      const PREFERRED_VOICES = [
+        "Samantha",                  // macOS / iOS
+        "Karen", "Moira", "Fiona",   // macOS / iOS alternates
+        "Google US English",         // Chrome desktop / Android
+        "Google UK English Female",
+        "Microsoft Aria",            // Windows 11
+        "Microsoft Jenny",           // Windows 11
+        "Microsoft Zira",            // Windows 10
+        "Microsoft Hazel",
+        "English United States",     // some Android builds
+        "en-us-x-sfg#female_1",      // Android TTS engine ids
+        "English (United States)",
+      ];
+
+      let voices = [];
+      let preferred = null;
+      let primed = false;
+      let keepaliveTimer = null;
+
+      // --- state for the currently playing item ---
+      let chunks = [];
+      let chunkIndex = 0;
+      let token = 0;              // increments on every stop/new play
+      let callbacks = {};
+      let speaking = false;
+      let paused = false;
+
+      function refreshVoices() {
+        if (!supported) return;
+        voices = window.speechSynthesis.getVoices() || [];
+        if (!voices.length) return;
+        for (const name of PREFERRED_VOICES) {
+          const hit = voices.find(v =>
+            v.name === name ||
+            v.name.toLowerCase().startsWith(name.toLowerCase()));
+          if (hit) { preferred = hit; return; }
+        }
+        preferred =
+          voices.find(v => (v.lang || "").toLowerCase().replace("_", "-").startsWith("en-us")) ||
+          voices.find(v => (v.lang || "").toLowerCase().startsWith("en")) ||
+          voices[0] || null;
       }
-      // Fall back to first English voice, then anything
-      return voices.find(v => (v.lang || "").toLowerCase().startsWith("en"))
-          || voices[0]
-          || null;
-    }
-    // Voices may load async — refresh once they arrive
-    if ("speechSynthesis" in window) {
-      __preferredVoice = pickVoice();
-      window.speechSynthesis.onvoiceschanged = () => { __preferredVoice = pickVoice(); };
-    }
-    // Expose to speak buttons on individual messages
-    window.__pickPreferredVoice = () => __preferredVoice;
+
+      if (supported) {
+        refreshVoices();
+        // onvoiceschanged is the documented path...
+        window.speechSynthesis.onvoiceschanged = refreshVoices;
+        // ...but it doesn't always fire on Android/Chrome, so poll briefly too.
+        let tries = 0;
+        const poll = setInterval(() => {
+          tries += 1;
+          if (voices.length || tries > 20) { clearInterval(poll); return; }
+          refreshVoices();
+        }, 250);
+
+        // iOS requires a gesture-originated speak() before any programmatic
+        // one is allowed. A zero-volume utterance on first interaction unlocks it.
+        const prime = () => {
+          if (primed) return;
+          primed = true;
+          try {
+            const u = new SpeechSynthesisUtterance(" ");
+            u.volume = 0;
+            window.speechSynthesis.speak(u);
+          } catch (e) { /* non-fatal */ }
+        };
+        ["pointerdown", "touchstart", "keydown"].forEach(evt =>
+          window.addEventListener(evt, prime, { once: true, passive: true }));
+
+        // Don't keep talking after the tab is closed or navigated away
+        window.addEventListener("beforeunload", () => {
+          try { window.speechSynthesis.cancel(); } catch (e) {}
+        });
+        // Chrome keeps queued speech alive across tab switches inconsistently;
+        // stopping on hide is more predictable than half-spoken audio resuming.
+        document.addEventListener("visibilitychange", () => {
+          if (document.hidden && speaking) stop();
+        });
+      }
+
+      // Split into chunks small enough to dodge Chrome's ~15s cutoff, breaking
+      // on sentence boundaries so the pauses land naturally.
+      function chunkText(text, maxLen) {
+        maxLen = maxLen || 180;
+        const out = [];
+        const sentences = String(text || "")
+          .split(/(?<=[.!?:;])\s+/)
+          .filter(Boolean);
+        let buf = "";
+        for (let s of sentences) {
+          // A single sentence longer than the cap gets broken on commas/spaces
+          while (s.length > maxLen) {
+            let cut = s.lastIndexOf(",", maxLen);
+            if (cut < maxLen * 0.5) cut = s.lastIndexOf(" ", maxLen);
+            if (cut < maxLen * 0.5) cut = maxLen;
+            if (buf) { out.push(buf.trim()); buf = ""; }
+            out.push(s.slice(0, cut + 1).trim());
+            s = s.slice(cut + 1);
+          }
+          if ((buf + " " + s).trim().length > maxLen) {
+            if (buf) out.push(buf.trim());
+            buf = s;
+          } else {
+            buf = (buf ? buf + " " : "") + s;
+          }
+        }
+        if (buf.trim()) out.push(buf.trim());
+        return out.filter(c => c.length);
+      }
+
+      function startKeepalive() {
+        if (!needsKeepalive || keepaliveTimer) return;
+        keepaliveTimer = setInterval(() => {
+          const synth = window.speechSynthesis;
+          if (synth.speaking && !synth.paused) {
+            // The pause/resume pair resets Chrome's internal idle timer
+            try { synth.pause(); synth.resume(); } catch (e) {}
+          }
+        }, 8000);
+      }
+      function stopKeepalive() {
+        if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
+      }
+
+      function speakChunk(myToken) {
+        if (myToken !== token) return;               // superseded
+        if (chunkIndex >= chunks.length) {           // finished cleanly
+          speaking = false; paused = false;
+          stopKeepalive();
+          if (callbacks.onEnd) callbacks.onEnd();
+          return;
+        }
+        const u = new SpeechSynthesisUtterance(chunks[chunkIndex]);
+        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+        if (preferred) { u.voice = preferred; u.lang = preferred.lang || "en-US"; }
+        else { u.lang = "en-US"; }
+
+        u.onend = () => {
+          if (myToken !== token) return;
+          chunkIndex += 1;
+          speakChunk(myToken);
+        };
+        u.onerror = (e) => {
+          if (myToken !== token) return;
+          const reason = (e && e.error) || "";
+          // These fire on normal cancellation — not real failures
+          if (reason === "interrupted" || reason === "canceled") return;
+          speaking = false; paused = false;
+          stopKeepalive();
+          if (callbacks.onError) callbacks.onError(reason);
+        };
+        try {
+          window.speechSynthesis.speak(u);
+        } catch (err) {
+          speaking = false; stopKeepalive();
+          if (callbacks.onError) callbacks.onError(err && err.message);
+        }
+      }
+
+      function stop() {
+        token += 1;
+        chunks = []; chunkIndex = 0;
+        speaking = false; paused = false;
+        stopKeepalive();
+        try { window.speechSynthesis.cancel(); } catch (e) {}
+      }
+
+      function play(text, cbs) {
+        if (!supported) return false;
+        callbacks = cbs || {};
+        stop();                                   // clears any prior playback
+        const body = String(text || "").trim();
+        if (!body) return false;
+        chunks = chunkText(body);
+        chunkIndex = 0;
+        const myToken = ++token;
+        speaking = true; paused = false;
+        startKeepalive();
+        // Some builds drop a speak() issued in the same tick as cancel()
+        setTimeout(() => speakChunk(myToken), isIOS ? 120 : 60);
+        if (callbacks.onStart) callbacks.onStart();
+        return true;
+      }
+
+      function pause() {
+        if (!canPause || !speaking) return false;
+        try { window.speechSynthesis.pause(); paused = true; return true; }
+        catch (e) { return false; }
+      }
+      function resume() {
+        if (!canPause || !speaking) return false;
+        try { window.speechSynthesis.resume(); paused = false; return true; }
+        catch (e) { return false; }
+      }
+
+      return {
+        supported, canPause, isIOS, isAndroid,
+        play, stop, pause, resume,
+        isSpeaking: () => speaking,
+        isPaused: () => paused,
+        voiceName: () => (preferred ? preferred.name : null),
+      };
+    })();
 
     // Auto-speak state — persists across visits
     const autoSpeakBtn = document.getElementById("autospeak-btn");
@@ -840,7 +1044,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     refreshAutoSpeakUI();
     // If browser doesn't support speech, hide the toggle
-    if (!("speechSynthesis" in window)) {
+    if (!J3PSpeech.supported) {
       if (autoSpeakBtn) autoSpeakBtn.style.display = "none";
       autoSpeakEnabled = false;
     } else if (autoSpeakBtn) {
@@ -849,8 +1053,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
         try { localStorage.setItem("j3p_autospeak", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
         refreshAutoSpeakUI();
         // Turning OFF should stop anything currently speaking
-        if (!autoSpeakEnabled && window.speechSynthesis) {
-          window.speechSynthesis.cancel();
+        if (!autoSpeakEnabled) {
+          J3PSpeech.stop();
           if (window.__activeSpeakBtn) {
             const prev = window.__activeSpeakBtn;
             prev.classList.remove("speaking", "paused");
@@ -1108,8 +1312,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // === SPEAK button (browser text-to-speech) ===
       const speakBtn = wrap.querySelector(".speak-btn");
       const speakLabel = speakBtn ? speakBtn.querySelector(".speak-label") : null;
-      const canSpeak = typeof window !== "undefined" && "speechSynthesis" in window && "SpeechSynthesisUtterance" in window;
-      if (!canSpeak && speakBtn) {
+      if (!J3PSpeech.supported && speakBtn) {
         // Browser doesn't support speech synthesis — hide the button entirely
         speakBtn.style.display = "none";
       } else if (speakBtn) {
@@ -1135,19 +1338,32 @@ INDEX_HTML = r"""<!DOCTYPE html>
           speakBtn.classList.remove("speaking", "paused");
           if (speakLabel) speakLabel.textContent = "Speak";
         }
+        function markSpeaking() {
+          speakBtn.classList.add("speaking");
+          speakBtn.classList.remove("paused");
+          // Where pause isn't available the control is stop-only, so say so
+          if (speakLabel) speakLabel.textContent = J3PSpeech.canPause ? "Speaking" : "Stop";
+        }
+
+        // On platforms without pause support, make the intent clear up front
+        if (!J3PSpeech.canPause) {
+          speakBtn.title = "Read answer aloud (tap again to stop)";
+        }
 
         speakBtn.addEventListener("click", () => {
-          const synth = window.speechSynthesis;
-
-          // If THIS button is currently speaking or paused → toggle
+          // This button is the active one → toggle pause/resume, or stop
           if (window.__activeSpeakBtn === speakBtn) {
-            if (synth.paused) {
-              synth.resume();
-              speakBtn.classList.add("speaking");
-              speakBtn.classList.remove("paused");
-              if (speakLabel) speakLabel.textContent = "Speaking";
-            } else if (synth.speaking) {
-              synth.pause();
+            if (!J3PSpeech.canPause) {
+              J3PSpeech.stop();
+              resetSpeakUI();
+              window.__activeSpeakBtn = null;
+              return;
+            }
+            if (J3PSpeech.isPaused()) {
+              J3PSpeech.resume();
+              markSpeaking();
+            } else {
+              J3PSpeech.pause();
               speakBtn.classList.remove("speaking");
               speakBtn.classList.add("paused");
               if (speakLabel) speakLabel.textContent = "Paused";
@@ -1155,34 +1371,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
             return;
           }
 
-          // A different message was speaking — stop it first
+          // A different message was playing — reset its button first
           if (window.__activeSpeakBtn && window.__activeSpeakBtn !== speakBtn) {
             const prev = window.__activeSpeakBtn;
             prev.classList.remove("speaking", "paused");
             const prevLabel = prev.querySelector(".speak-label");
             if (prevLabel) prevLabel.textContent = "Speak";
           }
-          synth.cancel();
 
-          const utter = new SpeechSynthesisUtterance(stripMarkdown(replyText));
-          utter.rate = 1.0;
-          utter.pitch = 1.0;
-          utter.volume = 1.0;
-          // Consistent voice across devices (falls through to browser default if unavailable)
-          const pv = (typeof window.__pickPreferredVoice === "function") ? window.__pickPreferredVoice() : null;
-          if (pv) utter.voice = pv;
-          utter.onend = () => {
-            resetSpeakUI();
-            if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
-          };
-          utter.onerror = () => {
-            resetSpeakUI();
-            if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
-          };
-          synth.speak(utter);
-          window.__activeSpeakBtn = speakBtn;
-          speakBtn.classList.add("speaking");
-          if (speakLabel) speakLabel.textContent = "Speaking";
+          const ok = J3PSpeech.play(stripMarkdown(replyText), {
+            onStart: () => {
+              window.__activeSpeakBtn = speakBtn;
+              markSpeaking();
+            },
+            onEnd: () => {
+              resetSpeakUI();
+              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+            },
+            onError: (reason) => {
+              console.error("Speech error:", reason);
+              resetSpeakUI();
+              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+            },
+          });
+          if (!ok) resetSpeakUI();
         });
       }
 
@@ -1520,7 +1732,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     resetBtn.addEventListener("click", async () => {
       // Stop any in-progress speech before wiping the chat
-      if (window.speechSynthesis) window.speechSynthesis.cancel();
+      J3PSpeech.stop();
       window.__activeSpeakBtn = null;
       await fetch("/reset", { method: "POST" });
       chat.innerHTML = "";
