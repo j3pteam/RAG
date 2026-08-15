@@ -18,6 +18,7 @@ Add to requirements.txt:
     reportlab
 """
 import io
+import os
 import re
 from datetime import datetime
 
@@ -30,6 +31,69 @@ CHARCOAL = "3F3F44"
 
 BRAND_NAME = "J3P Health"
 DOC_SUBTITLE = "J3P Advisor"
+
+# --- Logo -------------------------------------------------------------------
+# Embedded at the top of every generated file. Falls back to the wordmark text
+# if the image can't be found, so exports never fail over a missing asset.
+LOGO_CANDIDATES = [
+    os.environ.get("BRAND_LOGO_FILE", ""),
+    "full_logo.png",
+    "logo.png",
+    "monogram.jpg",
+]
+
+
+def find_logo():
+    """Return a filesystem path to the brand logo, or None if unavailable."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    for candidate in LOGO_CANDIDATES:
+        if not candidate:
+            continue
+        for base in (here, os.getcwd()):
+            path = candidate if os.path.isabs(candidate) else os.path.join(base, candidate)
+            if os.path.isfile(path):
+                return path
+    return None
+
+
+# --- Meta-language stripping -------------------------------------------------
+# The assistant closes its reply with a line about the SAVE button / the file
+# downloading. That's useful in the chat window but must never appear inside
+# the document itself, so it's removed before rendering.
+_META_LINE_PATTERNS = [
+    r"\bsave\s+button\b",
+    r"\bclick\s+save\b",
+    r"\bre-?download\b",
+    r"\bthe file is (?:downloading|being (?:downloaded|generated|created))\b",
+    r"\bdownloading (?:now|automatically)\b",
+    r"\bwill download it\b",
+    r"\bdownload(?:ed|ing)? (?:it )?(?:in|as) (?:powerpoint|word|excel|pdf)\b",
+    r"\bbelow will (?:download|save|export)\b",
+    r"\b(?:deck|document|letter|file) is (?:written and ready|ready to download)\b",
+    r"\bexported? (?:to|as) an? (?:word|powerpoint|excel|pdf)\b",
+    r"\bis (?:attached|downloading) (?:now|below)\b",
+]
+_META_RE = re.compile("|".join(_META_LINE_PATTERNS), re.IGNORECASE)
+
+
+def strip_meta(text: str) -> str:
+    """Remove chat-only lines about saving/downloading from document content."""
+    if not text:
+        return text
+    kept = []
+    for line in str(text).replace("\r\n", "\n").split("\n"):
+        stripped = line.strip()
+        # Only drop short standalone lines — never gut a real paragraph that
+        # happens to mention one of these words in passing.
+        if stripped and len(stripped) < 320 and _META_RE.search(stripped):
+            continue
+        kept.append(line)
+    out = "\n".join(kept)
+    # Collapse blank runs left behind and trailing separators
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    out = re.sub(r"(?:\n\s*[-*_]{3,}\s*)+$", "", out)
+    return out.strip()
+
 
 
 # ---------------------------------------------------------------------------
@@ -183,13 +247,20 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
         section.left_margin = Inches(1)
         section.right_margin = Inches(1)
 
-    # Masthead
+    # Masthead — logo image when available, wordmark text otherwise
+    logo_path = find_logo()
     brand = doc.add_paragraph()
-    brand_run = brand.add_run(BRAND_NAME.upper())
-    brand_run.bold = True
-    brand_run.font.size = Pt(9)
-    brand_run.font.color.rgb = RGBColor.from_string(GOLD)
     brand.paragraph_format.space_after = Pt(2)
+    if logo_path:
+        try:
+            brand.add_run().add_picture(logo_path, height=Inches(0.42))
+        except Exception:
+            logo_path = None
+    if not logo_path:
+        brand_run = brand.add_run(BRAND_NAME.upper())
+        brand_run.bold = True
+        brand_run.font.size = Pt(9)
+        brand_run.font.color.rgb = RGBColor.from_string(GOLD)
 
     head = doc.add_paragraph()
     head_run = head.add_run(title)
@@ -285,12 +356,21 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
     slide = prs.slides.add_slide(prs.slide_layouts[6])   # blank
     set_bg(slide, navy)
 
+    logo_path = find_logo()
+
     box = slide.shapes.add_textbox(Inches(0.9), Inches(2.5), Inches(11.5), Inches(2.2))
     tf = box.text_frame
     tf.word_wrap = True
 
     p = tf.paragraphs[0]
-    p.text = BRAND_NAME.upper()
+    if logo_path:
+        try:
+            slide.shapes.add_picture(logo_path, Inches(0.9), Inches(1.15), height=Inches(0.95))
+            p.text = ""                    # logo replaces the wordmark text
+        except Exception:
+            p.text = BRAND_NAME.upper()
+    else:
+        p.text = BRAND_NAME.upper()
     p.font.size = Pt(13)
     p.font.bold = True
     p.font.color.rgb = gold
@@ -358,14 +438,23 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
                 bp.font.color.rgb = RGBColor.from_string(CHARCOAL)
                 bp.space_after = Pt(13)
 
-            # Footer
-            foot = slide.shapes.add_textbox(Inches(0.85), Inches(6.95), Inches(11.6), Inches(0.4))
-            ftf = foot.text_frame
-            fp = ftf.paragraphs[0]
-            fp.text = BRAND_NAME
-            fp.font.size = Pt(9)
-            fp.font.color.rgb = gold
-            fp.alignment = PP_ALIGN.LEFT
+            # Footer — small logo, falling back to the wordmark
+            placed_logo = False
+            if logo_path:
+                try:
+                    slide.shapes.add_picture(
+                        logo_path, Inches(0.85), Inches(6.82), height=Inches(0.34))
+                    placed_logo = True
+                except Exception:
+                    placed_logo = False
+            if not placed_logo:
+                foot = slide.shapes.add_textbox(Inches(0.85), Inches(6.95), Inches(11.6), Inches(0.4))
+                ftf = foot.text_frame
+                fp = ftf.paragraphs[0]
+                fp.text = BRAND_NAME
+                fp.font.size = Pt(9)
+                fp.font.color.rgb = gold
+                fp.alignment = PP_ALIGN.LEFT
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -398,6 +487,20 @@ def build_xlsx(text: str, title: str = None) -> io.BytesIO:
     ws["A1"].fill = navy_fill
     ws["B1"].fill = navy_fill
     ws["C1"].fill = navy_fill
+
+    logo_path = find_logo()
+    if logo_path:
+        try:
+            from openpyxl.drawing.image import Image as XLImage
+            img = XLImage(logo_path)
+            ratio = (img.height or 1) / float(img.width or 1)
+            img.width = 120
+            img.height = max(int(120 * ratio), 1)
+            ws.row_dimensions[1].height = max(img.height * 0.78, 18)
+            ws["A1"] = ""                       # logo replaces the text wordmark
+            ws.add_image(img, "A1")
+        except Exception:
+            pass                                 # keep the text masthead
 
     ws["A2"] = title
     ws["A2"].font = Font(bold=True, size=16, color=NAVY)
@@ -524,8 +627,22 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
         s = re.sub(r"\[([^\]]+?)\]\([^)]+?\)", r"\1", s)
         return s
 
+    from reportlab.platypus import Image as RLImage
+    logo_path = find_logo()
+    masthead = None
+    if logo_path:
+        try:
+            from reportlab.lib.utils import ImageReader
+            iw, ih = ImageReader(logo_path).getSize()
+            h = 0.42 * inch
+            masthead = RLImage(logo_path, width=h * (iw / float(ih)), height=h)
+            masthead.hAlign = "LEFT"
+        except Exception:
+            masthead = None
+
     story = [
-        Paragraph(BRAND_NAME.upper(), styles["brand"]),
+        masthead if masthead else Paragraph(BRAND_NAME.upper(), styles["brand"]),
+        Spacer(1, 6) if masthead else Spacer(1, 0),
         Paragraph(inline_html(title), styles["title"]),
         HRFlowable(width="100%", thickness=1.5, color=gold,
                    spaceBefore=2, spaceAfter=6),
@@ -611,6 +728,8 @@ def build(fmt: str, text: str, title: str = None):
     fmt = (fmt or "").lower().strip()
     if fmt not in BUILDERS:
         raise ValueError(f"Unsupported format: {fmt}")
+    # Chat-only instructions must never reach the document
+    text = strip_meta(text)
     resolved_title = (title or "").strip() or derive_title(text)
     buffer = BUILDERS[fmt](text, resolved_title)
     return buffer, safe_filename(resolved_title, fmt), MIME_TYPES[fmt]
