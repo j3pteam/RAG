@@ -226,6 +226,32 @@ INDEX_HTML = r"""<!DOCTYPE html>
       width: 3px; background: var(--gold);
     }
     .typing { color: var(--muted); font-style: italic; }
+
+    /* Rendered markdown inside assistant replies */
+    .msg-body { white-space: normal; }
+    .msg-body > *:first-child { margin-top: 0; }
+    .msg-body > *:last-child { margin-bottom: 0; }
+    .msg-body p { margin: 0 0 0.75rem 0; }
+    .msg-body h3, .msg-body h4, .msg-body h5, .msg-body h6 {
+      margin: 1.15rem 0 0.5rem 0; color: var(--navy);
+      font-weight: 500; line-height: 1.35;
+    }
+    .msg-body h3 { font-size: 1.08rem; letter-spacing: 0.01em; }
+    .msg-body h4 { font-size: 0.98rem; }
+    .msg-body h5, .msg-body h6 { font-size: 0.92rem; color: var(--muted); }
+    .msg-body ul, .msg-body ol { margin: 0 0 0.75rem 0; padding-left: 1.35rem; }
+    .msg-body li { margin-bottom: 0.35rem; }
+    .msg-body li::marker { color: var(--gold); }
+    .msg-body strong { font-weight: 600; color: var(--navy); }
+    .msg-body code {
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 3px; padding: 0.08rem 0.32rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.88em;
+    }
+    .msg-body a { color: var(--navy); border-bottom: 1px solid var(--gold); text-decoration: none; }
+    .msg-body a:hover { color: var(--rust); }
+    .msg-body hr { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }
     .feedback {
       display: flex; align-items: center;
       gap: 0.5rem; margin-top: 0.6rem;
@@ -653,12 +679,93 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // Expose to addMessage so a new bot reply can auto-play when enabled
     window.__isAutoSpeakOn = () => autoSpeakEnabled;
 
+    // Minimal, safe markdown renderer for assistant replies. Escapes HTML
+    // first, then converts headings, lists, bold/italic and inline code so
+    // "## Cover Letter" displays as a heading instead of literal characters.
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+
+    function renderInline(s) {
+      return escapeHtml(s)
+        .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+        .replace(/(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)/g, "<em>$1</em>")
+        .replace(/`([^`]+?)`/g, "<code>$1</code>")
+        .replace(/\[([^\]]+?)\]\((https?:\/\/[^)\s]+?)\)/g,
+                 '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    }
+
+    function renderMarkdown(src) {
+      const lines = String(src || "").replace(/\r\n/g, "\n").split("\n");
+      let html = "";
+      let listType = null;      // "ul" | "ol" | null
+      let paraBuffer = [];
+
+      const flushPara = () => {
+        if (paraBuffer.length) {
+          html += "<p>" + renderInline(paraBuffer.join(" ")) + "</p>";
+          paraBuffer = [];
+        }
+      };
+      const closeList = () => {
+        if (listType) { html += `</${listType}>`; listType = null; }
+      };
+
+      for (const raw of lines) {
+        const line = raw.trim();
+
+        if (!line) { flushPara(); closeList(); continue; }
+
+        if (/^([-*_])\1{2,}$/.test(line)) {
+          flushPara(); closeList(); html += "<hr />"; continue;
+        }
+
+        let m = line.match(/^(#{1,6})\s+(.*)$/);
+        if (m) {
+          flushPara(); closeList();
+          const level = Math.min(m[1].length + 2, 6);   // # -> h3, keeps bubbles tidy
+          html += `<h${level}>${renderInline(m[2])}</h${level}>`;
+          continue;
+        }
+
+        m = line.match(/^[-*+]\s+(.*)$/);
+        if (m) {
+          flushPara();
+          if (listType !== "ul") { closeList(); html += "<ul>"; listType = "ul"; }
+          html += "<li>" + renderInline(m[1]) + "</li>";
+          continue;
+        }
+
+        m = line.match(/^\d+[.)]\s+(.*)$/);
+        if (m) {
+          flushPara();
+          if (listType !== "ol") { closeList(); html += "<ol>"; listType = "ol"; }
+          html += "<li>" + renderInline(m[1]) + "</li>";
+          continue;
+        }
+
+        closeList();
+        paraBuffer.push(line);
+      }
+      flushPara();
+      closeList();
+      return html;
+    }
+
     function addMessage(text, role, withFeedback = false, interactionId = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
       if (interactionId) div.dataset.interactionId = String(interactionId);
       const textNode = document.createElement("div");
-      textNode.textContent = text;
+      // Assistant replies get markdown formatting; user messages and the
+      // "Thinking…" placeholder stay as plain text.
+      if (role.startsWith("assistant") && !role.includes("typing")) {
+        textNode.className = "msg-body";
+        textNode.innerHTML = renderMarkdown(text);
+      } else {
+        textNode.textContent = text;
+      }
       div.appendChild(textNode);
       if (withFeedback) attachFeedback(div, text, interactionId);
       chat.appendChild(div);
@@ -1279,6 +1386,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
 # Chat routes
 # ---------------------------------------------------------------------------
 
+# Flask stores the session in a signed cookie. Browsers hard-cap cookies at
+# about 4 KB, and an oversized cookie is silently discarded — which wipes the
+# entire conversation. Signing and base64 add overhead, so we budget well under
+# that for the message payload itself.
+SESSION_HISTORY_BUDGET = 2600   # characters of message content
+SESSION_MSG_CAP = 1600          # max characters kept for any single message
+
+
+def _fit_history(messages: list) -> list:
+    """Trim conversation history so the session cookie stays under the browser limit.
+
+    Keeps the most recent turns intact and drops the oldest ones. If even the
+    newest message is over budget it's truncated rather than dropped, so a
+    follow-up like "now send that as Word" still has something to refer to.
+    """
+    trimmed = []
+    used = 0
+    for msg in reversed(messages):
+        content = msg.get("content")
+        if not isinstance(content, str):
+            # Multi-part (image) content is never persisted as-is
+            content = "[Attachment]"
+        if len(content) > SESSION_MSG_CAP:
+            content = content[:SESSION_MSG_CAP].rstrip() + "\n[… truncated …]"
+        if used + len(content) > SESSION_HISTORY_BUDGET:
+            if trimmed:
+                break
+            # Newest message alone exceeds the budget — keep a truncated head
+            content = content[:SESSION_HISTORY_BUDGET].rstrip() + "\n[… truncated …]"
+        trimmed.append({"role": msg.get("role", "user"), "content": content})
+        used += len(content)
+    trimmed.reverse()
+    return trimmed
+
+
 def retrieve_context_and_lessons(query: str) -> tuple:
     """Search knowledge base AND approved lessons for material relevant to the query.
 
@@ -1525,9 +1667,18 @@ def chat():
     full_user_content = user_input + attachment_context
 
     messages = session.get("messages", [])
-    # For history: store only the text portion so the session cookie doesn't
-    # bloat with base64 image data. Any images are visible to Claude this turn
-    # only; next turn will not have access unless the user re-attaches.
+
+    # Cookie-safe summary of this turn. Flask sessions are signed cookies with a
+    # hard ~4 KB browser limit — if we exceed it the cookie is silently dropped
+    # and the ENTIRE conversation history disappears. So attachment text (which
+    # can run to tens of thousands of characters) is sent to Claude for this turn
+    # only and never persisted to the session.
+    history_note = (user_input or "").strip()
+    if attachment_display_name:
+        history_note = (history_note + f"\n\n[Attached: {attachment_display_name}]").strip()
+    if not history_note:
+        history_note = "[Attachment]"
+
     if image_blocks:
         # Combine one or more image blocks with the text (including any
         # concatenated document context) into a single multi-part user message.
@@ -1535,16 +1686,15 @@ def chat():
         current_turn_content = list(image_blocks) + [
             {"type": "text", "text": text_for_this_turn},
         ]
-        # In-session history: keep a simple text note so history stays serializable
-        history_note = (user_input or "").strip()
-        if attachment_display_name:
-            note_label = attachment_display_name
-            history_note = (history_note + f"\n\n[Attached: {note_label}]").strip()
         messages_for_api = messages + [{"role": "user", "content": current_turn_content}]
-        messages.append({"role": "user", "content": history_note or f"[Attached: {attachment_display_name}]"})
+    elif attachment_context:
+        # Document or folder attached — Claude sees the full extracted text this
+        # turn; only the short note above is kept in the session.
+        messages_for_api = messages + [{"role": "user", "content": full_user_content}]
     else:
-        messages.append({"role": "user", "content": full_user_content})
-        messages_for_api = messages
+        messages_for_api = messages + [{"role": "user", "content": full_user_content}]
+
+    messages.append({"role": "user", "content": history_note})
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
@@ -1763,7 +1913,7 @@ def chat():
     assistant_text = assistant_text.strip()
 
     messages.append({"role": "assistant", "content": assistant_text})
-    session["messages"] = messages
+    session["messages"] = _fit_history(messages)
 
     # Auto-log every exchange to the DB (rating stays NULL until user gives feedback).
     # We log the visible parts only — the raw user text and the bot's reply.
