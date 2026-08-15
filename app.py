@@ -267,8 +267,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .ack-content h2 {
       margin: 0 0 1.1rem 0;
       font-size: 0.85rem; font-weight: 500;
-      letter-spacing: 0.16em; text-transform: uppercase;
-      color: var(--navy);
+      letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--navy); line-height: 1.5;
       padding-bottom: 0.65rem;
       border-bottom: 1px solid var(--line);
     }
@@ -625,28 +625,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span class="ack-tag">{{ cfg.persona_name }}</span>
       </div>
       <div class="ack-content">
-        <h2 id="ack-title">Before you begin</h2>
+        <h2 id="ack-title">Coaching App Release &amp; Acknowledgment</h2>
         <div id="ack-body" class="ack-text">
           <p>
-            {{ cfg.persona_name }} provides general information and reflection prompts
-            on leadership, team dynamics, and professional development. It is not a
-            licensed professional and does not know your full circumstances.
+            By checking the box below, I acknowledge that I am voluntarily using
+            the J3P Advisor and understand that the content, coaching and guidance
+            provided are for personal and professional development purposes only.
+            I understand that these activities are not medical, psychological,
+            legal, or other professional advice, and I am responsible for my own
+            decisions and actions.
           </p>
           <p>
-            Nothing here is legal, medical, psychological, mental health, or financial
-            advice, and using this tool does not create a professional or
-            clinician&ndash;patient relationship. For advice specific to your situation,
-            consult a qualified professional. If this is an emergency, contact your
-            local emergency services.
+            To the extent permitted by law, I release Residency Select LLC dba
+            J3P Health, its coaches, employees, and representatives from liability
+            arising from my voluntary use of the coaching app.
           </p>
         </div>
         <label class="ack-check" for="ack-checkbox">
           <input type="checkbox" id="ack-checkbox" />
-          <span>
-            I understand and acknowledge that {{ cfg.persona_name }} does not replace
-            legal, medical, psychological, or financial advice from a qualified
-            professional.
-          </span>
+          <span>I have read, understood, and agree to the above.</span>
         </label>
         <button type="button" id="ack-continue" disabled>Enter session</button>
         <p class="ack-foot">{{ cfg.footer_disclaimer }}</p>
@@ -733,7 +730,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // to the browsing session, so closing the tab and returning requires it
     // again. A reload mid-session won't re-prompt. Bump the key if the
     // disclaimer wording changes.
-    const ACK_KEY = "j3p_ack_v1";
+    const ACK_KEY = "j3p_ack_v2";
     (function initAckGate() {
       const overlay = document.getElementById("ack-overlay");
       const checkbox = document.getElementById("ack-checkbox");
@@ -877,18 +874,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
           refreshVoices();
         }, 250);
 
-        // iOS requires a gesture-originated speak() before any programmatic
-        // one is allowed. A zero-volume utterance on first interaction unlocks it.
+        // iOS requires a gesture-originated speak() before any programmatic one
+        // is allowed. Prime on first interaction with a whitespace utterance.
+        // Note: volume 0 does NOT reliably unlock WebKit, so this runs at full
+        // volume — a single space is inaudible either way.
         const prime = () => {
           if (primed) return;
           primed = true;
           try {
+            refreshVoices();   // iOS often populates the list only after a gesture
             const u = new SpeechSynthesisUtterance(" ");
-            u.volume = 0;
+            u.rate = 1; u.volume = 1;
+            if (preferred) u.voice = preferred;
             window.speechSynthesis.speak(u);
           } catch (e) { /* non-fatal */ }
         };
-        ["pointerdown", "touchstart", "keydown"].forEach(evt =>
+        ["pointerdown", "touchstart", "touchend", "click", "keydown"].forEach(evt =>
           window.addEventListener(evt, prime, { once: true, passive: true }));
 
         // Don't keep talking after the tab is closed or navigated away
@@ -989,8 +990,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         try { window.speechSynthesis.cancel(); } catch (e) {}
       }
 
-      function play(text, cbs) {
+      function play(text, cbs, opts) {
         if (!supported) return false;
+        opts = opts || {};
         callbacks = cbs || {};
         stop();                                   // clears any prior playback
         const body = String(text || "").trim();
@@ -1000,9 +1002,34 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const myToken = ++token;
         speaking = true; paused = false;
         startKeepalive();
-        // Some builds drop a speak() issued in the same tick as cancel()
-        setTimeout(() => speakChunk(myToken), isIOS ? 120 : 60);
         if (callbacks.onStart) callbacks.onStart();
+
+        // iOS Safari only permits speak() while still inside the user gesture
+        // that triggered it. Any setTimeout in between puts us outside that
+        // window and WebKit silently refuses. So when the call originates from
+        // a tap, fire the first chunk synchronously.
+        if (opts.fromGesture) {
+          speakChunk(myToken);
+        } else {
+          // Programmatic (auto-speak): rely on the earlier priming. The small
+          // delay avoids builds that drop a speak() issued right after cancel().
+          setTimeout(() => speakChunk(myToken), isIOS ? 120 : 60);
+        }
+
+        // Watchdog: if nothing is actually speaking shortly after we started,
+        // the platform refused the request. Surface it instead of leaving the
+        // button stuck in a "speaking" state forever.
+        setTimeout(() => {
+          if (myToken !== token) return;
+          if (!speaking) return;
+          let reallySpeaking = false;
+          try { reallySpeaking = window.speechSynthesis.speaking || window.speechSynthesis.pending; }
+          catch (e) {}
+          if (!reallySpeaking) {
+            speaking = false; stopKeepalive();
+            if (callbacks.onError) callbacks.onError("blocked");
+          }
+        }, 1200);
         return true;
       }
 
@@ -1392,8 +1419,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
               console.error("Speech error:", reason);
               resetSpeakUI();
               if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+              if (reason === "blocked" && speakLabel) {
+                // Most common cause on iPhone/iPad is the physical silent switch
+                speakLabel.textContent = J3PSpeech.isIOS ? "Check mute" : "Unavailable";
+                speakBtn.title = J3PSpeech.isIOS
+                  ? "No audio — check the side silent switch and volume, then try again"
+                  : "Speech is unavailable in this browser";
+                setTimeout(() => { if (speakLabel) speakLabel.textContent = "Speak"; }, 3200);
+              }
             },
-          });
+          }, { fromGesture: true });
           if (!ok) resetSpeakUI();
         });
       }
