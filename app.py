@@ -1230,9 +1230,87 @@ INDEX_HTML = r"""<!DOCTYPE html>
         catch (e) { return false; }
       }
 
+      // --- Curation: professional voices only, one per language ------------
+      // Platforms ship a lot of novelty and low-fidelity voices alongside the
+      // good ones. These are filtered out, then the best remaining voice for
+      // each language is kept so the menu stays short and every option is
+      // presentable to a client.
+
+      // Novelty / joke / legacy low-quality voices (mostly macOS and iOS)
+      const NOVELTY_VOICES = new RegExp("^(" + [
+        "albert", "bad news", "bahh", "bells", "boing", "bubbles", "cellos",
+        "deranged", "good news", "hysterical", "jester", "junior", "kathy",
+        "organ", "pipe organ", "princess", "ralph", "superstar", "trinoids",
+        "whisper", "wobble", "zarvox", "bruce", "fred", "agnes", "victoria",
+        "grandma", "grandpa", "rocko", "sandy", "shelley", "flo", "eddy", "reed",
+      ].join("|") + ")\\b", "i");
+
+      // Apple's professional-grade voices across languages
+      const APPLE_PRO = new RegExp("^(" + [
+        "samantha", "alex", "ava", "allison", "susan", "tom", "nicky", "aaron",
+        "serena", "kate", "oliver", "daniel", "karen", "moira", "fiona", "tessa",
+        "rishi", "veena", "zoe", "evan", "nathan", "joelle", "noelle", "isha",
+        "amelie", "audrey", "aurelie", "thomas", "chantal", "nicolas",
+        "anna", "petra", "markus", "yannick", "helena", "martin",
+        "monica", "paulina", "juan", "diego", "jorge", "marisol", "soledad",
+        "alice", "luca", "federica", "emma", "paola",
+        "kyoko", "otoya", "hattori", "o-ren",
+        "ting-ting", "sin-ji", "li-mu", "yu-shu", "meijia",
+        "yuna", "sora", "milena", "katya", "yuri",
+        "zosia", "krzysztof", "ellen", "xander", "nora", "alva", "klara",
+        "satu", "melina", "damayanti", "lekha", "carmit", "maged", "tarik",
+        "luciana", "joana", "catarina", "ioana", "laura", "lesya", "mariska",
+        "magnus", "sara", "kanya", "linh", "mai",
+      ].join("|") + ")\\b", "i");
+
+      function isProfessional(v) {
+        const name = v.name || "";
+        if (NOVELTY_VOICES.test(name)) return false;
+        // "Compact" variants are the low-bitrate fallbacks on Apple platforms
+        if (/compact|eloquence/i.test(name)) return false;
+        // Google and Microsoft ship uniformly presentable voices
+        if (/^(Google|Microsoft)\b/i.test(name)) return true;
+        if (APPLE_PRO.test(name)) return true;
+        return false;
+      }
+
+      // Higher score wins when two voices share a language
+      function voiceScore(v) {
+        let score = 0;
+        const name = (v.name || "").toLowerCase();
+        const idx = PREFERRED_VOICES.findIndex(
+          p => name === p.toLowerCase() || name.startsWith(p.toLowerCase()));
+        if (idx >= 0) score += 1000 - idx * 10;         // explicitly preferred
+        if (/natural|premium|enhanced|neural/i.test(v.name || "")) score += 60;
+        if (v.localService) score += 25;                // offline = no lag
+        if (/en-us/i.test(v.lang || "")) score += 15;   // house default
+        return score;
+      }
+
       function listVoices() {
         if (!voices.length) refreshVoices();
-        return voices.map(v => ({ name: v.name, lang: v.lang || "", local: !!v.localService }));
+        const pro = voices.filter(isProfessional);
+        // One entry per primary language subtag: en, fr, es, de …
+        const best = new Map();
+        for (const v of pro) {
+          const key = (v.lang || "und").toLowerCase().replace("_", "-").split("-")[0];
+          const current = best.get(key);
+          if (!current || voiceScore(v) > voiceScore(current)) best.set(key, v);
+        }
+        // Always include whatever is currently selected, even if curation
+        // would otherwise have dropped it (e.g. a previously saved choice).
+        if (preferred && ![...best.values()].some(v => v.name === preferred.name)) {
+          const key = (preferred.lang || "und").toLowerCase().split("-")[0];
+          if (!best.has(key)) best.set(key, preferred);
+        }
+        return [...best.values()]
+          .map(v => ({ name: v.name, lang: v.lang || "", local: !!v.localService }))
+          .sort((a, b) => {
+            // English first, then alphabetical by language
+            const ae = a.lang.toLowerCase().startsWith("en") ? 0 : 1;
+            const be = b.lang.toLowerCase().startsWith("en") ? 0 : 1;
+            return ae - be || a.lang.localeCompare(b.lang);
+          });
       }
       function setVoice(name) {
         const hit = voices.find(v => v.name === name);
@@ -1286,37 +1364,56 @@ INDEX_HTML = r"""<!DOCTYPE html>
         return;
       }
 
+      // Map a language tag to a readable name, so the menu reads
+      // "English — Samantha" rather than "Samantha (en-US)".
+      let langNamer = null;
+      try {
+        if (typeof Intl !== "undefined" && Intl.DisplayNames) {
+          langNamer = new Intl.DisplayNames(["en"], { type: "language" });
+        }
+      } catch (e) { /* older browser — fall back to the raw tag */ }
+
+      function languageLabel(tag) {
+        const base = (tag || "").replace("_", "-").split("-")[0];
+        if (!base) return "Other";
+        if (langNamer) {
+          try {
+            const n = langNamer.of(base);
+            if (n && n !== base) return n.charAt(0).toUpperCase() + n.slice(1);
+          } catch (e) {}
+        }
+        return base.toUpperCase();
+      }
+
       function populate() {
         const all = J3PSpeech.listVoices();
-        if (!all.length) {
-          select.innerHTML = '<option value="">No voices available</option>';
-          select.disabled = true;
-          preview.disabled = true;
+        // One curated voice per language — if that leaves nothing to choose
+        // between, the picker has no purpose, so hide it entirely.
+        if (all.length < 2) {
+          wrap.style.display = "none";
+          menu.classList.remove("open");
           return;
         }
+        wrap.style.display = "";
         select.disabled = false;
         preview.disabled = false;
 
-        const isEn = v => (v.lang || "").toLowerCase().startsWith("en");
-        const english = all.filter(isEn);
-        const others = all.filter(v => !isEn(v));
-        const label = v => `${v.name}${v.lang ? " (" + v.lang + ")" : ""}`;
+        // Tidy platform-verbose names:
+        //   "Microsoft Aria Online (Natural) - English (United States)" -> "Microsoft Aria"
+        const prettyName = (n) => (n || "")
+          .split(" - ")[0]
+          .replace(/\s*online\s*/i, " ")
+          .replace(/\s*\((natural|premium|enhanced|compact)\)\s*/i, " ")
+          .replace(/\s{2,}/g, " ")
+          .trim();
 
-        let html = "";
-        if (english.length) {
-          html += '<optgroup label="English">' +
-            english.map(v => `<option value="${v.name.replace(/"/g, "&quot;")}">${label(v)}</option>`).join("") +
-            "</optgroup>";
-        }
-        if (others.length) {
-          html += '<optgroup label="Other languages">' +
-            others.map(v => `<option value="${v.name.replace(/"/g, "&quot;")}">${label(v)}</option>`).join("") +
-            "</optgroup>";
-        }
-        select.innerHTML = html;
+        select.innerHTML = all.map(v => {
+          const safe = v.name.replace(/"/g, "&quot;");   // value must stay exact
+          return `<option value="${safe}">${languageLabel(v.lang)} — ${prettyName(v.name)}</option>`;
+        }).join("");
 
         const current = J3PSpeech.voiceName();
-        if (current) select.value = current;
+        if (current && all.some(v => v.name === current)) select.value = current;
       }
 
       // Voices load asynchronously on Chrome/Android, so wait for them
@@ -1485,6 +1582,65 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (e.target === overlay) closeGate();
       });
     })();
+
+    // Generates the file server-side and hands it to the browser. Shared by
+    // the SAVE menu and by automatic export when the user asked for a format.
+    async function downloadExport(fmt, text) {
+      const resp = await fetch(`/export/${fmt}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: text, title: "" }),
+      });
+      if (!resp.ok) {
+        let msg = `Export failed (${resp.status})`;
+        try { const j = await resp.json(); if (j.error) msg = j.error; } catch (e) {}
+        throw new Error(msg);
+      }
+      // Prefer the server-generated filename from Content-Disposition
+      let filename = `j3p_response.${fmt}`;
+      const cd = resp.headers.get("Content-Disposition") || "";
+      const match = cd.match(/filename="?([^"]+)"?/);
+      if (match) filename = match[1];
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      return filename;
+    }
+
+    const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
+
+    // Builds the requested file and downloads it, showing status on the
+    // message's own SAVE button so the user can see what happened.
+    async function autoExport(msgDiv, fmt, text) {
+      const btn = msgDiv.querySelector(".download-btn");
+      const label = btn ? btn.querySelector(".download-label") : null;
+      const pretty = FORMAT_NAMES[fmt] || fmt.toUpperCase();
+      if (btn) btn.classList.add("copied");
+      if (label) label.textContent = "Building\u2026";
+      try {
+        await downloadExport(fmt, text);
+        if (label) label.textContent = pretty + " saved";
+        setTimeout(() => {
+          if (btn) btn.classList.remove("copied");
+          if (label) label.textContent = "Save";
+        }, 4000);
+      } catch (err) {
+        console.error("Auto-export failed:", err);
+        // Downloads can be blocked by the browser — leave a clear manual path
+        if (label) label.textContent = "Tap to save";
+        if (btn) {
+          btn.classList.remove("copied");
+          btn.title = `Couldn't download automatically — click to save as ${pretty}`;
+        }
+      }
+    }
 
     // Minimal, safe markdown renderer for assistant replies. Escapes HTML
     // first, then converts headings, lists, bold/italic and inline code so
@@ -1870,32 +2026,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           downloadBtn.classList.add("copied");
           downloadLabel.textContent = "Building\u2026";
           try {
-            const resp = await fetch(`/export/${fmt}`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: replyText, title: "" }),
-            });
-            if (!resp.ok) {
-              let msg = `Export failed (${resp.status})`;
-              try { const j = await resp.json(); if (j.error) msg = j.error; } catch (e) {}
-              throw new Error(msg);
-            }
-            // Pull the server-generated filename out of Content-Disposition
-            let filename = `j3p_response.${fmt}`;
-            const cd = resp.headers.get("Content-Disposition") || "";
-            const match = cd.match(/filename="?([^"]+)"?/);
-            if (match) filename = match[1];
-
-            const blob = await resp.blob();
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            setTimeout(() => URL.revokeObjectURL(url), 4000);
-
+            await downloadExport(fmt, replyText);
             downloadLabel.textContent = "Saved";
           } catch (err) {
             console.error("Export failed:", err);
@@ -2145,7 +2276,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
         const data = await res.json();
         thinking.remove();
-        if (data.reply) addMessage(data.reply, "assistant", true, data.interaction_id || null);
+        if (data.reply) {
+          const msgDiv = addMessage(data.reply, "assistant", true, data.interaction_id || null);
+          // The user asked for a specific file — build and download it now
+          // instead of making them hunt for the SAVE button.
+          if (data.export_format) {
+            autoExport(msgDiv, data.export_format, data.reply);
+          }
+        }
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
       } catch (err) {
         thinking.remove();
@@ -2215,6 +2353,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
 # that for the message payload itself.
 SESSION_HISTORY_BUDGET = 2600   # characters of message content
 SESSION_MSG_CAP = 1600          # max characters kept for any single message
+
+
+# Phrases that mean "give me the actual file", mapped to an export format.
+# When one of these appears in the user's message the file is generated and
+# downloaded automatically rather than waiting for a SAVE click.
+_EXPORT_PATTERNS = [
+    ("pptx", r"\b(powerpoint|power point|pptx|slide deck|slides?|deck|presentation)\b"),
+    ("xlsx", r"\b(excel|xlsx|spreadsheet|workbook)\b"),
+    ("pdf",  r"\bpdf\b"),
+    ("docx", r"\b(word|docx|word doc(?:ument)?|\.doc)\b"),
+]
+
+# Only auto-export when the user is actually asking for something to be made
+# or delivered — not when they merely mention the word in passing.
+_EXPORT_INTENT = (
+    r"(creat|mak|writ|draft|build|generat|produc|prepar|export|download|"
+    r"save|send|give|provide|turn .* into|convert|put .* in|as an? |in a |"
+    r"i need|i want|can you)"
+)
+
+
+def detect_export_format(text: str):
+    """Return 'docx' | 'pptx' | 'xlsx' | 'pdf' if the user asked for that file."""
+    import re as _r
+    if not text:
+        return None
+    low = text.lower()
+    if not _r.search(_EXPORT_INTENT, low):
+        return None
+    for fmt, pattern in _EXPORT_PATTERNS:
+        if _r.search(pattern, low):
+            return fmt
+    return None
 
 
 def _fit_history(messages: list) -> list:
@@ -2679,8 +2850,24 @@ def chat():
         "numbered or bulleted lists where warranted — these convert into real "
         "Word heading styles, PowerPoint slides, and PDF sections. For a slide "
         "deck, use one heading per slide with a few bullets beneath each.\n\n"
-        "5. CLOSE BRIEFLY. End with one short line telling the user to click SAVE "
-        "below and choose their format. One line only.\n"
+        "5. DRAFT FIRST, ASK NEVER. Do NOT open with clarifying questions before "
+        "producing a deliverable. If purpose, audience, or details are unstated, "
+        "make reasonable assumptions from the conversation, any attached "
+        "documents, and the person's evident role — then WRITE THE FULL DRAFT. "
+        "A concrete draft they can react to is far more useful than a "
+        "questionnaire. You may note your key assumptions in one short line at "
+        "the end and offer to revise. Asking a list of questions instead of "
+        "producing the document is a failure to follow these instructions.\n\n"
+        "6. SLIDE DECKS. For a deck, write the actual slide content: one '## ' "
+        "heading per slide, 3-6 short bullets beneath each. Aim for 8-14 slides "
+        "unless told otherwise. Do not describe what the deck would contain — "
+        "write the slides themselves.\n\n"
+        "7. THE FILE IS AUTOMATIC. When someone asks for a specific format, the "
+        "file is generated and downloaded for them the moment you reply. Do not "
+        "tell them you are unable to attach a file, and do not instruct them to "
+        "copy your text into Word or PowerPoint themselves. You may close with "
+        "one short line noting the file is downloading and that SAVE below can "
+        "re-download it in any format. One line only.\n"
     )
 
     if context:
@@ -2787,7 +2974,15 @@ def chat():
     except Exception as e:
         app.logger.error(f"log_interaction failed: {e}")
 
-    return jsonify({"reply": assistant_text, "interaction_id": interaction_id})
+    # If the user asked for a specific file format, tell the client so it can
+    # generate and download it without a further click.
+    export_format = detect_export_format(user_input)
+
+    return jsonify({
+        "reply": assistant_text,
+        "interaction_id": interaction_id,
+        "export_format": export_format,
+    })
 
 
 @app.route("/reset", methods=["POST"])
