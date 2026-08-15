@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
@@ -660,13 +662,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
     </div>
-    <button id="autospeak-btn" aria-label="Toggle listen mode" title="Listen — read every response aloud">
+    <button id="autospeak-btn" aria-label="Toggle speak mode" title="Speak — read every response aloud">
       <svg class="autospeak-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
         <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
         <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
       </svg>
-      <span class="autospeak-label">Listen</span>
+      <span class="autospeak-label">Speak</span>
     </button>
     <button id="reset-btn" aria-label="Start a new conversation" title="New conversation">
       <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -830,10 +832,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (!autoSpeakBtn) return;
       if (autoSpeakEnabled) {
         autoSpeakBtn.classList.add("on");
-        autoSpeakBtn.title = "Listen is ON — every response is read aloud. Click to turn off";
+        autoSpeakBtn.title = "Speak is ON — every response is read aloud. Click to turn off";
       } else {
         autoSpeakBtn.classList.remove("on");
-        autoSpeakBtn.title = "Listen is OFF — click to have every response read aloud";
+        autoSpeakBtn.title = "Speak is OFF — click to have every response read aloud";
       }
     }
     refreshAutoSpeakUI();
