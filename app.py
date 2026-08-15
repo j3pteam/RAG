@@ -225,10 +225,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       content: ""; position: absolute; left: 0; top: 0; bottom: 0;
       width: 3px; background: var(--gold);
     }
-    /* Acknowledgment gate — shown before the chat can be used */
+    /* Acknowledgment gate — shown at the start of every session */
     .ack-overlay {
       position: fixed; inset: 0; z-index: 100;
-      background: rgba(39, 51, 74, 0.72);
+      background: rgba(39, 51, 74, 0.78);
       backdrop-filter: blur(3px);
       display: flex; align-items: center; justify-content: center;
       padding: 1.25rem;
@@ -236,37 +236,58 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .ack-overlay[hidden] { display: none; }
     .ack-box {
       background: var(--paper-2); color: var(--text);
-      border-top: 3px solid var(--gold);
-      border-radius: 4px; box-shadow: 0 18px 50px rgba(39, 51, 74, 0.3);
-      max-width: 540px; width: 100%;
-      max-height: 88vh; overflow-y: auto;
-      padding: 2rem 2.25rem 1.75rem;
+      border-radius: 4px; box-shadow: 0 18px 50px rgba(39, 51, 74, 0.34);
+      max-width: 560px; width: 100%;
+      max-height: 90vh; overflow-y: auto;
       animation: ackIn 0.28s ease-out;
     }
     @keyframes ackIn {
       from { opacity: 0; transform: translateY(10px); }
       to   { opacity: 1; transform: translateY(0); }
     }
-    .ack-brand {
-      font-size: 0.7rem; letter-spacing: 0.2em; text-transform: uppercase;
-      color: var(--gold); margin-bottom: 0.6rem;
+    /* Header lockup mirrors the main app header */
+    .ack-head {
+      background: var(--navy);
+      border-bottom: 2px solid var(--gold);
+      border-radius: 4px 4px 0 0;
+      padding: 1rem 1.75rem;
+      display: flex; align-items: center; gap: 1rem;
     }
-    .ack-box h2 {
-      margin: 0 0 1rem 0; font-size: 1.25rem; font-weight: 500;
-      color: var(--navy); letter-spacing: 0.01em;
+    .ack-logo { height: 46px; width: auto; display: block; flex-shrink: 0; }
+    .ack-divider {
+      width: 1px; height: 30px; flex-shrink: 0;
+      background: rgba(210, 188, 141, 0.35);
     }
-    .ack-text p { margin: 0 0 0.85rem 0; font-size: 0.92rem; line-height: 1.6; }
+    .ack-tag {
+      font-size: 0.8rem; letter-spacing: 0.22em;
+      text-transform: uppercase; color: var(--gold);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .ack-content { padding: 1.75rem 2rem 1.5rem; }
+    .ack-content h2 {
+      margin: 0 0 1.1rem 0;
+      font-size: 0.85rem; font-weight: 500;
+      letter-spacing: 0.16em; text-transform: uppercase;
+      color: var(--navy);
+      padding-bottom: 0.65rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .ack-text p { margin: 0 0 0.85rem 0; font-size: 0.92rem; line-height: 1.65; }
+    .ack-text p:last-child { margin-bottom: 0; }
     .ack-check {
-      display: flex; align-items: flex-start; gap: 0.65rem;
-      background: var(--paper); border: 1px solid var(--line);
-      border-radius: 4px; padding: 0.85rem 1rem;
-      margin: 1.1rem 0 1.25rem; cursor: pointer;
-      font-size: 0.88rem; line-height: 1.5;
-      transition: border-color 0.15s ease;
+      display: flex; align-items: flex-start; gap: 0.7rem;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--gold);
+      border-radius: 2px;
+      padding: 0.9rem 1rem;
+      margin: 1.25rem 0; cursor: pointer;
+      font-size: 0.88rem; line-height: 1.55;
+      transition: border-color 0.18s ease;
     }
     .ack-check:hover { border-color: var(--gold); }
     .ack-check input {
-      margin: 0.2rem 0 0 0; width: 17px; height: 17px;
+      margin: 0.18rem 0 0 0; width: 17px; height: 17px;
       accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
     }
     #ack-continue {
@@ -279,11 +300,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     #ack-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
     #ack-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+    .ack-foot {
+      margin: 1.1rem 0 0 0; text-align: center;
+      font-size: 0.62rem; color: var(--muted);
+      letter-spacing: 0.14em; text-transform: uppercase; line-height: 1.7;
+    }
     @media (max-width: 640px) {
-      .ack-box { padding: 1.5rem 1.35rem 1.35rem; }
-      .ack-box h2 { font-size: 1.1rem; }
+      .ack-head { padding: 0.8rem 1.1rem; gap: 0.7rem; }
+      .ack-logo { height: 36px; }
+      .ack-divider { height: 24px; }
+      .ack-tag { font-size: 0.68rem; letter-spacing: 0.18em; }
+      .ack-content { padding: 1.35rem 1.25rem 1.25rem; }
       .ack-text p { font-size: 0.88rem; }
     }
+
+    .typing { color: var(--muted); font-style: italic; }
 
     .typing { color: var(--muted); font-style: italic; }
 
@@ -588,31 +619,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div id="ack-overlay" class="ack-overlay" role="dialog" aria-modal="true"
        aria-labelledby="ack-title" aria-describedby="ack-body" hidden>
     <div class="ack-box">
-      <div class="ack-brand">{{ cfg.persona_name }}</div>
-      <h2 id="ack-title">Before you begin</h2>
-      <div id="ack-body" class="ack-text">
-        <p>
-          {{ cfg.persona_name }} provides general information and reflection prompts
-          on leadership, team dynamics, and professional development. It is not a
-          licensed professional and does not know your full circumstances.
-        </p>
-        <p>
-          Nothing here is legal, medical, psychological, mental health, or financial
-          advice, and using this tool does not create a professional or
-          clinician&ndash;patient relationship. For advice specific to your situation,
-          consult a qualified professional. If this is an emergency, contact your
-          local emergency services.
-        </p>
+      <div class="ack-head">
+        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="ack-logo" />
+        <span class="ack-divider"></span>
+        <span class="ack-tag">{{ cfg.persona_name }}</span>
       </div>
-      <label class="ack-check" for="ack-checkbox">
-        <input type="checkbox" id="ack-checkbox" />
-        <span>
-          I understand and acknowledge that {{ cfg.persona_name }} does not replace
-          legal, medical, psychological, or financial advice from a qualified
-          professional.
-        </span>
-      </label>
-      <button type="button" id="ack-continue" disabled>Continue</button>
+      <div class="ack-content">
+        <h2 id="ack-title">Before you begin</h2>
+        <div id="ack-body" class="ack-text">
+          <p>
+            {{ cfg.persona_name }} provides general information and reflection prompts
+            on leadership, team dynamics, and professional development. It is not a
+            licensed professional and does not know your full circumstances.
+          </p>
+          <p>
+            Nothing here is legal, medical, psychological, mental health, or financial
+            advice, and using this tool does not create a professional or
+            clinician&ndash;patient relationship. For advice specific to your situation,
+            consult a qualified professional. If this is an emergency, contact your
+            local emergency services.
+          </p>
+        </div>
+        <label class="ack-check" for="ack-checkbox">
+          <input type="checkbox" id="ack-checkbox" />
+          <span>
+            I understand and acknowledge that {{ cfg.persona_name }} does not replace
+            legal, medical, psychological, or financial advice from a qualified
+            professional.
+          </span>
+        </label>
+        <button type="button" id="ack-continue" disabled>Enter session</button>
+        <p class="ack-foot">{{ cfg.footer_disclaimer }}</p>
+      </div>
     </div>
   </div>
 
@@ -689,10 +727,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chat = document.getElementById("chat");
 
     // -------------------------------------------------------------
-    // Acknowledgment gate — must be accepted before the chat is usable
+    // Acknowledgment gate — required at the start of every session
     // -------------------------------------------------------------
-    // Bump this key if the disclaimer wording changes and everyone should
-    // be asked to acknowledge the new version.
+    // sessionStorage (not localStorage) is deliberate: acknowledgment is scoped
+    // to the browsing session, so closing the tab and returning requires it
+    // again. A reload mid-session won't re-prompt. Bump the key if the
+    // disclaimer wording changes.
     const ACK_KEY = "j3p_ack_v1";
     (function initAckGate() {
       const overlay = document.getElementById("ack-overlay");
@@ -702,10 +742,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
       let alreadyAcked = false;
       try {
-        alreadyAcked = !!localStorage.getItem(ACK_KEY);
+        alreadyAcked = !!sessionStorage.getItem(ACK_KEY);
       } catch (e) {
-        // localStorage blocked (private mode / strict settings) — show the
-        // gate every visit rather than silently skipping it.
+        // Storage blocked (private mode / strict settings) — show the gate
+        // rather than silently skipping it.
         alreadyAcked = false;
       }
       if (alreadyAcked) return;
@@ -724,8 +764,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       continueBtn.addEventListener("click", () => {
         if (!checkbox.checked) return;
         try {
-          localStorage.setItem(ACK_KEY, new Date().toISOString());
-        } catch (e) { /* not persistable — gate will show again next visit */ }
+          sessionStorage.setItem(ACK_KEY, new Date().toISOString());
+        } catch (e) { /* not persistable — gate will show again */ }
         overlay.hidden = true;
         if (composer) composer.removeAttribute("aria-hidden");
         const input = document.getElementById("message");
