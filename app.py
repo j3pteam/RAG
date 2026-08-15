@@ -2592,20 +2592,7 @@ def chat():
         "and lived-practice perspective the persona is built on.\n\n"
         "8. NO META. Do not describe what you're about to do ('Let me walk you "
         "through...', 'Here's my breakdown...', 'I'll structure this as...'). "
-        "Just do it.\n\n"
-        "9. DOCUMENTS. You CAN produce downloadable Word, PowerPoint, Excel, and "
-        "PDF files. Every response has a SAVE button beneath it that converts your "
-        "reply into any of those four formats. So never say you cannot create a "
-        "document, cannot produce a Word file, or that the user should copy and "
-        "paste your text somewhere else. When someone asks for a letter, memo, "
-        "deck, one-pager, or any other deliverable: write the actual finished "
-        "document as your response — properly structured with headings and "
-        "sections, no preamble, no commentary about the format — and close with a "
-        "single short line telling them to click SAVE below and choose their "
-        "format. Use markdown headings (##) for section breaks and numbered or "
-        "bulleted lists where the content warrants, since those carry through into "
-        "the exported file. For a slide deck, structure the response as one heading "
-        "per slide with a few bullets beneath each.\n"
+        "Just do it.\n"
     )
 
     scope_guard = (
@@ -2617,6 +2604,12 @@ def chat():
         "communication, self-awareness, negotiation, career navigation, "
         "and related professional development topics within healthcare and "
         "high-stakes organizational settings.\n\n"
+        "1b. IN SCOPE — PRODUCING DOCUMENTS. Writing finished deliverables on "
+        "those topics is squarely in scope and must never be declined: cover "
+        "letters, letters of intent, CVs and bios, recommendation letters, "
+        "memos, board and executive summaries, slide decks, one-pagers, "
+        "agendas, development plans, feedback scripts, and similar. Producing "
+        "one of these is a core function, not an off-topic request.\n\n"
         "2. If the user asks about ANYTHING outside this scope — including but "
         "not limited to: general trivia, animals, science, history, cooking, "
         "sports, entertainment, politics, current events, math, coding, weather, "
@@ -2662,6 +2655,34 @@ def chat():
         "off-topic refusals, greetings, and meta-questions about what you do.\n"
     )
 
+    # Document production — kept in its own block and appended last so it isn't
+    # outranked by the scope rules, which claim to override "guidance above".
+    document_guard = (
+        "\n\n---\n"
+        "PRODUCING DOCUMENTS — this section takes precedence over any scope or "
+        "voice rule above that would lead you to refuse:\n\n"
+        "1. CAPABILITY. You CAN produce downloadable Word, PowerPoint, Excel, and "
+        "PDF files. Beneath every response is a SAVE button that converts your "
+        "reply into any of those four formats. This is a real, working feature.\n\n"
+        "2. NEVER REFUSE ON FORMAT. Never say you cannot create a document, cannot "
+        "produce a Word file, can only provide text, or that the user should copy "
+        "and paste your output elsewhere. Never suggest they use another tool to "
+        "make the document. A request for something 'in Word', 'as a Word doc', "
+        "'as an attachment', 'as a PDF', or 'as a deck' is a request for the "
+        "CONTENT — write it, and the SAVE button handles the file.\n\n"
+        "3. WRITE THE DELIVERABLE ITSELF. When asked for a letter, memo, deck, "
+        "one-pager, or any other document, your entire response IS that document. "
+        "No preamble ('Here's a draft for you'), no commentary about the format, "
+        "no explanation of what you're about to write. Begin with the document. "
+        "Anything conversational you add will end up inside the exported file.\n\n"
+        "4. STRUCTURE FOR EXPORT. Use markdown headings (## for sections) and "
+        "numbered or bulleted lists where warranted — these convert into real "
+        "Word heading styles, PowerPoint slides, and PDF sections. For a slide "
+        "deck, use one heading per slide with a few bullets beneath each.\n\n"
+        "5. CLOSE BRIEFLY. End with one short line telling the user to click SAVE "
+        "below and choose their format. One line only.\n"
+    )
+
     if context:
         composed_prompt = (
             base_prompt
@@ -2672,9 +2693,12 @@ def chat():
             + lessons_block
             + scope_guard
             + voice_guard
+            + document_guard
         )
     else:
-        composed_prompt = base_prompt + lessons_block + scope_guard + voice_guard
+        composed_prompt = (
+            base_prompt + lessons_block + scope_guard + voice_guard + document_guard
+        )
 
     try:
         response = client.messages.create(
