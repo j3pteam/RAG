@@ -2374,6 +2374,43 @@ _EXPORT_INTENT = (
 )
 
 
+def looks_like_document(text: str) -> bool:
+    """True if the reply is an actual deliverable rather than clarifying questions.
+
+    A document has structure (headings, a salutation, or real length) and does
+    not read as a list of questions back to the user.
+    """
+    import re as _r
+    if not text:
+        return False
+    body = text.strip()
+
+    # Structural signals of a real document
+    has_headings = bool(_r.search(r"^#{1,6}\s+\S", body, _r.M))
+    has_salutation = bool(_r.search(r"^\s*(dear|to the|re:)\b", body, _r.M | _r.I))
+    is_long = len(body) > 1400
+
+    # Interrogation signals
+    questions = body.count("?")
+    asks_upfront = bool(_r.search(
+        r"(before i (can |could )?(start|begin|draft|write|build)|"
+        r"i need (a few|some|the following)|"
+        r"a few (quick )?(questions|answers)|"
+        r"(could|can) you (tell|share|confirm|let me know)|"
+        r"to (build|write|draft|create) (you )?a|"
+        r"what (is|are) (the|your)\b)", body, _r.I))
+    mostly_questions = questions >= 3 and len(body) < 2500
+
+    if has_headings or has_salutation or is_long:
+        # Even a structured reply is an interrogation if it opens by asking
+        if asks_upfront and questions >= 2 and len(body) < 1800:
+            return False
+        return True
+    if asks_upfront or mostly_questions or body.rstrip().endswith("?"):
+        return False
+    return len(body) > 700
+
+
 def detect_export_format(text: str):
     """Return 'docx' | 'pptx' | 'xlsx' | 'pdf' if the user asked for that file."""
     import re as _r
@@ -2908,6 +2945,64 @@ def chat():
     assistant_text = next(
         (block.text for block in response.content if block.type == "text"), ""
     )
+
+    # ---------------------------------------------------------------
+    # Deliverable enforcement
+    # ---------------------------------------------------------------
+    # The user asked for a file. If the model came back with clarifying
+    # questions instead of the document, the download would contain those
+    # questions. Rather than rely on the system prompt alone, retry once with
+    # an explicit instruction to produce the document now. One retry only.
+    requested_format = detect_export_format(user_input)
+    if requested_format and not looks_like_document(assistant_text):
+        app.logger.info(
+            f"Deliverable enforcement: retrying for {requested_format} "
+            f"(first reply looked like clarifying questions)"
+        )
+        force_note = (
+            "\n\n[SYSTEM DIRECTIVE — OVERRIDES ALL PRIOR GUIDANCE] "
+            "Your previous reply asked questions instead of producing the "
+            "deliverable. The user has already requested the finished document "
+            "and it is being converted into a file automatically the moment you "
+            "reply. Output the COMPLETE document now, in full. Do not ask any "
+            "questions. Do not explain what you are about to do. Make reasonable "
+            "assumptions from the conversation and any attached material, and "
+            "note those assumptions in a single short line at the very end. "
+        )
+        if requested_format == "pptx":
+            force_note += (
+                "Format it as a slide deck: one '## ' heading per slide with "
+                "3-6 short bullets beneath each, 8-14 slides."
+            )
+        else:
+            force_note += (
+                "Use '## ' headings for sections and lists where appropriate."
+            )
+        try:
+            retry_messages = messages_for_api + [
+                {"role": "assistant", "content": assistant_text},
+                {"role": "user", "content": force_note},
+            ]
+            retry = client.messages.create(
+                model=CONFIG["model"],
+                max_tokens=CONFIG["max_tokens"],
+                system=[{
+                    "type": "text",
+                    "text": composed_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }],
+                messages=retry_messages,
+            )
+            retry_text = next(
+                (b.text for b in retry.content if b.type == "text"), ""
+            ).strip()
+            if retry_text and looks_like_document(retry_text):
+                assistant_text = retry_text
+            elif retry_text and len(retry_text) > len(assistant_text):
+                # Not obviously a document, but more substantive than questions
+                assistant_text = retry_text
+        except Exception as e:
+            app.logger.error(f"Deliverable retry failed: {e}")
 
     # Defensive scrubber: replace any forbidden brand names if the model slips them through.
     # The system prompt instructs Claude not to use these, but we sanitize as backup.
