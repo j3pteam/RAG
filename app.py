@@ -240,6 +240,50 @@ INDEX_HTML = r"""<!DOCTYPE html>
       background: var(--gold);
       color: var(--navy);
     }
+    /* Voice picker — uses the device's own voices, so no service cost */
+    .voice-wrap { position: relative; display: inline-flex; align-items: center; flex-shrink: 0; }
+    .voice-menu {
+      position: absolute; top: calc(100% + 10px); right: 0;
+      background: var(--paper-2); color: var(--text);
+      border: 1px solid var(--line); border-top: 2px solid var(--gold);
+      border-radius: 4px; box-shadow: 0 12px 34px rgba(39, 51, 74, 0.26);
+      padding: 0.9rem 1rem 0.85rem; min-width: 268px;
+      display: none; z-index: 60; text-align: left;
+    }
+    .voice-menu.open { display: block; }
+    .voice-row { margin-bottom: 0.8rem; }
+    .voice-row label {
+      display: block; margin-bottom: 0.35rem;
+      font-size: 0.64rem; letter-spacing: 0.14em;
+      text-transform: uppercase; color: var(--muted);
+    }
+    .voice-menu select {
+      width: 100%; padding: 0.5rem 0.6rem;
+      border: 1px solid var(--line); border-radius: 2px;
+      background: var(--paper); color: var(--text);
+      font-family: inherit; font-size: 0.84rem; cursor: pointer;
+    }
+    .voice-menu select:focus { outline: none; border-color: var(--gold); }
+    .voice-menu input[type="range"] {
+      width: 100%; accent-color: var(--navy); cursor: pointer; margin: 0;
+    }
+    header .voice-preview {
+      width: 100%; margin: 0.1rem 0 0 0;
+      background: var(--navy); color: var(--gold);
+      border: 1px solid var(--navy); border-radius: 2px;
+      padding: 0.55rem 0.8rem; font-size: 0.68rem;
+      letter-spacing: 0.14em; text-transform: uppercase;
+      display: block; text-align: center;
+    }
+    header .voice-preview:hover { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+    .voice-note {
+      margin: 0.6rem 0 0 0; font-size: 0.66rem; line-height: 1.45;
+      color: var(--muted); letter-spacing: 0; text-transform: none;
+    }
+    @media (max-width: 640px) {
+      .voice-menu { min-width: 240px; right: -40px; }
+    }
+
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
     .msg {
@@ -685,6 +729,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .reset-label { display: none; }
       .reset-icon { display: inline-block; }
       .autospeak-label { display: none; }
+      .voice-label { display: none; }
       header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
                       display: inline-flex; align-items: center; justify-content: center; }
       /* Hide action button text labels — keep icons only */
@@ -754,6 +799,32 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </svg>
       <span class="autospeak-label">Speak</span>
     </button>
+    <div class="voice-wrap">
+      <button id="voice-btn" aria-label="Voice settings" aria-haspopup="true"
+              title="Choose the reading voice and speed">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/>
+          <line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/>
+          <line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/>
+          <line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/>
+          <line x1="17" y1="16" x2="23" y2="16"/>
+        </svg>
+        <span class="voice-label">Voice</span>
+      </button>
+      <div class="voice-menu" id="voice-menu" role="menu">
+        <div class="voice-row">
+          <label for="voice-select">Reading voice</label>
+          <select id="voice-select"></select>
+        </div>
+        <div class="voice-row">
+          <label for="rate-range">Speed <span id="rate-val">1.0&times;</span></label>
+          <input type="range" id="rate-range" min="0.7" max="1.4" step="0.1" value="1" />
+        </div>
+        <button type="button" id="voice-preview" class="voice-preview">Preview voice</button>
+        <p class="voice-note">Uses the voices installed on this device.</p>
+      </div>
+    </div>
     <button id="reset-btn" aria-label="Start a new conversation" title="New conversation">
       <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 5v14M5 12h14"/>
@@ -947,10 +1018,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
       let speaking = false;
       let paused = false;
 
+      // User preferences (free — these are the voices already on the device)
+      let savedVoiceName = null;
+      let rate = 1.0;
+      try {
+        savedVoiceName = localStorage.getItem("j3p_voice") || null;
+        const r = parseFloat(localStorage.getItem("j3p_rate"));
+        if (!isNaN(r) && r >= 0.6 && r <= 1.6) rate = r;
+      } catch (e) { /* storage blocked — fall back to defaults */ }
+
       function refreshVoices() {
         if (!supported) return;
         voices = window.speechSynthesis.getVoices() || [];
         if (!voices.length) return;
+        // An explicit user choice always wins over the automatic pick
+        if (savedVoiceName) {
+          const chosen = voices.find(v => v.name === savedVoiceName);
+          if (chosen) { preferred = chosen; return; }
+        }
         for (const name of PREFERRED_VOICES) {
           const hit = voices.find(v =>
             v.name === name ||
@@ -1057,7 +1142,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           return;
         }
         const u = new SpeechSynthesisUtterance(chunks[chunkIndex]);
-        u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+        u.rate = rate; u.pitch = 1.0; u.volume = 1.0;
         if (preferred) { u.voice = preferred; u.lang = preferred.lang || "en-US"; }
         else { u.lang = "en-US"; }
 
@@ -1145,13 +1230,134 @@ INDEX_HTML = r"""<!DOCTYPE html>
         catch (e) { return false; }
       }
 
+      function listVoices() {
+        if (!voices.length) refreshVoices();
+        return voices.map(v => ({ name: v.name, lang: v.lang || "", local: !!v.localService }));
+      }
+      function setVoice(name) {
+        const hit = voices.find(v => v.name === name);
+        if (!hit) return false;
+        preferred = hit;
+        savedVoiceName = name;
+        try { localStorage.setItem("j3p_voice", name); } catch (e) {}
+        return true;
+      }
+      function setRate(r) {
+        r = parseFloat(r);
+        if (isNaN(r) || r < 0.6 || r > 1.6) return false;
+        rate = r;
+        try { localStorage.setItem("j3p_rate", String(r)); } catch (e) {}
+        return true;
+      }
+
       return {
         supported, canPause, isIOS, isAndroid,
         play, stop, pause, resume,
         isSpeaking: () => speaking,
         isPaused: () => paused,
         voiceName: () => (preferred ? preferred.name : null),
+        listVoices, setVoice, setRate,
+        getRate: () => rate,
+        onVoicesReady: (cb) => {
+          if (voices.length) { cb(); return; }
+          let n = 0;
+          const t = setInterval(() => {
+            n += 1;
+            if (voices.length || n > 20) { clearInterval(t); cb(); }
+          }, 250);
+        },
       };
+    })();
+
+    // -------------------------------------------------------------
+    // Voice picker — lists the voices already installed on the device.
+    // No API, no per-character cost; the preference persists locally.
+    // -------------------------------------------------------------
+    (function initVoicePicker() {
+      const wrap = document.querySelector(".voice-wrap");
+      const btn = document.getElementById("voice-btn");
+      const menu = document.getElementById("voice-menu");
+      const select = document.getElementById("voice-select");
+      const range = document.getElementById("rate-range");
+      const rateVal = document.getElementById("rate-val");
+      const preview = document.getElementById("voice-preview");
+      if (!wrap || !J3PSpeech.supported) {
+        if (wrap) wrap.style.display = "none";
+        return;
+      }
+
+      function populate() {
+        const all = J3PSpeech.listVoices();
+        if (!all.length) {
+          select.innerHTML = '<option value="">No voices available</option>';
+          select.disabled = true;
+          preview.disabled = true;
+          return;
+        }
+        select.disabled = false;
+        preview.disabled = false;
+
+        const isEn = v => (v.lang || "").toLowerCase().startsWith("en");
+        const english = all.filter(isEn);
+        const others = all.filter(v => !isEn(v));
+        const label = v => `${v.name}${v.lang ? " (" + v.lang + ")" : ""}`;
+
+        let html = "";
+        if (english.length) {
+          html += '<optgroup label="English">' +
+            english.map(v => `<option value="${v.name.replace(/"/g, "&quot;")}">${label(v)}</option>`).join("") +
+            "</optgroup>";
+        }
+        if (others.length) {
+          html += '<optgroup label="Other languages">' +
+            others.map(v => `<option value="${v.name.replace(/"/g, "&quot;")}">${label(v)}</option>`).join("") +
+            "</optgroup>";
+        }
+        select.innerHTML = html;
+
+        const current = J3PSpeech.voiceName();
+        if (current) select.value = current;
+      }
+
+      // Voices load asynchronously on Chrome/Android, so wait for them
+      J3PSpeech.onVoicesReady(populate);
+
+      const r = J3PSpeech.getRate();
+      range.value = String(r);
+      rateVal.textContent = Number(r).toFixed(1) + "\u00d7";
+
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const opening = !menu.classList.contains("open");
+        menu.classList.toggle("open");
+        if (opening) populate();     // refresh in case voices arrived late
+      });
+
+      select.addEventListener("change", () => {
+        if (J3PSpeech.setVoice(select.value)) {
+          // Speak a short sample so the choice is audible immediately
+          J3PSpeech.play("This is how I'll sound.", {}, { fromGesture: true });
+        }
+      });
+
+      range.addEventListener("input", () => {
+        rateVal.textContent = Number(range.value).toFixed(1) + "\u00d7";
+        J3PSpeech.setRate(range.value);
+      });
+
+      preview.addEventListener("click", () => {
+        J3PSpeech.play(
+          "Naming the hard thing early is usually the work. This is the voice you'll hear.",
+          {}, { fromGesture: true }
+        );
+      });
+
+      document.addEventListener("click", (e) => {
+        if (!wrap.contains(e.target)) menu.classList.remove("open");
+      });
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") menu.classList.remove("open");
+      });
     })();
 
     // Auto-speak state — persists across visits
