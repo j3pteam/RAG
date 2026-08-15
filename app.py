@@ -681,6 +681,64 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .mic-btn svg { width: 18px; height: 18px; }
     .mic-btn.recording { background: var(--rust); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
     .mic-btn.unsupported { display: none; }
+    /* Hover tooltip on the mic — appears instantly, unlike the native title */
+    .mic-tip {
+      position: absolute; right: 0; bottom: calc(100% + 10px);
+      background: var(--navy); color: var(--paper);
+      padding: 0.4rem 0.7rem; border-radius: 3px;
+      font-size: 0.72rem; letter-spacing: 0.02em; white-space: nowrap;
+      box-shadow: var(--shadow);
+      opacity: 0; visibility: hidden;
+      transform: translateY(4px);
+      transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+      pointer-events: none; z-index: 20;
+    }
+    .mic-tip::after {
+      content: ""; position: absolute; top: 100%; right: 14px;
+      border: 5px solid transparent; border-top-color: var(--navy);
+    }
+    .mic-btn:hover ~ .mic-tip,
+    .mic-btn:focus-visible ~ .mic-tip {
+      opacity: 1; visibility: visible; transform: translateY(0);
+    }
+    /* Once recording starts the hint bar takes over */
+    .mic-btn.recording ~ .mic-tip,
+    .mic-btn.cancelling ~ .mic-tip { opacity: 0; visibility: hidden; }
+    @media (max-width: 640px) {
+      .mic-tip { font-size: 0.68rem; padding: 0.35rem 0.6rem; }
+    }
+
+    /* Press-and-hold voice recording */
+    .mic-btn { touch-action: none; -webkit-user-select: none; user-select: none; }
+    .mic-btn.cancelling { background: var(--muted); color: #fff; animation: none; }
+    .voice-hint {
+      display: none; align-items: center; gap: 0.55rem;
+      margin: 0 1.75rem 0.5rem; padding: 0.5rem 0.8rem;
+      background: var(--navy); color: var(--paper);
+      border-radius: 4px; font-size: 0.8rem;
+      box-shadow: var(--shadow);
+    }
+    .voice-hint.visible { display: inline-flex; }
+    .voice-hint.cancel { background: var(--rust); }
+    .voice-dot {
+      width: 9px; height: 9px; border-radius: 50%;
+      background: var(--gold); flex-shrink: 0;
+      animation: voicePulse 1.1s ease-in-out infinite;
+    }
+    .voice-hint.cancel .voice-dot { background: #fff; animation: none; }
+    @keyframes voicePulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50%      { opacity: 0.35; transform: scale(0.75); }
+    }
+    .voice-timer {
+      margin-left: auto; font-variant-numeric: tabular-nums;
+      font-size: 0.75rem; color: var(--gold); letter-spacing: 0.06em;
+    }
+    .voice-hint.cancel .voice-timer { color: #fff; }
+    @media (max-width: 640px) {
+      .voice-hint { margin: 0 1rem 0.45rem; font-size: 0.76rem; }
+    }
+
     @keyframes pulse {
       0%, 100% { box-shadow: 0 0 0 0 rgba(157, 67, 44, 0.6); }
       50% { box-shadow: 0 0 0 8px rgba(157, 67, 44, 0); }
@@ -865,6 +923,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </div>
 
   <div class="composer-wrap">
+    <div id="voice-hint" class="voice-hint" aria-live="polite">
+      <span class="voice-dot"></span>
+      <span id="voice-hint-text">Listening&hellip; release to send</span>
+      <span id="voice-timer" class="voice-timer">0:00</span>
+    </div>
     <div id="attached-file" class="attached-file" aria-live="polite">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
       <span class="filename" id="attached-file-name">document.pdf</span>
@@ -888,7 +951,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
-        <button type="button" id="mic-btn" class="mic-btn" aria-label="Voice input" title="Click to speak">
+        <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
             <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -896,6 +959,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <line x1="8" y1="23" x2="16" y2="23"/>
           </svg>
         </button>
+        <span class="mic-tip" id="mic-tip" role="tooltip">Press and hold to record</span>
       </div>
       <button type="submit" id="send-btn">Send</button>
     </form>
@@ -2391,34 +2455,176 @@ INDEX_HTML = r"""<!DOCTYPE html>
       input.focus();
     });
 
-    // Voice input
+    // -------------------------------------------------------------
+    // Voice input — press and hold to record, release to send
+    // -------------------------------------------------------------
+    // Hold the mic, speak, release: the transcript is placed in the composer
+    // and submitted. Slide away from the button before releasing to cancel.
     const micBtn = document.getElementById("mic-btn");
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    const voiceHint = document.getElementById("voice-hint");
+    const voiceHintText = document.getElementById("voice-hint-text");
+    const voiceTimer = document.getElementById("voice-timer");
+
     if (!SR) {
       micBtn.classList.add("unsupported");
     } else {
       const recognition = new SR();
-      recognition.continuous = false; recognition.interimResults = true; recognition.lang = "en-US";
-      let isRecording = false; let baseText = "";
-      micBtn.addEventListener("click", () => {
-        if (isRecording) recognition.stop();
-        else {
-          baseText = input.value.trim(); if (baseText) baseText += " ";
-          try { recognition.start(); } catch (err) { console.error(err); }
+      recognition.continuous = true;        // keep listening for the whole hold
+      recognition.interimResults = true;
+      recognition.lang = "en-US";
+
+      const MIN_HOLD_MS = 350;              // shorter than this is a stray tap
+      const CANCEL_DISTANCE = 90;           // px away from the button = cancel
+
+      let holding = false;
+      let cancelled = false;
+      let tooShort = false;
+      let startedAt = 0;
+      let baseText = "";
+      let finalText = "";
+      let interimText = "";
+      let timerId = null;
+      let originRect = null;
+
+      function setHint(msg, danger) {
+        if (!voiceHintText) return;
+        voiceHintText.textContent = msg;
+        voiceHint.classList.toggle("cancel", !!danger);
+      }
+
+      function showHint(show) {
+        if (!voiceHint) return;
+        voiceHint.classList.toggle("visible", !!show);
+      }
+
+      function tickTimer() {
+        if (!voiceTimer) return;
+        const secs = Math.floor((Date.now() - startedAt) / 1000);
+        const m = String(Math.floor(secs / 60)).padStart(1, "0");
+        const ss = String(secs % 60).padStart(2, "0");
+        voiceTimer.textContent = `${m}:${ss}`;
+      }
+
+      function beginHold(e) {
+        if (holding) return;
+        // Don't fight text selection or page scroll while holding
+        if (e.cancelable) e.preventDefault();
+        holding = true;
+        cancelled = false;
+        tooShort = false;
+        startedAt = Date.now();
+        finalText = "";
+        interimText = "";
+        baseText = input.value.trim();
+        originRect = micBtn.getBoundingClientRect();
+
+        // Speaking while recording would feed the mic back into itself
+        if (window.J3PSpeech) J3PSpeech.stop();
+
+        micBtn.classList.add("recording");
+        setHint("Listening\u2026 release to send", false);
+        showHint(true);
+        tickTimer();
+        timerId = setInterval(tickTimer, 250);
+
+        try { recognition.start(); }
+        catch (err) { /* already started — harmless */ }
+      }
+
+      function moveDuringHold(e) {
+        if (!holding || !originRect) return;
+        const pt = e.touches ? e.touches[0] : e;
+        const cx = originRect.left + originRect.width / 2;
+        const cy = originRect.top + originRect.height / 2;
+        const dist = Math.hypot(pt.clientX - cx, pt.clientY - cy);
+        const wasCancelled = cancelled;
+        cancelled = dist > CANCEL_DISTANCE;
+        if (cancelled !== wasCancelled) {
+          setHint(cancelled ? "Release to cancel" : "Listening\u2026 release to send", cancelled);
+          micBtn.classList.toggle("cancelling", cancelled);
         }
-      });
-      recognition.addEventListener("start", () => { isRecording = true; micBtn.classList.add("recording"); });
-      recognition.addEventListener("end", () => { isRecording = false; micBtn.classList.remove("recording"); input.focus(); });
+      }
+
+      function endHold(e) {
+        if (!holding) return;
+        holding = false;
+        const heldFor = Date.now() - startedAt;
+        if (timerId) { clearInterval(timerId); timerId = null; }
+        micBtn.classList.remove("recording", "cancelling");
+
+        try { recognition.stop(); } catch (err) {}
+
+        if (cancelled) {
+          setHint("Cancelled", true);
+          input.value = baseText;
+          setTimeout(() => showHint(false), 900);
+          return;
+        }
+        if (heldFor < MIN_HOLD_MS) {
+          tooShort = true;
+          setHint("Hold the mic to record", false);
+          input.value = baseText;
+          setTimeout(() => showHint(false), 1400);
+          return;
+        }
+        setHint("Transcribing\u2026", false);
+        // recognition "end" fires shortly after stop(); submission happens there
+      }
+
+      micBtn.addEventListener("pointerdown", beginHold);
+      window.addEventListener("pointermove", moveDuringHold, { passive: true });
+      window.addEventListener("pointerup", endHold);
+      window.addEventListener("pointercancel", endHold);
+      // Holding the mic shouldn't open a context menu on mobile
+      micBtn.addEventListener("contextmenu", (e) => e.preventDefault());
+
       recognition.addEventListener("result", (event) => {
-        let transcript = "";
-        for (let i = 0; i < event.results.length; i++) transcript += event.results[i][0].transcript;
-        input.value = baseText + transcript;
-      });
-      recognition.addEventListener("error", (event) => {
-        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
-          alert("Microphone access is blocked. Please allow it in your browser settings.");
+        interimText = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const chunk = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalText += chunk;
+          else interimText += chunk;
         }
-        isRecording = false; micBtn.classList.remove("recording");
+        // Live preview in the composer while speaking
+        const preview = (baseText ? baseText + " " : "") + (finalText + interimText).trim();
+        input.value = preview;
+      });
+
+      recognition.addEventListener("end", () => {
+        if (holding) return;                 // stopped early; a new hold is running
+        const spoken = (finalText + interimText).trim();
+        const message = ((baseText ? baseText + " " : "") + spoken).trim();
+
+        if (cancelled || tooShort || !spoken) {
+          input.value = baseText;
+          if (!cancelled && !tooShort && !spoken) {
+            setHint("Didn\u2019t catch that \u2014 try again", true);
+          }
+          setTimeout(() => showHint(false), 1400);
+          return;
+        }
+
+        input.value = message;
+        showHint(false);
+        // Submit the transcription as the message
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      });
+
+      recognition.addEventListener("error", (event) => {
+        holding = false;
+        if (timerId) { clearInterval(timerId); timerId = null; }
+        micBtn.classList.remove("recording", "cancelling");
+        if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+          setHint("Microphone blocked \u2014 allow access in your browser", true);
+          setTimeout(() => showHint(false), 3000);
+        } else if (event.error === "no-speech" && !tooShort) {
+          setHint("Didn\u2019t catch that \u2014 try again", true);
+          setTimeout(() => showHint(false), 1600);
+        } else {
+          showHint(false);
+        }
       });
     }
   </script>
