@@ -80,6 +80,10 @@ CONFIG = {
         "FOOTER_CTA_TEXT",
         "To schedule time with a J3P Advisor, please",
     ),
+    "footer_cta_label": os.environ.get(
+        "FOOTER_CTA_LABEL",
+        "Schedule Time With a J3P Advisor",
+    ),
     "footer_cta_url": os.environ.get(
         "FOOTER_CTA_URL",
         "https://calendly.com/afriedmanj3p/30min?month=2026-07",
@@ -581,6 +585,33 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     button[type="submit"]:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
     button[type="submit"]:disabled { opacity: 0.5; cursor: not-allowed; }
+    /* Scheduling call-to-action — the main conversion point, so it reads as
+       a button rather than fine print inside the disclaimer line. */
+    .footer-cta {
+      display: flex; justify-content: center;
+      padding: 0.4rem 1rem 0.8rem;
+    }
+    .cta-btn {
+      display: inline-flex; align-items: center; gap: 0.6rem;
+      background: var(--gold); color: var(--navy);
+      border: 1px solid var(--gold); border-radius: 2px;
+      padding: 0.72rem 1.6rem;
+      font-family: inherit; font-size: 0.82rem; font-weight: 500;
+      letter-spacing: 0.16em; text-transform: uppercase;
+      text-decoration: none; white-space: nowrap;
+      box-shadow: 0 2px 10px rgba(210, 188, 141, 0.45);
+      transition: background 0.2s ease, color 0.2s ease,
+                  box-shadow 0.2s ease, transform 0.12s ease;
+    }
+    .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
+    .cta-btn:hover {
+      background: var(--navy); color: var(--gold);
+      border-color: var(--navy);
+      box-shadow: 0 4px 16px rgba(39, 51, 74, 0.28);
+    }
+    .cta-btn:active { transform: translateY(1px); }
+    .cta-btn:focus-visible { outline: 2px solid var(--navy); outline-offset: 3px; }
+
     .footer-note {
       text-align: center; font-size: 0.68rem; color: var(--muted);
       padding: 0 1rem 0.9rem; letter-spacing: 0.14em;
@@ -600,6 +631,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
+      .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
+      .cta-btn {
+        font-size: 0.72rem; letter-spacing: 0.12em;
+        padding: 0.7rem 1.1rem; gap: 0.45rem;
+        white-space: normal; text-align: center;
+      }
+      .cta-btn svg { width: 15px; height: 15px; }
     }
     /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
     @media (max-width: 480px) {
@@ -714,9 +752,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <button type="submit" id="send-btn">Send</button>
     </form>
+    <div class="footer-cta">
+      <a class="cta-btn" href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+             stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="3" y="4" width="18" height="18" rx="2"/>
+          <line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/>
+          <line x1="3" y1="10" x2="21" y2="10"/>
+        </svg>
+        <span>{{ cfg.footer_cta_label }}</span>
+      </a>
+    </div>
     <div class="footer-note">
-      {{ cfg.footer_disclaimer }}<br />
-      {{ cfg.footer_cta_text }} <a href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">click here</a>.
+      {{ cfg.footer_disclaimer }}
     </div>
   </div>
 
