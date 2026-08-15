@@ -35,16 +35,22 @@ DOC_SUBTITLE = "J3P Advisor"
 # --- Logo -------------------------------------------------------------------
 # Embedded at the top of every generated file. Falls back to the wordmark text
 # if the image can't be found, so exports never fail over a missing asset.
+# Deliberately does NOT include the app's own full_logo.png: exported documents
+# are usually the client's own letters and decks, so they get a replaceable
+# placeholder unless a logo is explicitly configured for exports.
 LOGO_CANDIDATES = [
     os.environ.get("BRAND_LOGO_FILE", ""),
-    "full_logo.png",
-    "logo.png",
-    "monogram.jpg",
+    "export_logo.png",
 ]
 
 
 def find_logo():
-    """Return a filesystem path to the brand logo, or None if unavailable."""
+    """Return a filesystem path to a brand logo the user has configured.
+
+    Returns None unless an explicit logo file is present. When None, exports
+    fall back to a replaceable "insert logo" placeholder instead, so client
+    documents don't ship with someone else's branding baked in.
+    """
     here = os.path.dirname(os.path.abspath(__file__))
     for candidate in LOGO_CANDIDATES:
         if not candidate:
@@ -54,6 +60,90 @@ def find_logo():
             if os.path.isfile(path):
                 return path
     return None
+
+
+# --- Logo placeholder --------------------------------------------------------
+# When no logo is configured, every export gets a clearly-marked drop zone in
+# the same spot the logo would occupy. It's a real image, so in Word and
+# PowerPoint the user can right-click it and choose "Change Picture" to swap in
+# their own logo without touching layout.
+
+PLACEHOLDER_ALT = "Insert your logo here — right-click and choose Change Picture"
+_placeholder_cache = {}
+
+
+def make_placeholder(width=520, height=180, on_dark=False):
+    """Generate a dashed 'INSERT LOGO HERE' PNG. Returns a path, or None.
+
+    on_dark selects a lighter label for placement over the navy title slide.
+    """
+    key = (width, height, on_dark)
+    if key in _placeholder_cache and os.path.isfile(_placeholder_cache[key]):
+        return _placeholder_cache[key]
+    try:
+        from PIL import Image, ImageDraw
+        import tempfile
+
+        img = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+        d = ImageDraw.Draw(img)
+        gold = (210, 188, 141, 255)
+        muted = (222, 220, 214, 255) if on_dark else (128, 128, 136, 255)
+
+        # Dashed border
+        dash, gap, inset = 14, 10, 4
+        x0, y0, x1, y1 = inset, inset, width - inset, height - inset
+        for x in range(x0, x1, dash + gap):
+            d.line([(x, y0), (min(x + dash, x1), y0)], fill=gold, width=3)
+            d.line([(x, y1), (min(x + dash, x1), y1)], fill=gold, width=3)
+        for y in range(y0, y1, dash + gap):
+            d.line([(x0, y), (x0, min(y + dash, y1))], fill=gold, width=3)
+            d.line([(x1, y), (x1, min(y + dash, y1))], fill=gold, width=3)
+
+        label = "INSERT LOGO HERE"
+        try:
+            from PIL import ImageFont
+            font = None
+            for candidate in (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            ):
+                if os.path.isfile(candidate):
+                    font = ImageFont.truetype(candidate, 26)
+                    break
+            if font is None:
+                font = ImageFont.load_default()
+            box = d.textbbox((0, 0), label, font=font)
+            d.text(((width - (box[2] - box[0])) / 2,
+                    (height - (box[3] - box[1])) / 2 - 4),
+                   label, fill=muted, font=font)
+        except Exception:
+            d.text((width / 2 - 60, height / 2 - 6), label, fill=muted)
+
+        suffix = "_dark" if on_dark else ""
+        path = os.path.join(
+            tempfile.gettempdir(), f"j3p_logo_placeholder_{width}x{height}{suffix}.png")
+        img.save(path)
+        _placeholder_cache[key] = path
+        return path
+    except Exception:
+        return None
+
+
+def logo_or_placeholder(on_dark=False):
+    """Return (path, is_placeholder). Path may be None if neither is available."""
+    real = find_logo()
+    if real:
+        return real, False
+    return make_placeholder(on_dark=on_dark), True
+
+
+def _set_alt_text(element, text):
+    """Best-effort alt text so the drop zone is self-explaining."""
+    try:
+        element.set("descr", text)
+        element.set("title", "Insert logo")
+    except Exception:
+        pass
 
 
 # --- Meta-language stripping -------------------------------------------------
@@ -69,6 +159,12 @@ _META_LINE_PATTERNS = [
     r"\bwill download it\b",
     r"\bdownload(?:ed|ing)? (?:it )?(?:in|as) (?:powerpoint|word|excel|pdf)\b",
     r"\bbelow will (?:download|save|export)\b",
+    r"\bsave\b[^.]{0,40}\bdownload\b",
+    r"\b(?:download|save) (?:either|both|it) (?:or both )?in (?:your|any) (?:preferred )?format\b",
+    r"\bin your preferred format\b",
+    r"\b(?:two|both) documents below\b",
+    r"\buse the save\b",
+    r"\btap save\b",
     r"\b(?:deck|document|letter|file) is (?:written and ready|ready to download)\b",
     r"\bexported? (?:to|as) an? (?:word|powerpoint|excel|pdf)\b",
     r"\bis (?:attached|downloading) (?:now|below)\b",
@@ -248,12 +344,15 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
         section.right_margin = Inches(1)
 
     # Masthead — logo image when available, wordmark text otherwise
-    logo_path = find_logo()
+    logo_path, is_placeholder = logo_or_placeholder()
     brand = doc.add_paragraph()
     brand.paragraph_format.space_after = Pt(2)
     if logo_path:
         try:
-            brand.add_run().add_picture(logo_path, height=Inches(0.42))
+            brand.add_run().add_picture(
+                logo_path, height=Inches(0.55 if is_placeholder else 0.42))
+            if is_placeholder and doc.inline_shapes:
+                _set_alt_text(doc.inline_shapes[-1]._inline.docPr, PLACEHOLDER_ALT)
         except Exception:
             logo_path = None
     if not logo_path:
@@ -356,7 +455,9 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
     slide = prs.slides.add_slide(prs.slide_layouts[6])   # blank
     set_bg(slide, navy)
 
-    logo_path = find_logo()
+    logo_path, is_placeholder = logo_or_placeholder(on_dark=True)
+    # Content slides use the paper background, so they need the dark-label version
+    content_logo_path, _ = logo_or_placeholder(on_dark=False)
 
     box = slide.shapes.add_textbox(Inches(0.9), Inches(2.5), Inches(11.5), Inches(2.2))
     tf = box.text_frame
@@ -365,8 +466,13 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
     p = tf.paragraphs[0]
     if logo_path:
         try:
-            slide.shapes.add_picture(logo_path, Inches(0.9), Inches(1.15), height=Inches(0.95))
-            p.text = ""                    # logo replaces the wordmark text
+            pic = slide.shapes.add_picture(
+                logo_path, Inches(0.9), Inches(1.05),
+                height=Inches(0.8 if is_placeholder else 0.95))
+            if is_placeholder:
+                pic.name = "INSERT LOGO HERE"
+                _set_alt_text(pic._element.nvPicPr.cNvPr, PLACEHOLDER_ALT)
+            p.text = ""                    # image replaces the wordmark text
         except Exception:
             p.text = BRAND_NAME.upper()
     else:
@@ -440,10 +546,14 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
 
             # Footer — small logo, falling back to the wordmark
             placed_logo = False
-            if logo_path:
+            if content_logo_path or logo_path:
                 try:
-                    slide.shapes.add_picture(
-                        logo_path, Inches(0.85), Inches(6.82), height=Inches(0.34))
+                    fpic = slide.shapes.add_picture(
+                        content_logo_path or logo_path, Inches(0.85), Inches(6.72),
+                        height=Inches(0.42 if is_placeholder else 0.34))
+                    if is_placeholder:
+                        fpic.name = "INSERT LOGO HERE"
+                        _set_alt_text(fpic._element.nvPicPr.cNvPr, PLACEHOLDER_ALT)
                     placed_logo = True
                 except Exception:
                     placed_logo = False
@@ -488,7 +598,7 @@ def build_xlsx(text: str, title: str = None) -> io.BytesIO:
     ws["B1"].fill = navy_fill
     ws["C1"].fill = navy_fill
 
-    logo_path = find_logo()
+    logo_path, is_placeholder = logo_or_placeholder()
     if logo_path:
         try:
             from openpyxl.drawing.image import Image as XLImage
@@ -628,13 +738,13 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
         return s
 
     from reportlab.platypus import Image as RLImage
-    logo_path = find_logo()
+    logo_path, is_placeholder = logo_or_placeholder()
     masthead = None
     if logo_path:
         try:
             from reportlab.lib.utils import ImageReader
             iw, ih = ImageReader(logo_path).getSize()
-            h = 0.42 * inch
+            h = (0.55 if is_placeholder else 0.42) * inch
             masthead = RLImage(logo_path, width=h * (iw / float(ih)), height=h)
             masthead.hAlign = "LEFT"
         except Exception:
