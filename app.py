@@ -532,6 +532,31 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
+    /* Multi-document SAVE menu: one row per deliverable */
+    .share-menu.multi-doc { min-width: 268px; padding: 0.55rem; }
+    .doc-group { padding: 0.5rem 0.55rem 0.6rem; }
+    .doc-group + .doc-group { border-top: 1px solid var(--line); }
+    .doc-title {
+      font-size: 0.78rem; font-weight: 500; color: var(--navy);
+      margin-bottom: 0.45rem; letter-spacing: 0;
+      text-transform: none; line-height: 1.35;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .doc-formats { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .share-menu .fmt-chip {
+      display: inline-flex; align-items: center; justify-content: center;
+      width: auto; padding: 0.32rem 0.6rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 2px; cursor: pointer;
+      font-family: inherit; font-size: 0.7rem; color: var(--muted);
+      letter-spacing: 0.04em; text-transform: none;
+    }
+    .share-menu .fmt-chip:hover { border-color: var(--gold); color: var(--navy); background: var(--paper-2); }
+    .share-menu .fmt-chip.primary {
+      background: var(--navy); border-color: var(--navy); color: var(--gold);
+    }
+    .share-menu .fmt-chip.primary:hover { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+
     /* On the feedback row, push actions to the right */
     .feedback-actions {
       display: flex;
@@ -1585,11 +1610,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     // Generates the file server-side and hands it to the browser. Shared by
     // the SAVE menu and by automatic export when the user asked for a format.
-    async function downloadExport(fmt, text) {
+    async function downloadExport(fmt, text, part) {
+      const payload = { text: text, title: "" };
+      if (part !== undefined && part !== null) payload.part = part;
       const resp = await fetch(`/export/${fmt}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: text, title: "" }),
+        body: JSON.stringify(payload),
       });
       if (!resp.ok) {
         let msg = `Export failed (${resp.status})`;
@@ -1615,6 +1642,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
+
+    // Several deliverables in one reply: download each in its own format,
+    // spaced slightly apart so browsers don't treat them as a download flood.
+    async function autoExportAll(msgDiv, docs, text) {
+      const btn = msgDiv.querySelector(".download-btn");
+      const label = btn ? btn.querySelector(".download-label") : null;
+      if (btn) btn.classList.add("copied");
+      let done = 0;
+      for (const doc of docs) {
+        const fmt = doc.suggested || "docx";
+        if (label) label.textContent = `Building ${done + 1}/${docs.length}\u2026`;
+        try {
+          await downloadExport(fmt, text, doc.index);
+          done += 1;
+        } catch (err) {
+          console.error("Auto-export failed for", doc.title, err);
+        }
+        await new Promise(r => setTimeout(r, 900));
+      }
+      if (label) {
+        label.textContent = done === docs.length
+          ? `${done} files saved`
+          : (done ? `${done} of ${docs.length} saved` : "Tap to save");
+      }
+      setTimeout(() => {
+        if (btn) btn.classList.remove("copied");
+        if (label) label.textContent = "Save";
+      }, 5000);
+    }
 
     // Builds the requested file and downloads it, showing status on the
     // message's own SAVE button so the user can see what happened.
@@ -1716,7 +1772,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return html;
     }
 
-    function addMessage(text, role, withFeedback = false, interactionId = null) {
+    function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
       if (interactionId) div.dataset.interactionId = String(interactionId);
@@ -1730,7 +1786,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         textNode.textContent = text;
       }
       div.appendChild(textNode);
-      if (withFeedback) attachFeedback(div, text, interactionId);
+      if (withFeedback) attachFeedback(div, text, interactionId, documents);
       chat.appendChild(div);
       chatWrap.scrollTop = chatWrap.scrollHeight;
       // If auto-speak is enabled and this is a fresh assistant reply (with feedback
@@ -1745,7 +1801,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return div;
     }
 
-    function attachFeedback(msgDiv, replyText, interactionId) {
+    function attachFeedback(msgDiv, replyText, interactionId, documents) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
       wrap.innerHTML = `
@@ -2019,14 +2075,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
         downloadMenu.classList.toggle("open");
       });
 
+      // When the reply holds more than one deliverable, rebuild the menu so
+      // each document can be downloaded separately in its own format.
+      const multiDocs = Array.isArray(documents) && documents.length > 1;
+      if (multiDocs) {
+        const FMT_LABEL = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
+        downloadMenu.classList.add("multi-doc");
+        downloadMenu.innerHTML = documents.map(doc => {
+          const safeTitle = String(doc.title || "Document")
+            .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+          const chips = ["docx", "pptx", "xlsx", "pdf"].map(f => {
+            const primary = f === doc.suggested ? " primary" : "";
+            return `<button type="button" class="fmt-chip${primary}" ` +
+                   `data-fmt="${f}" data-part="${doc.index}" role="menuitem">` +
+                   `${FMT_LABEL[f]}</button>`;
+          }).join("");
+          return `<div class="doc-group">
+                    <div class="doc-title">${safeTitle}</div>
+                    <div class="doc-formats">${chips}</div>
+                  </div>`;
+        }).join("");
+      }
+
       downloadMenu.querySelectorAll("[data-fmt]").forEach(item => {
         item.addEventListener("click", async () => {
           const fmt = item.dataset.fmt;
+          const part = item.dataset.part !== undefined ? Number(item.dataset.part) : undefined;
           downloadMenu.classList.remove("open");
           downloadBtn.classList.add("copied");
           downloadLabel.textContent = "Building\u2026";
           try {
-            await downloadExport(fmt, replyText);
+            await downloadExport(fmt, replyText, part);
             downloadLabel.textContent = "Saved";
           } catch (err) {
             console.error("Export failed:", err);
@@ -2277,10 +2356,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const data = await res.json();
         thinking.remove();
         if (data.reply) {
-          const msgDiv = addMessage(data.reply, "assistant", true, data.interaction_id || null);
+          const msgDiv = addMessage(data.reply, "assistant", true,
+                                    data.interaction_id || null, data.documents || null);
           // The user asked for a specific file — build and download it now
           // instead of making them hunt for the SAVE button.
-          if (data.export_format) {
+          const docs = data.documents || [];
+          if (docs.length > 1) {
+            // Several deliverables — download each in the format that suits it
+            autoExportAll(msgDiv, docs, data.reply);
+          } else if (data.export_format) {
             autoExport(msgDiv, data.export_format, data.reply);
           }
         }
@@ -2899,7 +2983,14 @@ def chat():
         "heading per slide, 3-6 short bullets beneath each. Aim for 8-14 slides "
         "unless told otherwise. Do not describe what the deck would contain — "
         "write the slides themselves.\n\n"
-        "7. THE FILE IS AUTOMATIC. When someone asks for a specific format, the "
+        "7. MULTIPLE DELIVERABLES. If the request calls for more than one "
+        "document (for example a cover letter AND a presentation), begin each "
+        "one with a single-hash '# ' title on its own line — '# Cover Letter', "
+        "'# Strategic Vision Presentation'. Use '## ' only for sections inside "
+        "a document. This separation lets each deliverable be downloaded as its "
+        "own file in its own format, so it matters. Do not merge two documents "
+        "under one title.\n\n"
+        "8. THE FILE IS AUTOMATIC. When someone asks for a specific format, the "
         "file is generated and downloaded for them the moment you reply. Do not "
         "tell them you are unable to attach a file, and do not instruct them to "
         "copy your text into Word or PowerPoint themselves. You may close with "
@@ -3073,10 +3164,26 @@ def chat():
     # generate and download it without a further click.
     export_format = detect_export_format(user_input)
 
+    # Describe each deliverable in the reply so the client can offer them
+    # separately, each in its own format.
+    documents = []
+    try:
+        for i, doc in enumerate(exports.split_documents(assistant_text)):
+            if not doc["body"].strip():
+                continue
+            documents.append({
+                "index": i,
+                "title": doc["title"] or f"Document {i + 1}",
+                "suggested": exports.suggest_format(doc["title"], doc["body"]),
+            })
+    except Exception as e:
+        app.logger.error(f"Document split failed: {e}")
+
     return jsonify({
         "reply": assistant_text,
         "interaction_id": interaction_id,
         "export_format": export_format,
+        "documents": documents,
     })
 
 
@@ -3096,9 +3203,22 @@ def export_response(fmt):
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     title = (data.get("title") or "").strip()
+    part = data.get("part")
 
     if not text:
         return jsonify({"error": "Nothing to export."}), 400
+
+    # A reply can contain several deliverables. When the client asks for a
+    # specific one, export only that document.
+    if part is not None:
+        try:
+            docs = exports.split_documents(text)
+            idx = int(part)
+            if 0 <= idx < len(docs):
+                text = docs[idx]["body"]
+                title = title or docs[idx]["title"]
+        except Exception as e:
+            app.logger.error(f"Export part selection failed: {e}")
     if len(text) > 200_000:
         return jsonify({"error": "Response too long to export."}), 400
     if fmt.lower() not in exports.BUILDERS:
