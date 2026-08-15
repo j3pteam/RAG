@@ -86,7 +86,8 @@ CONFIG = {
     ),
     "footer_cta_url": os.environ.get(
         "FOOTER_CTA_URL",
-        "https://calendly.com/afriedmanj3p/30min?month=2026-07",
+        "https://app.acuityscheduling.com/catalog.php"
+        "?owner=29987697&action=addCart&clear=1&id=2262965",
     ),
 
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
@@ -135,6 +136,33 @@ def admin_required(f):
 # ---------------------------------------------------------------------------
 # Main chat HTML
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Release & acknowledgment language
+# ---------------------------------------------------------------------------
+# Defined once and rendered into BOTH the session-entry gate and the
+# scheduling gate, so the two can never drift apart. Edit here to change both.
+
+RELEASE_HEADING = "Coaching App Release &amp; Acknowledgment"
+
+RELEASE_BODY_HTML = """
+  <p>
+    By checking the box below, I acknowledge that I am voluntarily using
+    the J3P Advisor and understand that the content, coaching and guidance
+    provided are for personal and professional development purposes only.
+    I understand that these activities are not medical, psychological,
+    legal, or other professional advice, and I am responsible for my own
+    decisions and actions.
+  </p>
+  <p>
+    To the extent permitted by law, I release Residency Select LLC dba
+    J3P Health, its coaches, employees, and representatives from liability
+    arising from my voluntary use of the coaching app.
+  </p>
+"""
+
+RELEASE_CHECKBOX_LABEL = "I have read, understood, and agree to the above."
+
 
 INDEX_HTML = r"""<!DOCTYPE html>
 <html lang="en">
@@ -294,7 +322,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       margin: 0.18rem 0 0 0; width: 17px; height: 17px;
       accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
     }
-    #ack-continue {
+    #ack-continue, #sched-continue {
       width: 100%; padding: 0.85rem 1rem;
       background: var(--navy); color: var(--gold);
       border: 1px solid var(--navy); border-radius: 2px;
@@ -302,8 +330,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       letter-spacing: 0.18em; text-transform: uppercase;
       cursor: pointer; transition: all 0.2s ease;
     }
-    #ack-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
-    #ack-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+    #ack-continue:hover:not(:disabled), #sched-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
+    #ack-continue:disabled, #sched-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+    .ack-secondary {
+      width: 100%; margin-top: 0.55rem;
+      padding: 0.7rem 1rem;
+      background: transparent; color: var(--muted);
+      border: 1px solid var(--line); border-radius: 2px;
+      font-family: inherit; font-size: 0.72rem;
+      letter-spacing: 0.14em; text-transform: uppercase;
+      cursor: pointer; transition: all 0.18s ease;
+    }
+    .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
+
     .ack-foot {
       margin: 1.1rem 0 0 0; text-align: center;
       font-size: 0.62rem; color: var(--muted);
@@ -603,6 +642,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       transition: background 0.2s ease, color 0.2s ease,
                   box-shadow 0.2s ease, transform 0.12s ease;
     }
+    .cta-btn { cursor: pointer; user-select: none; }
     .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
     .cta-btn:hover {
       background: var(--navy); color: var(--gold);
@@ -663,28 +703,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span class="ack-tag">{{ cfg.persona_name }}</span>
       </div>
       <div class="ack-content">
-        <h2 id="ack-title">Coaching App Release &amp; Acknowledgment</h2>
+        <h2 id="ack-title">{{ release_heading|safe }}</h2>
         <div id="ack-body" class="ack-text">
-          <p>
-            By checking the box below, I acknowledge that I am voluntarily using
-            the J3P Advisor and understand that the content, coaching and guidance
-            provided are for personal and professional development purposes only.
-            I understand that these activities are not medical, psychological,
-            legal, or other professional advice, and I am responsible for my own
-            decisions and actions.
-          </p>
-          <p>
-            To the extent permitted by law, I release Residency Select LLC dba
-            J3P Health, its coaches, employees, and representatives from liability
-            arising from my voluntary use of the coaching app.
-          </p>
+          {{ release_body|safe }}
         </div>
         <label class="ack-check" for="ack-checkbox">
           <input type="checkbox" id="ack-checkbox" />
-          <span>I have read, understood, and agree to the above.</span>
+          <span>{{ release_checkbox_label }}</span>
         </label>
         <button type="button" id="ack-continue" disabled>Enter session</button>
         <p class="ack-foot">{{ cfg.footer_disclaimer }}</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="sched-overlay" class="ack-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="sched-title" aria-describedby="sched-body" hidden>
+    <div class="ack-box">
+      <div class="ack-head">
+        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="ack-logo" />
+        <span class="ack-divider"></span>
+        <span class="ack-tag">Schedule a session</span>
+      </div>
+      <div class="ack-content">
+        <h2 id="sched-title">{{ release_heading|safe }}</h2>
+        <div id="sched-body" class="ack-text">
+          {{ release_body|safe }}
+        </div>
+        <label class="ack-check" for="sched-checkbox">
+          <input type="checkbox" id="sched-checkbox" />
+          <span>{{ release_checkbox_label }}</span>
+        </label>
+        <button type="button" id="sched-continue" disabled>Continue to scheduling</button>
+        <button type="button" id="sched-cancel" class="ack-secondary">Not now</button>
       </div>
     </div>
   </div>
@@ -753,7 +804,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <button type="submit" id="send-btn">Send</button>
     </form>
     <div class="footer-cta">
-      <a class="cta-btn" href="{{ cfg.footer_cta_url }}" target="_blank" rel="noopener">
+      <a class="cta-btn" role="button" tabindex="0"
+         data-cta-url="{{ cfg.footer_cta_url }}"
+         aria-haspopup="dialog">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
              stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
           <rect x="3" y="4" width="18" height="18" rx="2"/>
@@ -1142,6 +1195,90 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     // Expose to addMessage so a new bot reply can auto-play when enabled
     window.__isAutoSpeakOn = () => autoSpeakEnabled;
+
+    // -------------------------------------------------------------
+    // Scheduling gate — the release must be acknowledged before the
+    // calendar opens. Deliberately NOT remembered: it is re-shown on
+    // every attempt to book, so each booking carries an acknowledgment.
+    // -------------------------------------------------------------
+    (function initSchedGate() {
+      const overlay = document.getElementById("sched-overlay");
+      const checkbox = document.getElementById("sched-checkbox");
+      const continueBtn = document.getElementById("sched-continue");
+      const cancelBtn = document.getElementById("sched-cancel");
+      if (!overlay) return;
+
+      let pendingUrl = null;
+
+      function closeGate() {
+        overlay.hidden = true;
+        checkbox.checked = false;
+        continueBtn.disabled = true;
+        pendingUrl = null;
+      }
+
+      function openGate(url) {
+        pendingUrl = url;
+        checkbox.checked = false;        // always start unchecked
+        continueBtn.disabled = true;
+        overlay.hidden = false;
+        setTimeout(() => checkbox.focus(), 120);
+      }
+
+      // Delegated + capture phase: catches the click no matter when the button
+      // was added to the page or what else is listening. The button carries no
+      // href, so if this script ever fails to run the calendar simply isn't
+      // reachable — it can't be opened ungated.
+      document.addEventListener("click", (e) => {
+        const btn = e.target.closest && e.target.closest(".cta-btn");
+        if (!btn) return;
+        e.preventDefault();
+        e.stopPropagation();
+        openGate(btn.getAttribute("data-cta-url"));
+      }, true);
+
+      // Keyboard activation, since it's no longer a real link
+      document.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter" && e.key !== " ") return;
+        const btn = e.target.closest && e.target.closest(".cta-btn");
+        if (!btn) return;
+        e.preventDefault();
+        openGate(btn.getAttribute("data-cta-url"));
+      }, true);
+
+      checkbox.addEventListener("change", () => {
+        continueBtn.disabled = !checkbox.checked;
+      });
+
+      continueBtn.addEventListener("click", () => {
+        if (!checkbox.checked || !pendingUrl) return;
+        const url = pendingUrl;
+        closeGate();
+        // A synthetic anchor click is the reliable way to open a new tab here:
+        // window.open() returns null whenever "noopener" is set — even on
+        // success — so its return value can't be used to detect a blocked
+        // pop-up, and acting on it would navigate this page away and drop the
+        // user's session.
+        const a = document.createElement("a");
+        a.href = url;
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+      });
+
+      cancelBtn.addEventListener("click", closeGate);
+
+      // This gate is dismissible (unlike the entry gate) — Esc and backdrop close
+      overlay.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") closeGate();
+        if (e.key === "Enter" && checkbox.checked) continueBtn.click();
+      });
+      overlay.addEventListener("click", (e) => {
+        if (e.target === overlay) closeGate();
+      });
+    })();
 
     // Minimal, safe markdown renderer for assistant replies. Escapes HTML
     // first, then converts headings, lists, bold/italic and inline code so
@@ -1951,7 +2088,13 @@ def retrieve_context(query: str) -> str:
 @paywall.paywall_required
 def index():
     session["messages"] = []
-    return render_template_string(INDEX_HTML, cfg=CONFIG)
+    return render_template_string(
+        INDEX_HTML,
+        cfg=CONFIG,
+        release_heading=RELEASE_HEADING,
+        release_body=RELEASE_BODY_HTML,
+        release_checkbox_label=RELEASE_CHECKBOX_LABEL,
+    )
 
 
 @app.route("/chat", methods=["POST"])
