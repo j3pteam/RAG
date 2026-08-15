@@ -300,6 +300,75 @@ def split_bold_runs(s: str) -> list:
     return [(t, b) for t, b in parts if t]
 
 
+def split_documents(text: str) -> list:
+    """Split a reply that contains several deliverables into separate documents.
+
+    Returns a list of {"title": str, "body": str}. A reply with one document
+    returns a single entry, so callers can treat the result uniformly.
+
+    Boundaries, in order of preference:
+      1. Top-level '# ' headings (the model is instructed to use these)
+      2. Horizontal rules ('---') between substantial chunks
+    A normal single document full of '## ' section headings is NOT split.
+    """
+    body = strip_meta(text or "")
+    if not body.strip():
+        return [{"title": "", "body": ""}]
+
+    lines = body.replace("\r\n", "\n").split("\n")
+
+    # --- 1. Split on level-1 headings ---
+    h1_idx = [i for i, l in enumerate(lines)
+              if re.match(r"^#\s+\S", l.strip()) and not l.strip().startswith("##")]
+    if len(h1_idx) >= 2:
+        parts = []
+        for n, start in enumerate(h1_idx):
+            end = h1_idx[n + 1] if n + 1 < len(h1_idx) else len(lines)
+            chunk = "\n".join(lines[start:end]).strip()
+            title = re.sub(r"^#\s+", "", lines[start].strip())
+            parts.append({"title": strip_inline(title), "body": chunk})
+        return [p for p in parts if p["body"]]
+
+    # --- 2. Split on horizontal rules ---
+    rule_idx = [i for i, l in enumerate(lines) if re.fullmatch(r"\s*[-*_]{3,}\s*", l)]
+    if rule_idx:
+        chunks, prev = [], 0
+        for i in rule_idx:
+            chunks.append("\n".join(lines[prev:i]).strip())
+            prev = i + 1
+        chunks.append("\n".join(lines[prev:]).strip())
+        chunks = [c for c in chunks if len(c) >= 200]
+        if len(chunks) >= 2:
+            return [{"title": derive_title(c), "body": c} for c in chunks]
+
+    return [{"title": derive_title(body), "body": body}]
+
+
+# Words that suggest a document is meant to be slides rather than prose
+_DECK_HINTS = re.compile(
+    r"\b(deck|slide|slides|presentation|powerpoint|talk track|pitch)\b", re.I)
+_SHEET_HINTS = re.compile(
+    r"\b(spreadsheet|excel|budget|tracker|matrix|roster|workbook|line items?)\b", re.I)
+
+
+def suggest_format(title: str, body: str = "") -> str:
+    """Best-guess file format for a document, based on its title and shape."""
+    head = f"{title or ''}\n{(body or '')[:600]}"
+    if _SHEET_HINTS.search(head):
+        return "xlsx"
+    if _DECK_HINTS.search(head):
+        return "pptx"
+
+    # Slide-shaped content: several headings, each mostly short bullets
+    blocks = parse_blocks(body or "")
+    headings = [b for b in blocks if b["type"] == "heading"]
+    bullets = [b for b in blocks if b["type"] == "bullet"]
+    paras = [b for b in blocks if b["type"] == "para"]
+    if len(headings) >= 3 and len(bullets) >= 6 and len(bullets) > len(paras) * 2:
+        return "pptx"
+    return "docx"
+
+
 def derive_title(text: str, fallback: str = "J3P Advisor Response") -> str:
     """Pick a document title from the first heading or sentence."""
     for block in parse_blocks(text):
