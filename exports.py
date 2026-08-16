@@ -518,16 +518,8 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
                 run = p.add_run(chunk)
                 run.bold = is_bold
 
-    # Footer disclaimer
-    doc.add_paragraph()
-    foot = doc.add_paragraph()
-    foot.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    foot_run = foot.add_run(
-        "For informational purposes only. Not medical, legal, or financial advice."
-    )
-    foot_run.italic = True
-    foot_run.font.size = Pt(8)
-    foot_run.font.color.rgb = RGBColor.from_string(CHARCOAL)
+    # No footer disclaimer: exported documents are the client's own work
+    # product and carry nothing from the advisor tool.
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -902,12 +894,6 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
             story.append(Paragraph(inline_html(block["text"]), styles["body"]))
     flush_list()
 
-    story.append(Spacer(1, 18))
-    story.append(HRFlowable(width="100%", thickness=0.6, color=gold, spaceAfter=6))
-    story.append(Paragraph(
-        "For informational purposes only. Not medical, legal, or financial advice.",
-        styles["foot"],
-    ))
 
     doc.build(story)
     buf.seek(0)
