@@ -681,6 +681,40 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .mic-btn svg { width: 18px; height: 18px; }
     .mic-btn.recording { background: var(--rust); color: #fff; animation: pulse 1.2s ease-in-out infinite; }
     .mic-btn.unsupported { display: none; }
+    /* Hover tooltips on the attach and folder buttons */
+    .input-tip {
+      position: absolute; bottom: calc(100% + 10px);
+      background: var(--navy); color: var(--paper);
+      padding: 0.4rem 0.7rem; border-radius: 3px;
+      font-size: 0.72rem; letter-spacing: 0.02em; white-space: nowrap;
+      box-shadow: var(--shadow);
+      opacity: 0; visibility: hidden;
+      transform: translateY(4px);
+      transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+      pointer-events: none; z-index: 20;
+    }
+    .input-tip::after {
+      content: ""; position: absolute; top: 100%;
+      border: 5px solid transparent; border-top-color: var(--navy);
+    }
+    /* Anchored under each button, which sits at a fixed offset from the right */
+    .folder-tip { right: 4.2rem; }
+    .folder-tip::after { right: 18px; }
+    .attach-tip { right: 2.2rem; }
+    .attach-tip::after { right: 18px; }
+    .folder-btn:hover ~ .folder-tip,
+    .folder-btn:focus-visible ~ .folder-tip,
+    .attach-btn:hover ~ .attach-tip,
+    .attach-btn:focus-visible ~ .attach-tip {
+      opacity: 1; visibility: visible; transform: translateY(0);
+    }
+    /* The recording bar takes priority once a hold starts */
+    .mic-btn.recording ~ .input-tip,
+    .mic-btn.cancelling ~ .input-tip { opacity: 0; visibility: hidden; }
+    @media (max-width: 640px) {
+      .input-tip { font-size: 0.68rem; padding: 0.35rem 0.6rem; white-space: normal; max-width: 60vw; }
+    }
+
     /* Hover tooltip on the mic — appears instantly, unlike the native title */
     .mic-tip {
       position: absolute; right: 0; bottom: calc(100% + 10px);
@@ -946,11 +980,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
           </svg>
         </button>
+        <span class="input-tip folder-tip" id="folder-tip" role="tooltip">Attach a whole folder of documents</span>
         <button type="button" id="attach-btn" class="attach-btn" aria-label="Attach file" title="Attach a document or image">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21.44 11.05 12.25 20.24a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>
           </svg>
         </button>
+        <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
         <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
