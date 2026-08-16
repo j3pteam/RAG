@@ -2425,8 +2425,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // The user asked for a specific file — build and download it now
           // instead of making them hunt for the SAVE button.
           const docs = data.documents || [];
-          if (docs.length > 1) {
-            // Several deliverables — download each in the format that suits it
+          if (docs.length > 1 && data.separate_files) {
+            // The user explicitly asked for separate files — one per document
             autoExportAll(msgDiv, docs, data.reply);
           } else if (data.export_format) {
             autoExport(msgDiv, data.export_format, data.reply);
@@ -2762,6 +2762,20 @@ _DELIVERABLE_VERBS = (
 )
 
 
+def rejected_formats(text: str) -> set:
+    """Formats the user explicitly ruled out ('not a slide deck')."""
+    import re as _r
+    out = set()
+    if not text:
+        return out
+    low = text.lower()
+    for fmt, pattern in _EXPORT_PATTERNS:
+        for m in _r.finditer(pattern, low):
+            if _is_negated(low, m.start()):
+                out.add(fmt)
+    return out
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -2779,6 +2793,26 @@ _SINGLE_FILE_RE = (
     r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
     r"\bas one\b|\bsingle file\b)"
 )
+
+
+_SEPARATE_FILES_RE = (
+    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
+    r"\bindividual\s+(?:files?|documents?)\b|"
+    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
+    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
+    r"\bsplit\s+(?:them|it|into)\b)"
+)
+
+
+def wants_separate_files(text: str) -> bool:
+    """True only when the user explicitly asked for more than one file."""
+    import re as _r
+    if not text:
+        return False
+    low = text.lower()
+    if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
+        return False
+    return bool(_r.search(_SEPARATE_FILES_RE, low))
 
 
 def wants_single_file(text: str) -> bool:
@@ -3455,11 +3489,23 @@ def chat():
     # If the user asked for a specific file format, tell the client so it can
     # generate and download it without a further click.
     export_format = detect_export_format(user_input)
+    if not export_format and wants_deliverable:
+        # No format named — infer one from the shape of the reply, avoiding
+        # anything the user explicitly ruled out.
+        try:
+            inferred = exports.suggest_format("", assistant_text)
+            if inferred in rejected_formats(user_input):
+                inferred = "docx"
+            export_format = inferred
+        except Exception as e:
+            app.logger.error(f"Format inference failed: {e}")
+            export_format = "docx"
 
     # Describe each deliverable in the reply so the client can offer them
     # separately, each in its own format.
     documents = []
     single_file = wants_single_file(user_input)
+    separate_files = wants_separate_files(user_input) and not single_file
     try:
         split = [] if single_file else exports.split_documents(assistant_text)
         for i, doc in enumerate(split):
@@ -3473,12 +3519,20 @@ def chat():
     except Exception as e:
         app.logger.error(f"Document split failed: {e}")
 
+    # Several deliverables going into ONE file: prose is the safer container,
+    # unless the user named a format or every part is slide-shaped.
+    if (len(documents) > 1 and not separate_files
+            and not detect_export_format(user_input)
+            and not all(d["suggested"] == "pptx" for d in documents)):
+        export_format = "docx"
+
     return jsonify({
         "reply": assistant_text,
         "interaction_id": interaction_id,
         "export_format": export_format,
         "documents": documents,
         "single_file": single_file,
+        "separate_files": separate_files,
     })
 
 
