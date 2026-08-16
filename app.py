@@ -4040,14 +4040,17 @@ input[type="text"] { flex: 1; min-width: 200px; }
           </select>
         </form>
         {% if stats.total > 0 %}
-        <a href="/admin/export/feedback.csv" class="btn" style="text-decoration: none; padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ CSV</a>
-        <a href="/admin/export/feedback.xlsx" class="btn" style="text-decoration: none; padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ Excel</a>
+        <button type="button" id="export-csv" class="btn"
+                style="padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ CSV</button>
+        <button type="button" id="export-xlsx" class="btn"
+                style="padding: 0.4rem 0.85rem; font-size: 0.7rem;">↓ Excel</button>
         {% endif %}
       </div>
     </div>
     <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
       Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
       Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}.
+      Tick rows to export or delete just those; with nothing ticked, export includes every record.
     </p>
     {% if feedback_rows %}
     <form method="POST" action="/admin/feedback/delete-selected"
@@ -4220,15 +4223,51 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </div>
 
     <script>
-      // Wire up "Select all" checkbox
+      // Select-all + export of just the checked rows
       (function() {
         const selectAll = document.getElementById("select-all");
-        const checkboxes = document.querySelectorAll(".feedback-checkbox");
+        const checkboxes = Array.from(document.querySelectorAll(".feedback-checkbox"));
+        const csvBtn = document.getElementById("export-csv");
+        const xlsxBtn = document.getElementById("export-xlsx");
+
+        function selectedIds() {
+          return checkboxes.filter(cb => cb.checked).map(cb => cb.value);
+        }
+
+        // Buttons show what they will actually export
+        function refreshLabels() {
+          const n = selectedIds().length;
+          if (csvBtn)  csvBtn.textContent  = n ? `\u2193 CSV (${n})`   : "\u2193 CSV";
+          if (xlsxBtn) xlsxBtn.textContent = n ? `\u2193 Excel (${n})` : "\u2193 Excel";
+          const title = n
+            ? `Export the ${n} selected row${n === 1 ? "" : "s"}`
+            : "Export all rows — tick rows to export only those";
+          if (csvBtn)  csvBtn.title = title;
+          if (xlsxBtn) xlsxBtn.title = title;
+          if (selectAll) {
+            selectAll.checked = n > 0 && n === checkboxes.length;
+            selectAll.indeterminate = n > 0 && n < checkboxes.length;
+          }
+        }
+
         if (selectAll) {
           selectAll.addEventListener("change", () => {
             checkboxes.forEach(cb => cb.checked = selectAll.checked);
+            refreshLabels();
           });
         }
+        checkboxes.forEach(cb => cb.addEventListener("change", refreshLabels));
+
+        function doExport(ext) {
+          const ids = selectedIds();
+          let url = `/admin/export/feedback.${ext}`;
+          if (ids.length) url += `?ids=${encodeURIComponent(ids.join(","))}`;
+          window.location.href = url;
+        }
+        if (csvBtn)  csvBtn.addEventListener("click", () => doExport("csv"));
+        if (xlsxBtn) xlsxBtn.addEventListener("click", () => doExport("xlsx"));
+
+        refreshLabels();
       })();
     </script>
     {% else %}
@@ -4501,6 +4540,31 @@ def admin_delete(doc_id):
     return redirect(url_for("admin_dashboard"))
 
 
+def _rows_for_export():
+    """Rows to export: only the selected ids when given, otherwise everything.
+
+    Ids arrive as a comma-separated 'ids' parameter (query string or form),
+    which is what the admin table's checkboxes produce.
+    """
+    if not db.is_enabled():
+        return [], 0
+
+    raw = (request.values.get("ids") or "").strip()
+    selected = []
+    for piece in raw.replace(" ", "").split(","):
+        if piece.isdigit():
+            selected.append(int(piece))
+
+    rows = db.list_feedback(limit=10000)
+    if not selected:
+        return rows, 0
+
+    wanted = set(selected)
+    filtered = [r for r in rows if r.get("id") in wanted]
+    # Preserve the order the user seen in the table (newest first from the DB)
+    return filtered, len(wanted)
+
+
 @app.route("/admin/export/feedback.csv")
 @admin_required
 def admin_export_feedback():
@@ -4509,7 +4573,7 @@ def admin_export_feedback():
     import io
     from flask import Response
 
-    rows = db.list_feedback(limit=10000) if db.is_enabled() else []
+    rows, selected_count = _rows_for_export()
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
@@ -4534,7 +4598,8 @@ def admin_export_feedback():
 
     from datetime import datetime
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"j3p_feedback_{timestamp}.csv"
+    suffix = f"_selected_{len(rows)}" if selected_count else ""
+    filename = f"j3p_feedback{suffix}_{timestamp}.csv"
 
     return Response(
         csv_content,
@@ -4560,7 +4625,7 @@ def admin_export_feedback_xlsx():
         return ("Excel export unavailable: openpyxl not installed. "
                 "Use CSV export instead, or add 'openpyxl' to requirements.txt."), 500
 
-    rows = db.list_feedback(limit=10000) if db.is_enabled() else []
+    rows, selected_count = _rows_for_export()
 
     wb = Workbook()
     ws = wb.active
@@ -4631,7 +4696,8 @@ def admin_export_feedback_xlsx():
     buffer.seek(0)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"j3p_feedback_{timestamp}.xlsx"
+    suffix = f"_selected_{len(rows)}" if selected_count else ""
+    filename = f"j3p_feedback{suffix}_{timestamp}.xlsx"
 
     return Response(
         buffer.read(),
