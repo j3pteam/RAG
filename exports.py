@@ -360,26 +360,26 @@ def split_documents(text: str) -> list:
     # --- 1. Split on level-1 headings ---
     h1_idx = [i for i, l in enumerate(lines)
               if re.match(r"^#\s+\S", l.strip()) and not l.strip().startswith("##")]
-    if len(h1_idx) >= 2:
+    MAX_DOCUMENTS = 4          # more than this means they're section headings
+    MIN_DOC_CHARS = 400        # a real deliverable has substance
+
+    if 2 <= len(h1_idx) <= MAX_DOCUMENTS:
         parts = []
         for n, start in enumerate(h1_idx):
             end = h1_idx[n + 1] if n + 1 < len(h1_idx) else len(lines)
             chunk = "\n".join(lines[start:end]).strip()
             title = re.sub(r"^#\s+", "", lines[start].strip())
             parts.append({"title": strip_inline(title), "body": chunk})
-        return [p for p in parts if p["body"]]
+        parts = [p for p in parts if p["body"]]
+        # Every part must be substantial; otherwise treat the whole reply as one
+        if len(parts) >= 2 and all(len(p["body"]) >= MIN_DOC_CHARS for p in parts):
+            return parts
 
-    # --- 2. Split on horizontal rules ---
-    rule_idx = [i for i, l in enumerate(lines) if re.fullmatch(r"\s*[-*_]{3,}\s*", l)]
-    if rule_idx:
-        chunks, prev = [], 0
-        for i in rule_idx:
-            chunks.append("\n".join(lines[prev:i]).strip())
-            prev = i + 1
-        chunks.append("\n".join(lines[prev:]).strip())
-        chunks = [c for c in chunks if len(c) >= 200]
-        if len(chunks) >= 2:
-            return [{"title": derive_title(c), "body": c} for c in chunks]
+    # NOTE: horizontal rules ('---') are deliberately NOT a boundary. Models
+    # use them to separate sections *within* one document — between slides of a
+    # deck, or between sections of a summary — so splitting on them turned a
+    # single executive summary into one file per section. A deliverable
+    # boundary requires an explicit '# ' title.
 
     return [{"title": derive_title(body), "body": body}]
 
