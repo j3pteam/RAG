@@ -409,17 +409,42 @@ def suggest_format(title: str, body: str = "") -> str:
     return "docx"
 
 
-def derive_title(text: str, fallback: str = "J3P Advisor Response") -> str:
-    """Pick a document title from the first heading or sentence."""
-    for block in parse_blocks(text):
-        if block["type"] == "heading":
-            return strip_inline(block["text"])[:90]
-    first = strip_inline((text or "").strip().split("\n")[0])
-    if not first:
+# Openings that are part of the letter, never its title
+_SALUTATION_RE = re.compile(
+    r"^\s*(dear\b|to whom\b|hello\b|hi\b|greetings\b|attn\b|attention:)", re.I)
+# Subject lines make good titles
+_SUBJECT_RE = re.compile(r"^\s*(?:re|subject)\s*:\s*(.+)$", re.I)
+
+
+def derive_title(text: str, fallback: str = "") -> str:
+    """Pick a document title, or return '' when there isn't a real one.
+
+    A letter that opens with "Dear Dr. Harris" has no title. Inventing one from
+    the first sentence produced headings like "Dear Dr." sitting above the
+    actual salutation, so an empty string is returned instead and the renderers
+    simply omit the title line.
+    """
+    body = (text or "").strip()
+    if not body:
         return fallback
-    # Cut at the first sentence boundary if it's a long line
-    sentence = re.split(r"(?<=[.!?])\s", first)[0]
-    return (sentence or first)[:90] or fallback
+
+    # 1. A real markdown heading is the best title
+    for block in parse_blocks(body):
+        if block["type"] == "heading":
+            heading = strip_inline(block["text"])
+            if heading and not _SALUTATION_RE.match(heading):
+                return heading[:90]
+
+    # 2. A subject line ("Re: Application for ...") is the next best thing
+    for line in body.split("\n")[:12]:
+        m = _SUBJECT_RE.match(line.strip())
+        if m:
+            subject = strip_inline(m.group(1)).strip()
+            if subject:
+                return subject[:90]
+
+    # 3. No heading and no subject: don't fabricate one from the prose
+    return fallback
 
 
 def drop_leading_title(text: str, title: str) -> str:
@@ -460,7 +485,9 @@ def drop_leading_title(text: str, title: str) -> str:
 
 
 def safe_filename(title: str, ext: str) -> str:
-    slug = re.sub(r"[^A-Za-z0-9]+", "_", strip_inline(title)).strip("_")[:50] or "j3p_response"
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", strip_inline(title or "")).strip("_")[:50]
+    if not slug:
+        slug = "document"
     return f"{slug}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
 
 
@@ -506,12 +533,13 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
         # rather than stamping the advisor's name on a client document.
         brand.paragraph_format.space_after = Pt(0)
 
-    head = doc.add_paragraph()
-    head_run = head.add_run(title)
-    head_run.bold = True
-    head_run.font.size = Pt(20)
-    head_run.font.color.rgb = RGBColor.from_string(NAVY)
-    head.paragraph_format.space_after = Pt(4)
+    if title:
+        head = doc.add_paragraph()
+        head_run = head.add_run(title)
+        head_run.bold = True
+        head_run.font.size = Pt(20)
+        head_run.font.color.rgb = RGBColor.from_string(NAVY)
+        head.paragraph_format.space_after = Pt(4)
 
     meta = doc.add_paragraph()
     meta_run = meta.add_run(
@@ -618,12 +646,13 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
     p.font.bold = True
     p.font.color.rgb = gold
 
-    p = tf.add_paragraph()
-    p.text = title
-    p.font.size = Pt(38)
-    p.font.bold = True
-    p.font.color.rgb = paper
-    p.space_before = Pt(10)
+    if title:
+        p = tf.add_paragraph()
+        p.text = title
+        p.font.size = Pt(38)
+        p.font.bold = True
+        p.font.color.rgb = paper
+        p.space_before = Pt(10)
 
     p = tf.add_paragraph()
     p.text = datetime.now().strftime('%B %d, %Y')
@@ -741,7 +770,7 @@ def build_xlsx(text: str, title: str = None) -> io.BytesIO:
         except Exception:
             pass                                 # keep the text masthead
 
-    ws["A2"] = title
+    ws["A2"] = title or ""
     ws["A2"].font = Font(bold=True, size=16, color=NAVY)
     ws.merge_cells("A2:C2")
     ws["A2"].alignment = Alignment(vertical="center", wrap_text=True)
@@ -882,7 +911,7 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
     story = [
         masthead if masthead else Spacer(1, 0),
         Spacer(1, 6) if masthead else Spacer(1, 0),
-        Paragraph(inline_html(title), styles["title"]),
+        Paragraph(inline_html(title), styles["title"]) if title else Spacer(1, 0),
         HRFlowable(width="100%", thickness=1.5, color=gold,
                    spaceBefore=2, spaceAfter=6),
         Paragraph(datetime.now().strftime('%B %d, %Y'),
