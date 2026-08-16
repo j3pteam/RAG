@@ -2701,18 +2701,90 @@ def looks_like_document(text: str) -> bool:
     return len(body) > 700
 
 
+# Cues that a format mention is being REJECTED rather than requested:
+# "not a slide deck", "instead of a deck", "rather than a pdf", "no slides".
+_NEGATION_CUES = (
+    r"(?:not|no|don'?t|do not|doesn'?t|dont|instead of|rather than|"
+    r"as opposed to|other than|without|avoid|skip|never)"
+)
+_NEG_WINDOW = 45          # characters before the format word to inspect
+
+
+def _is_negated(low: str, match_start: int) -> bool:
+    """True when a negation cue sits just before the format word."""
+    import re as _r
+    window = low[max(0, match_start - _NEG_WINDOW):match_start]
+    # Only look at the current clause — a comma or period ends the negation
+    clause = _r.split(r"[.;!?]|,\s+(?:and|but)\b", window)[-1]
+    return bool(_r.search(_NEGATION_CUES + r"\s+(?:an?\s+|the\s+)?[\w\s]{0,18}$", clause))
+
+
 def detect_export_format(text: str):
-    """Return 'docx' | 'pptx' | 'xlsx' | 'pdf' if the user asked for that file."""
+    """Return 'docx' | 'pptx' | 'xlsx' | 'pdf' if the user asked for that file.
+
+    Formats the user explicitly rules out ("an executive summary, not a slide
+    deck") are excluded rather than matched.
+    """
     import re as _r
     if not text:
         return None
     low = text.lower()
     if not _r.search(_EXPORT_INTENT, low):
         return None
+
+    wanted, rejected = [], set()
     for fmt, pattern in _EXPORT_PATTERNS:
-        if _r.search(pattern, low):
+        for m in _r.finditer(pattern, low):
+            if _is_negated(low, m.start()):
+                rejected.add(fmt)
+            else:
+                wanted.append(fmt)
+    for fmt, _pattern in _EXPORT_PATTERNS:
+        if fmt in wanted and fmt not in rejected:
             return fmt
     return None
+
+
+# A request for a written deliverable, even when no file format is named.
+# Used to enforce that the model produces the document instead of asking
+# questions about it.
+_DELIVERABLE_NOUNS = (
+    r"(cover letter|letter of intent|letter|memo|executive summary|summary|"
+    r"strategic plan|plan|deck|presentation|one[- ]pager|briefing|brief|"
+    r"proposal|agenda|talking points|script|outline|draft|bio|biography|cv|"
+    r"resume|curriculum vitae|recommendation|statement|report|packet|"
+    r"materials|document|export|file)"
+)
+_DELIVERABLE_VERBS = (
+    r"(creat|mak|writ|draft|build|generat|produc|prepar|revis|rework|rewrite|"
+    r"tighten|shorten|expand|polish|update|turn .* into|put together|"
+    r"help (?:me )?with|i need|i want|can you|give|send|share|provide|get me)"
+)
+
+
+def detect_deliverable_request(text: str) -> bool:
+    """True when the user is asking for a written document of some kind."""
+    import re as _r
+    if not text:
+        return False
+    low = text.lower()
+    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
+
+
+# "one pdf", "a single document", "not separate files" — the user wants
+# everything in one file rather than one file per deliverable.
+_SINGLE_FILE_RE = (
+    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
+    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
+    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
+    r"\bas one\b|\bsingle file\b)"
+)
+
+
+def wants_single_file(text: str) -> bool:
+    """True when the user explicitly asked for one combined file."""
+    import re as _r
+    return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
 
 
 def _fit_history(messages: list) -> list:
@@ -3188,7 +3260,18 @@ def chat():
         "6. SLIDE DECKS. For a deck, write the actual slide content: one '## ' "
         "heading per slide, 3-6 short bullets beneath each. Aim for 8-14 slides "
         "unless told otherwise. Do not describe what the deck would contain — "
-        "write the slides themselves.\n\n"
+        "write the slides themselves. Use a real title for each heading; never "
+        "label them 'Slide 1:', 'Slide 2:' and so on. Only produce a deck when "
+        "one was actually asked for — if the user asks for a summary, memo, or "
+        "plan, write prose with '## ' section headings, not slides.\n\n"
+        "6b. NEVER ASK FOR WHAT YOU ALREADY HAVE. If the user asks you to "
+        "revise, shorten, tighten, or rework something, use the version already "
+        "in this conversation or in the attached documents. Never ask them to "
+        "paste it again. If several versions exist, use the most recent.\n\n"
+        "6c. RESPECT EXCLUSIONS. When the user rules something out — 'an "
+        "executive summary, not a slide deck', 'one file, not separate ones' — "
+        "follow the exclusion exactly. Producing the thing they just declined "
+        "is a failure.\n\n"
         "7. MULTIPLE DELIVERABLES. If the request calls for more than one "
         "document (for example a cover letter AND a presentation), begin each "
         "one with a single-hash '# ' title on its own line — '# Cover Letter', "
@@ -3251,9 +3334,10 @@ def chat():
     # questions. Rather than rely on the system prompt alone, retry once with
     # an explicit instruction to produce the document now. One retry only.
     requested_format = detect_export_format(user_input)
-    if requested_format and not looks_like_document(assistant_text):
+    wants_deliverable = bool(requested_format) or detect_deliverable_request(user_input)
+    if wants_deliverable and not looks_like_document(assistant_text):
         app.logger.info(
-            f"Deliverable enforcement: retrying for {requested_format} "
+            f"Deliverable enforcement: retrying for {requested_format or 'document'} "
             f"(first reply looked like clarifying questions)"
         )
         force_note = (
@@ -3262,9 +3346,11 @@ def chat():
             "deliverable. The user has already requested the finished document "
             "and it is being converted into a file automatically the moment you "
             "reply. Output the COMPLETE document now, in full. Do not ask any "
-            "questions. Do not explain what you are about to do. Make reasonable "
-            "assumptions from the conversation and any attached material, and "
-            "note those assumptions in a single short line at the very end. "
+            "questions. Do not explain what you are about to do. Do not ask the "
+            "user to paste or re-send anything: everything you need is already "
+            "in this conversation and in any attached documents. Make reasonable "
+            "assumptions from that material, and note those assumptions in a "
+            "single short line at the very end. "
         )
         if requested_format == "pptx":
             force_note += (
@@ -3373,8 +3459,10 @@ def chat():
     # Describe each deliverable in the reply so the client can offer them
     # separately, each in its own format.
     documents = []
+    single_file = wants_single_file(user_input)
     try:
-        for i, doc in enumerate(exports.split_documents(assistant_text)):
+        split = [] if single_file else exports.split_documents(assistant_text)
+        for i, doc in enumerate(split):
             if not doc["body"].strip():
                 continue
             documents.append({
@@ -3390,6 +3478,7 @@ def chat():
         "interaction_id": interaction_id,
         "export_format": export_format,
         "documents": documents,
+        "single_file": single_file,
     })
 
 
