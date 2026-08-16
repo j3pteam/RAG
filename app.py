@@ -1,3 +1,5 @@
+
+
 #!/usr/bin/env python3
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
@@ -4557,6 +4559,9 @@ def admin_upload_folder():
 
     flash(" · ".join(parts) if parts else "No files were processed.")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/upload-url", methods=["POST"])
 @admin_required
 def admin_upload_url():
     if not (db.is_enabled() and emb.is_enabled()):
