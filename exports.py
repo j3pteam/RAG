@@ -29,8 +29,47 @@ RUST = "9D432C"
 PAPER = "FAF6F0"
 CHARCOAL = "3F3F44"
 
-BRAND_NAME = "J3P Health"
-DOC_SUBTITLE = "J3P Advisor"
+# Exported documents carry NO advisor branding. They are the client's own
+# letters, decks and memos, so the masthead is a logo drop-zone (or the
+# client's own logo) and nothing identifies the tool that produced them.
+BRAND_NAME = ""
+DOC_SUBTITLE = ""
+
+# Any of these appearing in generated content is scrubbed before rendering.
+_BRAND_TOKENS = [
+    r"J3P\s+Healthcare\s+Solutions",
+    r"J3P\s+Health",
+    r"J3P\s+Advisor",
+    r"J3Personica",
+    r"Residency\s+Select",
+    r"\bJ3P\b",
+]
+_BRAND_RE = re.compile("|".join(_BRAND_TOKENS), re.IGNORECASE)
+
+
+def scrub_brand(text: str) -> str:
+    """Remove advisor branding from document content."""
+    if not text:
+        return text
+    out_lines = []
+    for line in str(text).split("\n"):
+        if not _BRAND_RE.search(line):
+            out_lines.append(line)          # untouched — never reformat it
+            continue
+        # A short line that is essentially just branding gets dropped
+        residue = _BRAND_RE.sub("", line)
+        if len(re.sub(r"[^A-Za-z0-9]", "", residue)) < 12:
+            continue
+        # Tidy only the lines we actually edited, so list markers and other
+        # formatting elsewhere in the document are left alone.
+        residue = re.sub(r"[ \t]{2,}", " ", residue)
+        residue = re.sub(r"\s+([,.;:!?])", r"\1", residue)
+        residue = re.sub(r"^([ \t]*)[·|]\s*", r"\1", residue)
+        residue = re.sub(r"^([ \t]*(?:[-*+]|\d+[.)])\s+)[·|—–]\s*", r"\1", residue)
+        out_lines.append(residue.rstrip())
+    out = "\n".join(out_lines)
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
 
 # --- Logo -------------------------------------------------------------------
 # Embedded at the top of every generated file. Falls back to the wordmark text
@@ -120,8 +159,9 @@ def make_placeholder(width=520, height=180, on_dark=False):
             d.text((width / 2 - 60, height / 2 - 6), label, fill=muted)
 
         suffix = "_dark" if on_dark else ""
+        # Neutral filename: it becomes the picture's name inside the document
         path = os.path.join(
-            tempfile.gettempdir(), f"j3p_logo_placeholder_{width}x{height}{suffix}.png")
+            tempfile.gettempdir(), f"logo_placeholder_{width}x{height}{suffix}.png")
         img.save(path)
         _placeholder_cache[key] = path
         return path
@@ -311,7 +351,7 @@ def split_documents(text: str) -> list:
       2. Horizontal rules ('---') between substantial chunks
     A normal single document full of '## ' section headings is NOT split.
     """
-    body = strip_meta(text or "")
+    body = scrub_brand(strip_meta(text or ""))
     if not body.strip():
         return [{"title": "", "body": ""}]
 
@@ -425,10 +465,9 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
         except Exception:
             logo_path = None
     if not logo_path:
-        brand_run = brand.add_run(BRAND_NAME.upper())
-        brand_run.bold = True
-        brand_run.font.size = Pt(9)
-        brand_run.font.color.rgb = RGBColor.from_string(GOLD)
+        # No logo and no placeholder available — leave the masthead empty
+        # rather than stamping the advisor's name on a client document.
+        brand.paragraph_format.space_after = Pt(0)
 
     head = doc.add_paragraph()
     head_run = head.add_run(title)
@@ -439,7 +478,7 @@ def build_docx(text: str, title: str = None) -> io.BytesIO:
 
     meta = doc.add_paragraph()
     meta_run = meta.add_run(
-        f"{DOC_SUBTITLE} · {datetime.now().strftime('%B %d, %Y')}"
+        datetime.now().strftime('%B %d, %Y')
     )
     meta_run.font.size = Pt(9)
     meta_run.font.color.rgb = RGBColor.from_string(CHARCOAL)
@@ -543,9 +582,9 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
                 _set_alt_text(pic._element.nvPicPr.cNvPr, PLACEHOLDER_ALT)
             p.text = ""                    # image replaces the wordmark text
         except Exception:
-            p.text = BRAND_NAME.upper()
+            p.text = ""
     else:
-        p.text = BRAND_NAME.upper()
+        p.text = ""
     p.font.size = Pt(13)
     p.font.bold = True
     p.font.color.rgb = gold
@@ -558,7 +597,7 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
     p.space_before = Pt(10)
 
     p = tf.add_paragraph()
-    p.text = f"{DOC_SUBTITLE} · {datetime.now().strftime('%B %d, %Y')}"
+    p.text = datetime.now().strftime('%B %d, %Y')
     p.font.size = Pt(13)
     p.font.color.rgb = gold
     p.space_before = Pt(12)
@@ -626,14 +665,7 @@ def build_pptx(text: str, title: str = None) -> io.BytesIO:
                     placed_logo = True
                 except Exception:
                     placed_logo = False
-            if not placed_logo:
-                foot = slide.shapes.add_textbox(Inches(0.85), Inches(6.95), Inches(11.6), Inches(0.4))
-                ftf = foot.text_frame
-                fp = ftf.paragraphs[0]
-                fp.text = BRAND_NAME
-                fp.font.size = Pt(9)
-                fp.font.color.rgb = gold
-                fp.alignment = PP_ALIGN.LEFT
+            # No text footer — client decks carry no advisor branding
 
     buf = io.BytesIO()
     prs.save(buf)
@@ -661,8 +693,7 @@ def build_xlsx(text: str, title: str = None) -> io.BytesIO:
     bottom_rule = Border(bottom=Side(style="thin", color=GOLD))
 
     # Masthead
-    ws["A1"] = BRAND_NAME.upper()
-    ws["A1"].font = Font(bold=True, size=10, color=GOLD)
+    ws["A1"] = ""
     ws["A1"].fill = navy_fill
     ws["B1"].fill = navy_fill
     ws["C1"].fill = navy_fill
@@ -687,7 +718,7 @@ def build_xlsx(text: str, title: str = None) -> io.BytesIO:
     ws["A2"].alignment = Alignment(vertical="center", wrap_text=True)
     ws.row_dimensions[2].height = 30
 
-    ws["A3"] = f"{DOC_SUBTITLE} · {datetime.now().strftime('%B %d, %Y')}"
+    ws["A3"] = datetime.now().strftime('%B %d, %Y')
     ws["A3"].font = Font(size=9, italic=True, color=CHARCOAL)
     ws.merge_cells("A3:C3")
 
@@ -771,7 +802,7 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
         buf, pagesize=LETTER,
         leftMargin=0.9 * inch, rightMargin=0.9 * inch,
         topMargin=0.85 * inch, bottomMargin=0.85 * inch,
-        title=title, author=BRAND_NAME,
+        title=title,
     )
 
     base = getSampleStyleSheet()
@@ -820,12 +851,12 @@ def build_pdf(text: str, title: str = None) -> io.BytesIO:
             masthead = None
 
     story = [
-        masthead if masthead else Paragraph(BRAND_NAME.upper(), styles["brand"]),
+        masthead if masthead else Spacer(1, 0),
         Spacer(1, 6) if masthead else Spacer(1, 0),
         Paragraph(inline_html(title), styles["title"]),
         HRFlowable(width="100%", thickness=1.5, color=gold,
                    spaceBefore=2, spaceAfter=6),
-        Paragraph(f"{DOC_SUBTITLE} &middot; {datetime.now().strftime('%B %d, %Y')}",
+        Paragraph(datetime.now().strftime('%B %d, %Y'),
                   styles["meta"]),
     ]
 
@@ -907,8 +938,8 @@ def build(fmt: str, text: str, title: str = None):
     fmt = (fmt or "").lower().strip()
     if fmt not in BUILDERS:
         raise ValueError(f"Unsupported format: {fmt}")
-    # Chat-only instructions must never reach the document
-    text = strip_meta(text)
+    # Chat-only instructions and advisor branding must never reach the document
+    text = scrub_brand(strip_meta(text))
     resolved_title = (title or "").strip() or derive_title(text)
     buffer = BUILDERS[fmt](text, resolved_title)
     return buffer, safe_filename(resolved_title, fmt), MIME_TYPES[fmt]
