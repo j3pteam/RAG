@@ -422,6 +422,43 @@ def derive_title(text: str, fallback: str = "J3P Advisor Response") -> str:
     return (sentence or first)[:90] or fallback
 
 
+def drop_leading_title(text: str, title: str) -> str:
+    """Remove the opening heading when it's already the document's title.
+
+    The renderers print the title in the masthead, so leaving the same heading
+    at the top of the body prints it twice.
+    """
+    if not text or not title:
+        return text
+    lines = str(text).replace("\r\n", "\n").split("\n")
+    norm = lambda v: re.sub(r"[^a-z0-9]", "", strip_inline(v or "").lower())
+    target = norm(title)
+    if not target:
+        return text
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped:
+            continue                      # skip blank lines above the heading
+        m = re.match(r"^#{1,6}\s+(.*)$", stripped)
+        if not m:
+            m2 = re.fullmatch(r"\*\*(.+?)\*\*:?", stripped)
+            if not m2:
+                return text               # body doesn't start with a heading
+            heading = m2.group(1)
+        else:
+            heading = m.group(1)
+        if norm(heading) == target:
+            rest = lines[i + 1:]
+            # Also drop a rule or blank lines immediately after it
+            while rest and (not rest[0].strip()
+                            or re.fullmatch(r"\s*[-*_]{3,}\s*", rest[0])):
+                rest.pop(0)
+            return "\n".join(rest).strip()
+        return text                       # different heading — leave it alone
+    return text
+
+
 def safe_filename(title: str, ext: str) -> str:
     slug = re.sub(r"[^A-Za-z0-9]+", "_", strip_inline(title)).strip("_")[:50] or "j3p_response"
     return f"{slug}_{datetime.now().strftime('%Y%m%d_%H%M')}.{ext}"
@@ -927,5 +964,6 @@ def build(fmt: str, text: str, title: str = None):
     # Chat-only instructions and advisor branding must never reach the document
     text = scrub_brand(strip_meta(text))
     resolved_title = (title or "").strip() or derive_title(text)
-    buffer = BUILDERS[fmt](text, resolved_title)
+    body = drop_leading_title(text, resolved_title)
+    buffer = BUILDERS[fmt](body, resolved_title)
     return buffer, safe_filename(resolved_title, fmt), MIME_TYPES[fmt]
