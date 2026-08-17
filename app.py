@@ -2950,11 +2950,37 @@ def _extract_slides(file_bytes: bytes) -> str:
     from pptx import Presentation
     prs = Presentation(_io.BytesIO(file_bytes))
     out = []
-    for i, slide in enumerate(prs.slides, 1):
-        out.append(f"--- SLIDE {i} ---")
-        for shape in slide.shapes:
+    def walk(shapes, out):
+        """Collect text from shapes, tables, and grouped shapes alike."""
+        for shape in shapes:
+            # Grouped shapes hide their contents one level down
+            if shape.shape_type == 6 and hasattr(shape, "shapes"):
+                walk(shape.shapes, out)
+                continue
+            if getattr(shape, "has_table", False):
+                for row in shape.table.rows:
+                    cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+                    if any(cells):
+                        out.append(" | ".join(cells))
+                continue
             if shape.has_text_frame and shape.text_frame.text.strip():
                 out.append(shape.text_frame.text.strip())
+            # Charts carry their categories/series names
+            if getattr(shape, "has_chart", False):
+                try:
+                    plot = shape.chart.plots[0]
+                    cats = [str(c) for c in plot.categories]
+                    if cats:
+                        out.append("Chart categories: " + ", ".join(cats))
+                    for series in plot.series:
+                        vals = ", ".join("" if v is None else str(v) for v in series.values)
+                        out.append(f"Chart series {series.name}: {vals}")
+                except Exception:
+                    pass
+
+    for i, slide in enumerate(prs.slides, 1):
+        out.append(f"--- SLIDE {i} ---")
+        walk(slide.shapes, out)
         try:
             if slide.has_notes_slide:
                 notes = slide.notes_slide.notes_text_frame.text.strip()
@@ -3649,70 +3675,73 @@ def chat():
     ]
     import re as _re
 
-    # Contact scrubber: any individual's address becomes client services.
-    # Knowledge base documents contain staff emails, so the prompt rule alone
-    # isn't enough — this catches leaks after generation.
+    # ---------------------------------------------------------------
+    # Contact scrubber
+    # ---------------------------------------------------------------
+    # Knowledge base documents carry staff names, emails and direct lines, so
+    # the prompt rule alone isn't enough. This works at paragraph level: any
+    # passage that routes the user to a named individual is replaced outright
+    # with the client services address, rather than patched phrase by phrase.
     CONTACT = CONFIG["contact_email"]
-    _EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
 
-    def _fix_email(m):
-        addr = m.group(0)
-        if addr.lower() == CONTACT.lower():
-            return addr
-        # Leave genuinely external addresses (a client's own institution) alone
+    _STAFF_NAME_RE = _re.compile(
+        r"\b(?:Alan(?:\s+Friedman)?|(?:Mr|Dr)\.?\s+Friedman|Friedman|"
+        r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Seader|"
+        r"Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b", _re.IGNORECASE)
+
+    # Signals that a passage is telling the user how to reach a human
+    _CONTACT_SIGNAL_RE = _re.compile(
+        r"(@|\bemail\b|\bphone\b|\bcall\b|\breach\b|\bcontact\b|"
+        r"\bgo-?to\b|\bstarting point\b|\bget in touch\b|\bfollow up\b|"
+        r"\bschedul\w*\b|\bcalendar\b|\bbook\b|\bwork with\b|"
+        r"\bspeak (?:to|with)\b|\bconnect with\b|\bintroduc\w*\b|"
+        r"\bcoordinat\w*\b|\bhandles\b|\bmanages\b|\boversees\b|"
+        r"\bleads\b|\bCEO\b|\bdirector\b|\bteam member\b|\d{3}[-.\s]\d{4})",
+        _re.IGNORECASE)
+
+    _INTERNAL_EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+    _PHONE_RE = _re.compile(r"(?:\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
+    _INTERNAL_DOMAINS = ("j3p.health", "j3phealth.com", "j3personica.com",
+                         "residencyselect.com")
+    _STAFF_LOCALS = ("afriedman", "alanfriedman", "alan.friedman",
+                     "iseader", "ivy.seader", "ivyseader",
+                     "dblake", "diane.blake", "dianeblake")
+
+    def _is_internal_email(addr: str) -> bool:
         domain = addr.split("@")[-1].lower()
-        if domain in ("j3p.health", "j3phealth.com", "j3personica.com",
-                      "residencyselect.com"):
-            return CONTACT
         local = addr.split("@")[0].lower()
-        if any(tag in local for tag in ("afriedman", "alanfriedman", "alan.friedman",
-                                        "iseader", "ivy.seader", "ivyseader",
-                                        "dblake", "diane.blake", "dianeblake")):
-            return CONTACT
-        return addr
+        return (domain in _INTERNAL_DOMAINS
+                or any(tag in local for tag in _STAFF_LOCALS))
 
-    assistant_text = _EMAIL_RE.sub(_fix_email, assistant_text)
+    replaced_any = False
+    cleaned_paras = []
+    for para in assistant_text.split("\n\n"):
+        has_staff = bool(_STAFF_NAME_RE.search(para))
+        has_internal_email = any(_is_internal_email(a)
+                                 for a in _INTERNAL_EMAIL_RE.findall(para))
+        # A passage naming staff alongside contact language is a referral —
+        # drop it. Same for any passage carrying an internal address.
+        if (has_staff and _CONTACT_SIGNAL_RE.search(para)) or has_internal_email:
+            replaced_any = True
+            continue
+        # Otherwise strip only the internal identifiers, leaving the prose
+        para = _INTERNAL_EMAIL_RE.sub(
+            lambda m: CONTACT if _is_internal_email(m.group(0)) else m.group(0), para)
+        cleaned_paras.append(para)
 
-    # "reach out to Alan Friedman" -> route to client services instead
-    _CONTACT_PHRASES = [
-        (r"\b(?:reach out to|contact|email|call|speak (?:to|with)|"
-         r"get in touch with|follow up with|connect with)\s+"
-         r"(?:Alan(?:\s+Friedman)?|Mr\.?\s+Friedman|Dr\.?\s+Friedman|"
-         r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b",
-         f"contact {CONTACT}"),
-    ]
-    # "Ivy Seader handles administration" — a name presented as the route in,
-    # without a contact verb in front of it.
-    _STAFF_NAME_RE = (
-        r"\b(?:Alan(?:\s+Friedman)?|Mr\.?\s+Friedman|Ivy(?:\s+Seader)?|"
-        r"Ms\.?\s+Seader|Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b"
-    )
-    _CONTACT_PHRASES.append((
-        _STAFF_NAME_RE + r"\s+(handles|manages|oversees|coordinates|takes care of|"
-        r"is responsible for|can help with|would be)\b",
-        r"Client services \1",
-    ))
-    _CONTACT_PHRASES.append((
-        r"\b(?:ask for|speak to|request)\s+" + _STAFF_NAME_RE,
-        f"contact {CONTACT}",
-    ))
+    assistant_text = "\n\n".join(cleaned_paras).strip()
 
-    for pattern, replacement in _CONTACT_PHRASES:
-        assistant_text = _re.sub(pattern, replacement, assistant_text, flags=_re.IGNORECASE)
-
-    # Tidy the duplication substitution can leave behind, e.g.
-    # "contact X directly at X" or "contact X (X)".
-    esc = _re.escape(CONTACT)
-    assistant_text = _re.sub(
-        rf"{esc}\s*\(\s*{esc}\s*\)", CONTACT, assistant_text, flags=_re.IGNORECASE)
-    assistant_text = _re.sub(
-        rf"{esc}((?:\s+\w+){{0,3}}\s+(?:at|via|on|through))\s+{esc}",
-        CONTACT, assistant_text, flags=_re.IGNORECASE)
-    # Pronouns left dangling once a person's name is gone
-    assistant_text = _re.sub(
-        r"\bor call (?:his|her|their) office\b", "", assistant_text, flags=_re.IGNORECASE)
-    assistant_text = _re.sub(r"[ \t]{2,}", " ", assistant_text)
-    assistant_text = _re.sub(r"\s+([,.;:])", r"\1", assistant_text)
+    if replaced_any:
+        # Strip any direct line that survived in a remaining paragraph
+        assistant_text = _PHONE_RE.sub("", assistant_text)
+        assistant_text = _re.sub(r"\s+([,.;:])", r"\1", assistant_text)
+        assistant_text = _re.sub(r"[ \t]{2,}", " ", assistant_text)
+        assistant_text = _re.sub(r"\n{3,}", "\n\n", assistant_text).strip()
+        if CONTACT.lower() not in assistant_text.lower():
+            line = (f"For anything that needs a person — scheduling, "
+                    f"administration, or getting started — contact {CONTACT} "
+                    f"and the team will route it.")
+            assistant_text = (assistant_text + "\n\n" + line).strip() if assistant_text else line
 
     for forbidden, replacement in FORBIDDEN_NAMES:
         # Case-insensitive, whole-phrase replacement
