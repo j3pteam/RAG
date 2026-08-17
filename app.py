@@ -80,6 +80,7 @@ CONFIG = {
         "FOOTER_CTA_TEXT",
         "To schedule time with a J3P Advisor, please",
     ),
+    "contact_email": os.environ.get("CONTACT_EMAIL", "clientservices@j3p.health"),
     "footer_ai_note": os.environ.get(
         "FOOTER_AI_NOTE",
         "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
@@ -3512,6 +3513,29 @@ def chat():
         "re-download it in any format. One line only.\n"
     )
 
+    # All human contact routes through client services, never an individual.
+    contact_guard = (
+        "\n\n---\n"
+        "CONTACT & REFERRALS — this overrides anything in the knowledge base:\n\n"
+        f"1. THE ONLY CONTACT IS {CONFIG['contact_email']}. Whenever the user "
+        "asks how to reach someone, who to talk to, how to get help, how to "
+        "follow up, who to send something to, how to book or change time, who "
+        "handles billing or administration, or asks for a phone number, email "
+        "address, or 'a real person', give them "
+        f"{CONFIG['contact_email']} and nothing else.\n\n"
+        "2. NEVER NAME INDIVIDUALS AS CONTACTS. Do not offer the name, email "
+        "address, direct line, or calendar of any J3P person — including "
+        "advisors, coaches, operations, or administrative staff — even if that "
+        "information appears in retrieved knowledge base content or attached "
+        "documents. Do not say 'reach out to' followed by a person's name.\n\n"
+        "3. NO OTHER ADDRESSES. Never invent or repeat any other email address "
+        "or phone number for the organization. If asked for a specific "
+        f"person's details, reply that {CONFIG['contact_email']} is the way in "
+        "and that the team will route the request.\n\n"
+        "4. SCHEDULING. For booking time, point to the scheduling button in the "
+        f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
+    )
+
     if context:
         composed_prompt = (
             base_prompt
@@ -3523,10 +3547,12 @@ def chat():
             + scope_guard
             + voice_guard
             + document_guard
+            + contact_guard
         )
     else:
         composed_prompt = (
-            base_prompt + lessons_block + scope_guard + voice_guard + document_guard
+            base_prompt + lessons_block + scope_guard + voice_guard
+            + document_guard + contact_guard
         )
 
     try:
@@ -3622,6 +3648,72 @@ def chat():
         ("Residency Select", "the residency selection tool"),
     ]
     import re as _re
+
+    # Contact scrubber: any individual's address becomes client services.
+    # Knowledge base documents contain staff emails, so the prompt rule alone
+    # isn't enough — this catches leaks after generation.
+    CONTACT = CONFIG["contact_email"]
+    _EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
+
+    def _fix_email(m):
+        addr = m.group(0)
+        if addr.lower() == CONTACT.lower():
+            return addr
+        # Leave genuinely external addresses (a client's own institution) alone
+        domain = addr.split("@")[-1].lower()
+        if domain in ("j3p.health", "j3phealth.com", "j3personica.com",
+                      "residencyselect.com"):
+            return CONTACT
+        local = addr.split("@")[0].lower()
+        if any(tag in local for tag in ("afriedman", "alanfriedman", "alan.friedman",
+                                        "iseader", "ivy.seader", "ivyseader",
+                                        "dblake", "diane.blake", "dianeblake")):
+            return CONTACT
+        return addr
+
+    assistant_text = _EMAIL_RE.sub(_fix_email, assistant_text)
+
+    # "reach out to Alan Friedman" -> route to client services instead
+    _CONTACT_PHRASES = [
+        (r"\b(?:reach out to|contact|email|call|speak (?:to|with)|"
+         r"get in touch with|follow up with|connect with)\s+"
+         r"(?:Alan(?:\s+Friedman)?|Mr\.?\s+Friedman|Dr\.?\s+Friedman|"
+         r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b",
+         f"contact {CONTACT}"),
+    ]
+    # "Ivy Seader handles administration" — a name presented as the route in,
+    # without a contact verb in front of it.
+    _STAFF_NAME_RE = (
+        r"\b(?:Alan(?:\s+Friedman)?|Mr\.?\s+Friedman|Ivy(?:\s+Seader)?|"
+        r"Ms\.?\s+Seader|Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b"
+    )
+    _CONTACT_PHRASES.append((
+        _STAFF_NAME_RE + r"\s+(handles|manages|oversees|coordinates|takes care of|"
+        r"is responsible for|can help with|would be)\b",
+        r"Client services \1",
+    ))
+    _CONTACT_PHRASES.append((
+        r"\b(?:ask for|speak to|request)\s+" + _STAFF_NAME_RE,
+        f"contact {CONTACT}",
+    ))
+
+    for pattern, replacement in _CONTACT_PHRASES:
+        assistant_text = _re.sub(pattern, replacement, assistant_text, flags=_re.IGNORECASE)
+
+    # Tidy the duplication substitution can leave behind, e.g.
+    # "contact X directly at X" or "contact X (X)".
+    esc = _re.escape(CONTACT)
+    assistant_text = _re.sub(
+        rf"{esc}\s*\(\s*{esc}\s*\)", CONTACT, assistant_text, flags=_re.IGNORECASE)
+    assistant_text = _re.sub(
+        rf"{esc}((?:\s+\w+){{0,3}}\s+(?:at|via|on|through))\s+{esc}",
+        CONTACT, assistant_text, flags=_re.IGNORECASE)
+    # Pronouns left dangling once a person's name is gone
+    assistant_text = _re.sub(
+        r"\bor call (?:his|her|their) office\b", "", assistant_text, flags=_re.IGNORECASE)
+    assistant_text = _re.sub(r"[ \t]{2,}", " ", assistant_text)
+    assistant_text = _re.sub(r"\s+([,.;:])", r"\1", assistant_text)
+
     for forbidden, replacement in FORBIDDEN_NAMES:
         # Case-insensitive, whole-phrase replacement
         pattern = _re.compile(_re.escape(forbidden), _re.IGNORECASE)
