@@ -80,6 +80,10 @@ CONFIG = {
         "FOOTER_CTA_TEXT",
         "To schedule time with a J3P Advisor, please",
     ),
+    "footer_ai_note": os.environ.get(
+        "FOOTER_AI_NOTE",
+        "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
+    ),
     "footer_cta_label": os.environ.get(
         "FOOTER_CTA_LABEL",
         "Schedule Time With a J3P Advisor",
@@ -818,6 +822,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       padding: 0 1rem 0.9rem; letter-spacing: 0.14em;
       text-transform: uppercase; line-height: 1.7;
     }
+    .footer-ai-note { display: block; margin-top: 0.3rem; }
     .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
     .footer-note a:hover { color: var(--rust); }
     @media (max-width: 640px) {
@@ -1014,6 +1019,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
     <div class="footer-note">
       {{ cfg.footer_disclaimer }}
+      <span class="footer-ai-note">{{ cfg.footer_ai_note }}</span>
     </div>
   </div>
 
