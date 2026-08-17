@@ -1,5 +1,3 @@
-
-
 #!/usr/bin/env python3
 """
 J3P Persona Bot — with RAG knowledge base and admin panel.
@@ -3061,6 +3059,7 @@ def chat():
         total_chars = 0
         docs_used = 0
         images_used = 0
+        image_names = []
         skipped_count = 0
         for f in supported:
             try:
@@ -3085,6 +3084,7 @@ def chat():
                         },
                     })
                     images_used += 1
+                    image_names.append(fname)
                 elif ext in DOC_EXTS:
                     extracted = emb.extract_text_from_upload(fname, bytes_)
                     if not extracted.strip():
@@ -3109,6 +3109,17 @@ def chat():
         if used_count == 0:
             return jsonify({"error": "Could not process any of the attached files."}), 400
 
+        # Tell the model which images it's looking at, in order. Without this
+        # the vision blocks arrive unlabelled and it can't refer to them by name.
+        image_note = ""
+        if image_names:
+            listed = "; ".join(f"image {i}: {n}" for i, n in enumerate(image_names, 1))
+            image_note = (
+                f"\n\n[The user also attached {len(image_names)} "
+                f"image{'s' if len(image_names) != 1 else ''}, provided with this "
+                f"message in this order — {listed}. Refer to them by filename.]"
+            )
+
         # Build the doc context block only if we actually used any docs
         if combined_parts:
             attachment_context = (
@@ -3119,7 +3130,11 @@ def chat():
                 f"--- BEGIN ATTACHED FILES ---\n"
                 + "\n\n".join(combined_parts) +
                 f"\n--- END ATTACHED FILES ---"
+                + image_note
             )
+        elif image_note:
+            # Images only, no documents
+            attachment_context = image_note
 
         if not user_input:
             user_input = "Please review these attached files."
