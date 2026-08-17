@@ -973,7 +973,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <form id="chat-form">
       <div class="input-wrap">
         <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
-        <input type="file" id="file-input" accept=".pdf,.docx,.txt,.md,.jpg,.jpeg,.png,.gif,.webp" multiple />
+        <input type="file" id="file-input" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf,.jpg,.jpeg,.png,.gif,.webp" multiple />
         <input type="file" id="folder-input-chat" webkitdirectory directory multiple />
         <button type="button" id="folder-btn" class="folder-btn" aria-label="Attach folder" title="Attach a folder of documents">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2315,7 +2315,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const removeFileBtn = document.getElementById("remove-file-btn");
     const MAX_FILE_MB = 25;
     const MAX_FOLDER_FILES = 20;
-    const DOC_RE = /\.(pdf|docx|txt|md)$/i;
+    const DOC_RE = /\.(pdf|docx|xlsx|xlsm|pptx|csv|tsv|txt|md|rtf)$/i;
     // Track state: either a single file OR a list of folder files, never both
     let attachedFolderFiles = [];   // list of File objects when a folder is picked
     let attachedFolderName = "";
@@ -2347,10 +2347,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
       const all = Array.from(fileInput.files || []);
       if (all.length === 0) return;
       // Validate every file
-      const okRe = /\.(pdf|docx|txt|md|jpe?g|png|gif|webp)$/i;
+      const okRe = /\.(pdf|docx|xlsx|xlsm|pptx|csv|tsv|txt|md|rtf|jpe?g|png|gif|webp)$/i;
       const bad = all.filter(f => !okRe.test(f.name));
       if (bad.length) {
-        alert("One or more files are unsupported. Please attach only PDF, DOCX, TXT, MD, or images (JPG, PNG, GIF, WEBP).");
+        alert("Unsupported file type: " + bad.map(f => f.name).join(", ") +
+          "\n\nSupported: PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF, and images (JPG, PNG, GIF, WEBP).");
         clearAttachment(); return;
       }
       const oversized = all.filter(f => f.size > MAX_FILE_MB * 1024 * 1024);
@@ -2857,6 +2858,89 @@ def wants_single_file(text: str) -> bool:
     return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
 
 
+# ---------------------------------------------------------------------------
+# Attachment text extraction
+# ---------------------------------------------------------------------------
+# embeddings.extract_text_from_upload handles PDF, DOCX, TXT and MD. Spreadsheets
+# and slide decks are read here so people can attach the formats they actually
+# work in — an Excel model, a PowerPoint deck, a CSV export.
+
+SPREADSHEET_EXTS = ('.xlsx', '.xlsm', '.xltx')
+SLIDES_EXTS = ('.pptx', '.potx')
+DELIMITED_EXTS = ('.csv', '.tsv')
+LEGACY_OFFICE_EXTS = ('.doc', '.xls', '.ppt')
+
+
+def _extract_spreadsheet(file_bytes: bytes, max_chars: int = 40000) -> str:
+    """Flatten a workbook to text, one row per line, sheet by sheet."""
+    import io as _io
+    from openpyxl import load_workbook
+    wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
+    out, total = [], 0
+    for ws in wb.worksheets:
+        out.append(f"--- SHEET: {ws.title} ---")
+        for row in ws.iter_rows(values_only=True):
+            cells = ["" if c is None else str(c) for c in row]
+            if not any(c.strip() for c in cells):
+                continue
+            line = " | ".join(cells).rstrip(" |")
+            out.append(line)
+            total += len(line)
+            if total > max_chars:
+                out.append("[... spreadsheet truncated for length ...]")
+                return "\n".join(out)
+    return "\n".join(out)
+
+
+def _extract_slides(file_bytes: bytes) -> str:
+    """Pull the text of every slide, including speaker notes."""
+    import io as _io
+    from pptx import Presentation
+    prs = Presentation(_io.BytesIO(file_bytes))
+    out = []
+    for i, slide in enumerate(prs.slides, 1):
+        out.append(f"--- SLIDE {i} ---")
+        for shape in slide.shapes:
+            if shape.has_text_frame and shape.text_frame.text.strip():
+                out.append(shape.text_frame.text.strip())
+        try:
+            if slide.has_notes_slide:
+                notes = slide.notes_slide.notes_text_frame.text.strip()
+                if notes:
+                    out.append(f"[Speaker notes: {notes}]")
+        except Exception:
+            pass
+    return "\n".join(out)
+
+
+def _extract_delimited(file_bytes: bytes) -> str:
+    text = file_bytes.decode("utf-8", errors="replace")
+    return text if len(text) <= 40000 else text[:40000] + "\n[... truncated ...]"
+
+
+def extract_attachment_text(filename: str, file_bytes: bytes) -> str:
+    """Extract text from any supported attachment type.
+
+    Raises ValueError with a user-facing message for formats we can't read.
+    """
+    name = (filename or "").lower()
+    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+
+    if ext in SPREADSHEET_EXTS:
+        return _extract_spreadsheet(file_bytes)
+    if ext in SLIDES_EXTS:
+        return _extract_slides(file_bytes)
+    if ext in DELIMITED_EXTS:
+        return _extract_delimited(file_bytes)
+    if ext in LEGACY_OFFICE_EXTS:
+        raise ValueError(
+            f"{filename} is in an older Office format. Please re-save it as "
+            f".docx, .xlsx or .pptx and attach it again."
+        )
+    # PDF / DOCX / TXT / MD go through the existing pipeline
+    return emb.extract_text_from_upload(filename, file_bytes)
+
+
 def _fit_history(messages: list) -> list:
     """Trim conversation history so the session cookie stays under the browser limit.
 
@@ -2978,7 +3062,8 @@ def chat():
         return jsonify({"error": "Empty message"}), 400
 
     # Extension-based routing between document vs image
-    DOC_EXTS = ('.pdf', '.docx', '.txt', '.md')
+    DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
+                '.csv', '.tsv', '.txt', '.md', '.rtf')
     IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
     IMAGE_MEDIA_TYPES = {
         '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
@@ -3016,7 +3101,7 @@ def chat():
 
             elif ext in DOC_EXTS:
                 # Text extraction path (unchanged)
-                extracted = emb.extract_text_from_upload(filename, file_bytes)
+                extracted = extract_attachment_text(filename, file_bytes)
                 if not extracted.strip():
                     return jsonify({"error": f"Could not extract text from {filename}."}), 400
                 if len(extracted) > 40000:
@@ -3032,7 +3117,9 @@ def chat():
 
             else:
                 return jsonify({
-                    "error": "Unsupported file type. Please attach PDF, DOCX, TXT, MD, or an image (JPG, PNG, GIF, WEBP)."
+                    "error": ("Unsupported file type. Supported: PDF, Word (.docx), "
+                              "Excel (.xlsx), PowerPoint (.pptx), CSV, TXT, MD, RTF, "
+                              "and images (JPG, PNG, GIF, WEBP).")
                 }), 400
 
         except Exception as e:
@@ -3086,7 +3173,7 @@ def chat():
                     images_used += 1
                     image_names.append(fname)
                 elif ext in DOC_EXTS:
-                    extracted = emb.extract_text_from_upload(fname, bytes_)
+                    extracted = extract_attachment_text(fname, bytes_)
                     if not extracted.strip():
                         skipped_count += 1
                         continue
@@ -4032,7 +4119,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
     <h2>Upload Document</h2>
     <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, DOCX, TXT, MD. Up to 25 MB. The document will be chunked and embedded automatically.</p>
     <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
-      <input type="file" name="file" accept=".pdf,.docx,.txt,.md" required />
+      <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
       <input type="text" name="title" placeholder="Document title (optional)" />
       <button type="submit" class="btn">Upload & Embed</button>
     </form>
@@ -4457,7 +4544,7 @@ def admin_upload():
 
     try:
         file_bytes = file.read()
-        text = emb.extract_text_from_upload(file.filename, file_bytes)
+        text = extract_attachment_text(file.filename, file_bytes)
         if not text.strip():
             flash(f"No text could be extracted from {file.filename}.")
             return redirect(url_for("admin_dashboard"))
@@ -4537,7 +4624,7 @@ def admin_upload_folder():
                 failed.append((basename, "empty file"))
                 continue
 
-            text = emb.extract_text_from_upload(basename, file_bytes)
+            text = extract_attachment_text(basename, file_bytes)
             if not text.strip():
                 failed.append((basename, "no text extracted"))
                 continue
