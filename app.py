@@ -979,7 +979,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <form id="chat-form">
       <div class="input-wrap">
         <input type="text" id="message" placeholder="{{ cfg.placeholder }}" autocomplete="off" autofocus />
-        <input type="file" id="file-input" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf,.jpg,.jpeg,.png,.gif,.webp" multiple />
+        <input type="file" id="file-input" accept=".pdf,.docx,.doc,.xlsx,.xlsm,.xls,.pptx,.ppt,.csv,.tsv,.txt,.md,.rtf,.jpg,.jpeg,.png,.gif,.webp" multiple />
         <input type="file" id="folder-input-chat" webkitdirectory directory multiple />
         <button type="button" id="folder-btn" class="folder-btn" aria-label="Attach folder" title="Attach a folder of documents">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -2389,9 +2389,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
       const all = fresh;
       // Validate every file
       const okRe = /\.(pdf|docx|xlsx|xlsm|pptx|csv|tsv|txt|md|rtf|jpe?g|png|gif|webp)$/i;
+      // Legacy Office formats (.ppt/.doc/.xls) can't be read by the server, so
+      // catch them here and say exactly how to convert, before any upload.
+      const legacyRe = /\.(ppt|doc|xls)$/i;
+      const legacy = all.filter(f => legacyRe.test(f.name));
+      if (legacy.length) {
+        const LEGACY_HINT = {
+          ppt: ["PowerPoint", ".pptx"], doc: ["Word", ".docx"], xls: ["Excel", ".xlsx"],
+        };
+        const lines = legacy.map(f => {
+          const ext = f.name.split(".").pop().toLowerCase();
+          const [app, target] = LEGACY_HINT[ext] || ["Office", ".docx"];
+          return `• ${f.name}\n   Open it in ${app}, choose File \u203a Save As, ` +
+                 `pick ${target}, then attach the new file.`;
+        });
+        alert("These are in an older Office format that can't be read:\n\n" +
+              lines.join("\n\n"));
+      }
+      const nonLegacy = all.filter(f => !legacyRe.test(f.name));
+
       // Reject only the offending files — anything already attached stays put
-      const bad = all.filter(f => !okRe.test(f.name));
-      const oversized = all.filter(f => okRe.test(f.name)
+      const bad = nonLegacy.filter(f => !okRe.test(f.name));
+      const oversized = nonLegacy.filter(f => okRe.test(f.name)
                                        && f.size > MAX_FILE_MB * 1024 * 1024);
       const problems = [];
       if (bad.length) {
@@ -2402,7 +2421,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         problems.push(`Over ${MAX_FILE_MB} MB: ` + oversized.map(f => f.name).join(", "));
       }
       const rejected = new Set([...bad, ...oversized]);
-      const accepted = all.filter(f => !rejected.has(f));
+      const accepted = nonLegacy.filter(f => !rejected.has(f));
       if (problems.length) {
         alert(problems.join("\n\n") +
               (accepted.length ? `\n\nThe other ${accepted.length} file(s) were attached.` : ""));
@@ -2428,7 +2447,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Filter to documents only (images not supported in folder-attach mode)
       const docs = all.filter(f => DOC_RE.test(f.name));
       if (docs.length === 0) {
-        alert("No supported documents found in this folder (PDF, DOCX, TXT, MD).");
+        const legacyInFolder = all.filter(f => /\.(ppt|doc|xls)$/i.test(f.name));
+        alert(legacyInFolder.length
+          ? "This folder only contains older Office files (.ppt/.doc/.xls), which " +
+            "can't be read. Re-save them as .pptx/.docx/.xlsx and try again."
+          : "No supported documents found in this folder (PDF, Word, Excel, " +
+            "PowerPoint, CSV, TXT, MD, RTF).");
         clearAttachment(); return;
       }
       const capped = docs.slice(0, MAX_FOLDER_FILES);
