@@ -2325,16 +2325,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
       return (bytes / (1024 * 1024)).toFixed(1) + " MB";
     }
+    // Files picked with the paperclip accumulate here across multiple
+    // selections. Reading fileInput.files directly would mean each new pick
+    // silently replaced the previous one.
+    let attachedFiles = [];
+    const MAX_ATTACHMENTS = 20;
+
     function clearAttachment() {
       fileInput.value = "";
       folderInput.value = "";
+      attachedFiles = [];
       attachedFolderFiles = [];
       attachedFolderName = "";
       attachedFileDiv.classList.remove("visible");
     }
 
+    // Refresh the pill to describe everything currently attached
+    function refreshAttachmentChip() {
+      if (attachedFiles.length === 0) {
+        attachedFileDiv.classList.remove("visible");
+        return;
+      }
+      if (attachedFiles.length === 1) {
+        attachedFileName.textContent = attachedFiles[0].name;
+        attachedFileSize.textContent = "· " + formatFileSize(attachedFiles[0].size);
+      } else {
+        const total = attachedFiles.reduce((sum, f) => sum + f.size, 0);
+        const names = attachedFiles.slice(0, 3).map(f => f.name).join(", ");
+        attachedFileName.textContent =
+          `${attachedFiles.length} files: ${names}${attachedFiles.length > 3 ? "…" : ""}`;
+        attachedFileSize.textContent = "· " + formatFileSize(total);
+      }
+      attachedFileDiv.classList.add("visible");
+    }
+
     attachBtn.addEventListener("click", () => {
-      clearAttachment();          // clear any prior folder selection
+      // Folder mode and paperclip mode are mutually exclusive, but previously
+      // attached individual files are kept so more can be added to the batch.
+      folderInput.value = "";
+      attachedFolderFiles = [];
+      attachedFolderName = "";
       fileInput.click();
     });
     folderBtn.addEventListener("click", () => {
@@ -2344,31 +2374,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
     removeFileBtn.addEventListener("click", clearAttachment);
 
     fileInput.addEventListener("change", () => {
-      const all = Array.from(fileInput.files || []);
-      if (all.length === 0) return;
+      const picked = Array.from(fileInput.files || []);
+      if (picked.length === 0) return;
+      // Merge with anything already attached, ignoring exact duplicates
+      const seen = new Set(attachedFiles.map(f => f.name + ":" + f.size));
+      const fresh = picked.filter(f => !seen.has(f.name + ":" + f.size));
+      const all = fresh;
       // Validate every file
       const okRe = /\.(pdf|docx|xlsx|xlsm|pptx|csv|tsv|txt|md|rtf|jpe?g|png|gif|webp)$/i;
+      // Reject only the offending files — anything already attached stays put
       const bad = all.filter(f => !okRe.test(f.name));
+      const oversized = all.filter(f => okRe.test(f.name)
+                                       && f.size > MAX_FILE_MB * 1024 * 1024);
+      const problems = [];
       if (bad.length) {
-        alert("Unsupported file type: " + bad.map(f => f.name).join(", ") +
-          "\n\nSupported: PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF, and images (JPG, PNG, GIF, WEBP).");
-        clearAttachment(); return;
+        problems.push("Unsupported type: " + bad.map(f => f.name).join(", ") +
+          "\nSupported: PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF, and images.");
       }
-      const oversized = all.filter(f => f.size > MAX_FILE_MB * 1024 * 1024);
       if (oversized.length) {
-        alert(`One or more files exceed ${MAX_FILE_MB} MB: ${oversized.map(f => f.name).join(", ")}`);
-        clearAttachment(); return;
+        problems.push(`Over ${MAX_FILE_MB} MB: ` + oversized.map(f => f.name).join(", "));
       }
-      // Show a friendly summary in the pill
-      if (all.length === 1) {
-        attachedFileName.textContent = all[0].name;
-        attachedFileSize.textContent = "· " + formatFileSize(all[0].size);
-      } else {
-        const totalBytes = all.reduce((sum, f) => sum + f.size, 0);
-        attachedFileName.textContent = `${all.length} files: ` + all.slice(0, 3).map(f => f.name).join(", ") + (all.length > 3 ? "…" : "");
-        attachedFileSize.textContent = "· " + formatFileSize(totalBytes);
+      const rejected = new Set([...bad, ...oversized]);
+      const accepted = all.filter(f => !rejected.has(f));
+      if (problems.length) {
+        alert(problems.join("\n\n") +
+              (accepted.length ? `\n\nThe other ${accepted.length} file(s) were attached.` : ""));
       }
-      attachedFileDiv.classList.add("visible");
+      if (accepted.length === 0) {
+        fileInput.value = "";
+        refreshAttachmentChip();      // keep whatever was already there
+        return;
+      }
+      attachedFiles = attachedFiles.concat(accepted);
+      if (attachedFiles.length > MAX_ATTACHMENTS) {
+        alert(`You can attach up to ${MAX_ATTACHMENTS} files at once. ` +
+              `Keeping the first ${MAX_ATTACHMENTS}.`);
+        attachedFiles = attachedFiles.slice(0, MAX_ATTACHMENTS);
+      }
+      // Reset the input so re-picking the same file later still fires a change
+      fileInput.value = "";
+      refreshAttachmentChip();
     });
 
     folderInput.addEventListener("change", () => {
@@ -2396,7 +2441,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
-      const paperclipFiles = Array.from(fileInput.files || []);
+      const paperclipFiles = attachedFiles.slice();
       const folderFiles = attachedFolderFiles.slice();
       const folderName = attachedFolderName;
       // Require at least one of: text, single/multi file(s), or folder
