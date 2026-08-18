@@ -520,11 +520,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
       position: absolute; bottom: calc(100% + 8px); right: 0;
       background: var(--paper-2); border: 1px solid var(--line);
       border-radius: 4px; box-shadow: var(--shadow);
-      padding: 0.4rem; min-width: 180px;
+      padding: 0.4rem; min-width: 208px;
       display: none; flex-direction: column; gap: 0.1rem;
       z-index: 10;
+      /* Enough entries now that it can exceed the viewport — scroll instead */
+      max-height: min(62vh, 420px); overflow-y: auto;
     }
     .share-menu.open { display: flex; }
+    /* Flipped when there isn't room above the button */
+    .share-menu.drop-down { top: calc(100% + 8px); bottom: auto; }
     .share-menu a, .share-menu button {
       display: flex; align-items: center; gap: 0.6rem;
       padding: 0.5rem 0.7rem; border-radius: 2px;
@@ -533,6 +537,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       font-family: inherit; text-decoration: none;
       text-align: left; width: 100%;
       letter-spacing: 0; text-transform: none;
+      white-space: nowrap;
     }
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
@@ -1748,6 +1753,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return filename;
     }
 
+    // Popover menus sit above their button by default. Near the top of the
+    // page that clips them, so measure and flip downward when needed.
+    function positionMenu(menu) {
+      if (!menu) return;
+      menu.classList.remove("drop-down");
+      const rect = menu.getBoundingClientRect();
+      if (rect.top < 8) {
+        menu.classList.add("drop-down");
+        // If flipping would run off the bottom instead, keep it above
+        const flipped = menu.getBoundingClientRect();
+        if (flipped.bottom > window.innerHeight - 8 && rect.height < window.innerHeight) {
+          menu.classList.remove("drop-down");
+        }
+      }
+    }
+
     const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
 
     // Several deliverables in one reply: download each in its own format,
@@ -2180,6 +2201,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const sm = wrap.querySelector(".share-wrap > .share-menu");
         if (sm) sm.classList.remove("open");
         downloadMenu.classList.toggle("open");
+        if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
       });
 
       // When the reply holds more than one deliverable, rebuild the menu so
@@ -2257,13 +2279,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const emailBody = encodeURIComponent(shareText + "\\n\\n" + shareUrl);
         const smsBody = encodeURIComponent(shareText + " " + shareUrl);
         const twText = encodeURIComponent(shareText.slice(0, 240) + " " + shareUrl);
+        // Outlook on the web compose deeplink. Work/school accounts use
+        // outlook.office.com; personal accounts use outlook.live.com.
+        const outlookWork = "https://outlook.office.com/mail/deeplink/compose"
+                          + `?subject=${emailSubject}&body=${emailBody}`;
+        const outlookPersonal = "https://outlook.live.com/mail/0/deeplink/compose"
+                          + `?subject=${emailSubject}&body=${emailBody}`;
         const liUrl = encodeURIComponent(shareUrl);
         const fbUrl = encodeURIComponent(shareUrl);
 
         shareMenu.innerHTML = `
           <a href="mailto:?subject=${emailSubject}&body=${emailBody}" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            Email
+            Mail app
+          </a>
+          <a href="${outlookWork}" target="_blank" rel="noopener" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><path d="M14 8h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-6"/><path d="M5 9.5 8 12l3-2.5"/></svg>
+            Outlook (work)
+          </a>
+          <a href="${outlookPersonal}" target="_blank" rel="noopener" role="menuitem">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><path d="M14 8h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-6"/><circle cx="8" cy="12" r="2.2"/></svg>
+            Outlook.com
           </a>
           <a href="sms:?body=${smsBody}" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -2287,6 +2323,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           </button>
         `;
         shareMenu.classList.add("open");
+        positionMenu(shareMenu);
 
         const copyLinkBtn = shareMenu.querySelector('[data-action="copy-link"]');
         if (copyLinkBtn) {
