@@ -74,7 +74,7 @@ CONFIG = {
 
     "footer_disclaimer": os.environ.get(
         "FOOTER_DISCLAIMER",
-        "For informational purposes only. Not medical, legal, or financial advice.",
+        "For informational purposes only. Not official advice.",
     ),
     "footer_cta_text": os.environ.get(
         "FOOTER_CTA_TEXT",
