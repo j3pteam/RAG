@@ -16,6 +16,7 @@ NEW environment variables:
 All other env vars from the persona template still apply.
 """
 import os
+import tempfile
 from pathlib import Path
 from functools import wraps
 from flask import (
@@ -57,6 +58,16 @@ def load_system_prompt():
     return "You are a helpful assistant."
 
 
+# Per-file upload ceiling. Slide decks with embedded media routinely run past
+# 25 MB, so the default is 100 MB and it's tunable without a code change.
+MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+
+# Anthropic caps a single image at roughly 5 MB once base64-encoded, so images
+# get their own tighter limit than documents.
+MAX_IMAGE_MB = int(os.environ.get("MAX_IMAGE_MB", "5"))
+MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
+
 CONFIG = {
     "persona_name": os.environ.get("PERSONA_NAME", "J3P Advisor"),
     "opening": os.environ.get(
@@ -81,6 +92,8 @@ CONFIG = {
         "To schedule time with a J3P Advisor, please",
     ),
     "contact_email": os.environ.get("CONTACT_EMAIL", "clientservices@j3p.health"),
+    "max_upload_mb": MAX_UPLOAD_MB,
+    "max_image_mb": MAX_IMAGE_MB,
     "footer_ai_note": os.environ.get(
         "FOOTER_AI_NOTE",
         "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
@@ -109,7 +122,8 @@ CONFIG = {
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
-app.config["MAX_CONTENT_LENGTH"] = 25 * 1024 * 1024  # 25 MB upload cap
+# The whole request has to fit several files plus multipart overhead
+app.config["MAX_CONTENT_LENGTH"] = int(MAX_UPLOAD_BYTES * 3.5)
 client = anthropic.Anthropic()
 
 # Initialize DB schema once at startup (idempotent)
@@ -126,6 +140,120 @@ except Exception as e:
 # ---------------------------------------------------------------------------
 # Auth helper for admin routes
 # ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Runtime settings (toggles the admin can flip without a redeploy)
+# ---------------------------------------------------------------------------
+# Kept in its own tiny table so database.py is untouched. If Postgres isn't
+# available the values live in a JSON file instead — that survives restarts but
+# not redeploys, which is fine for a display preference.
+
+import json as _json
+
+_SETTINGS_DEFAULTS = {
+    "show_scheduling_button": True,
+}
+_settings_cache = None
+_SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
+
+
+def _settings_db_conn():
+    """Connection for the settings table, or None when Postgres isn't set up."""
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        return None
+    try:
+        import psycopg
+        return psycopg.connect(url)
+    except Exception as e:
+        app.logger.warning(f"[settings] Postgres unavailable: {e}")
+        return None
+
+
+def _settings_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS app_settings (
+                key         TEXT PRIMARY KEY,
+                value       TEXT NOT NULL,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def load_settings(force: bool = False) -> dict:
+    """Current settings, defaults filled in for anything unset."""
+    global _settings_cache
+    if _settings_cache is not None and not force:
+        return _settings_cache
+
+    values = dict(_SETTINGS_DEFAULTS)
+    conn = _settings_db_conn()
+    if conn:
+        try:
+            _settings_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("SELECT key, value FROM app_settings")
+                for key, raw in cur.fetchall():
+                    if key in values:
+                        values[key] = raw == "true"
+        except Exception as e:
+            app.logger.error(f"[settings] read failed: {e}")
+        finally:
+            conn.close()
+    else:
+        try:
+            if os.path.isfile(_SETTINGS_FILE):
+                with open(_SETTINGS_FILE, encoding="utf-8") as fh:
+                    stored = _json.load(fh)
+                for key in values:
+                    if key in stored:
+                        values[key] = bool(stored[key])
+        except Exception as e:
+            app.logger.error(f"[settings] file read failed: {e}")
+
+    _settings_cache = values
+    return values
+
+
+def save_setting(key: str, value: bool) -> bool:
+    """Persist one setting. Returns True when it was written."""
+    global _settings_cache
+    if key not in _SETTINGS_DEFAULTS:
+        return False
+
+    written = False
+    conn = _settings_db_conn()
+    if conn:
+        try:
+            _settings_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO app_settings (key, value, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (key)
+                    DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
+                """, (key, "true" if value else "false"))
+            conn.commit()
+            written = True
+        except Exception as e:
+            app.logger.error(f"[settings] write failed: {e}")
+        finally:
+            conn.close()
+    else:
+        try:
+            current = load_settings(force=True)
+            current[key] = bool(value)
+            with open(_SETTINGS_FILE, "w", encoding="utf-8") as fh:
+                _json.dump(current, fh)
+            written = True
+        except Exception as e:
+            app.logger.error(f"[settings] file write failed: {e}")
+
+    _settings_cache = None      # force a reload on next read
+    return written
+
 
 def admin_required(f):
     @wraps(f)
@@ -1010,6 +1138,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
       <button type="submit" id="send-btn">Send</button>
     </form>
+    {% if show_scheduling_button %}
     <div class="footer-cta">
       <a class="cta-btn" role="button" tabindex="0"
          data-cta-url="{{ cfg.footer_cta_url }}"
@@ -1023,6 +1152,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span>{{ cfg.footer_cta_label }}</span>
       </a>
     </div>
+    {% endif %}
     <div class="footer-note">
       {{ cfg.footer_disclaimer }}
       <span class="footer-ai-note">{{ cfg.footer_ai_note }}</span>
@@ -1757,17 +1887,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // page that clips them, so measure and flip downward when needed.
     function positionMenu(menu) {
       if (!menu) return;
+      // The menu lives inside the scrolling chat area, so it's clipped by that
+      // container's edges rather than the viewport's. Measure against both.
+      const scroller = document.getElementById("chat-wrap");
+      const sb = scroller ? scroller.getBoundingClientRect() : null;
+      const topLimit = Math.max(8, sb ? sb.top + 4 : 8);
+      const bottomLimit = Math.min(window.innerHeight - 8,
+                                   sb ? sb.bottom - 4 : window.innerHeight - 8);
+
       menu.classList.remove("drop-down");
-      const rect = menu.getBoundingClientRect();
-      if (rect.top < 8) {
-        menu.classList.add("drop-down");
-        // If flipping would run off the bottom instead, keep it above
-        const flipped = menu.getBoundingClientRect();
-        if (flipped.bottom > window.innerHeight - 8 && rect.height < window.innerHeight) {
-          menu.classList.remove("drop-down");
-        }
+      const above = menu.getBoundingClientRect();
+      if (above.top >= topLimit) return;            // fits as-is
+
+      menu.classList.add("drop-down");
+      const below = menu.getBoundingClientRect();
+      if (below.bottom > bottomLimit) {
+        // Neither direction fits cleanly — take whichever clips less
+        const clipAbove = topLimit - above.top;
+        const clipBelow = below.bottom - bottomLimit;
+        if (clipAbove <= clipBelow) menu.classList.remove("drop-down");
       }
     }
+
+    // Keep an open menu correctly placed if the chat scrolls behind it
+    ["scroll", "resize"].forEach(evt => {
+      const target = evt === "scroll" ? document.getElementById("chat-wrap") : window;
+      if (target) target.addEventListener(evt, () => {
+        document.querySelectorAll(".share-menu.open").forEach(positionMenu);
+      }, { passive: true });
+    });
 
     const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
 
@@ -2292,23 +2440,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
         // outlook.office.com; personal accounts use outlook.live.com.
         const outlookWork = "https://outlook.office.com/mail/deeplink/compose"
                           + `?subject=${emailSubject}&body=${emailBody}`;
-        const outlookPersonal = "https://outlook.live.com/mail/0/deeplink/compose"
-                          + `?subject=${emailSubject}&body=${emailBody}`;
         const liUrl = encodeURIComponent(shareUrl);
         const fbUrl = encodeURIComponent(shareUrl);
 
         shareMenu.innerHTML = `
           <a href="mailto:?subject=${emailSubject}&body=${emailBody}" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22,6 12,13 2,6"/></svg>
-            Mail app
+            Email
           </a>
           <a href="${outlookWork}" target="_blank" rel="noopener" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><path d="M14 8h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-6"/><path d="M5 9.5 8 12l3-2.5"/></svg>
-            Outlook (work)
-          </a>
-          <a href="${outlookPersonal}" target="_blank" rel="noopener" role="menuitem">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><path d="M14 8h6a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-6"/><circle cx="8" cy="12" r="2.2"/></svg>
-            Outlook.com
+            Outlook
           </a>
           <a href="sms:?body=${smsBody}" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
@@ -2326,11 +2468,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <svg viewBox="0 0 24 24" fill="currentColor"><path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/></svg>
             Facebook
           </a>
-          ${navigator.share ? `
-          <button type="button" data-action="os-share" role="menuitem">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-7"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-            More (AirDrop, Notes…)
-          </button>` : ""}
           <button type="button" data-action="copy-link" role="menuitem">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
             Copy link
@@ -2338,16 +2475,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
         `;
         shareMenu.classList.add("open");
         positionMenu(shareMenu);
-
-        const osShareBtn = shareMenu.querySelector('[data-action="os-share"]');
-        if (osShareBtn) {
-          osShareBtn.addEventListener("click", async () => {
-            shareMenu.classList.remove("open");
-            try {
-              await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
-            } catch (err) { /* cancelled — nothing to do */ }
-          });
-        }
 
         const copyLinkBtn = shareMenu.querySelector('[data-action="copy-link"]');
         if (copyLinkBtn) {
@@ -2381,7 +2508,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const attachedFileName = document.getElementById("attached-file-name");
     const attachedFileSize = document.getElementById("attached-file-size");
     const removeFileBtn = document.getElementById("remove-file-btn");
-    const MAX_FILE_MB = 25;
+    const MAX_FILE_MB = {{ cfg.max_upload_mb }};
+    const MAX_IMAGE_MB = {{ cfg.max_image_mb }};
     const MAX_FOLDER_FILES = 20;
     const DOC_RE = /\.(pdf|docx|xlsx|xlsm|pptx|csv|tsv|txt|md|rtf)$/i;
     // Track state: either a single file OR a list of folder files, never both
@@ -2471,8 +2599,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
       // Reject only the offending files — anything already attached stays put
       const bad = nonLegacy.filter(f => !okRe.test(f.name));
+      const imageRe = /\.(jpe?g|png|gif|webp)$/i;
       const oversized = nonLegacy.filter(f => okRe.test(f.name)
+                                       && !imageRe.test(f.name)
                                        && f.size > MAX_FILE_MB * 1024 * 1024);
+      const bigImages = nonLegacy.filter(f => imageRe.test(f.name)
+                                       && f.size > MAX_IMAGE_MB * 1024 * 1024);
       const problems = [];
       if (bad.length) {
         problems.push("Unsupported type: " + bad.map(f => f.name).join(", ") +
@@ -2481,7 +2613,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (oversized.length) {
         problems.push(`Over ${MAX_FILE_MB} MB: ` + oversized.map(f => f.name).join(", "));
       }
-      const rejected = new Set([...bad, ...oversized]);
+      if (bigImages.length) {
+        problems.push(`Images must be under ${MAX_IMAGE_MB} MB: `
+                      + bigImages.map(f => f.name).join(", "));
+      }
+      const rejected = new Set([...bad, ...oversized, ...bigImages]);
       const accepted = nonLegacy.filter(f => !rejected.has(f));
       if (problems.length) {
         alert(problems.join("\n\n") +
@@ -3184,6 +3320,7 @@ def index():
     return render_template_string(
         INDEX_HTML,
         cfg=CONFIG,
+        show_scheduling_button=load_settings()["show_scheduling_button"],
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
@@ -3240,8 +3377,12 @@ def chat():
     if uploaded_file:
         try:
             file_bytes = uploaded_file.read()
-            if len(file_bytes) > 25 * 1024 * 1024:
-                return jsonify({"error": "File too large (25 MB max)."}), 400
+            if len(file_bytes) > MAX_UPLOAD_BYTES:
+                return jsonify({
+                    "error": f"{filename} is too large "
+                             f"({len(file_bytes) / 1048576:.0f} MB). "
+                             f"Limit is {MAX_UPLOAD_MB} MB per file."
+                }), 400
             filename = uploaded_file.filename or "attachment"
             attachment_display_name = filename
             ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
@@ -3316,7 +3457,7 @@ def chat():
                 fname = (f.filename or "unknown").rsplit("/", 1)[-1]
                 ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
                 bytes_ = f.read()
-                if len(bytes_) > 25 * 1024 * 1024:
+                if len(bytes_) > MAX_UPLOAD_BYTES:
                     skipped_count += 1
                     continue
                 if ext in IMAGE_EXTS:
@@ -4348,6 +4489,28 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% endif %}
 
   <div class="section">
+    <h2>Display Settings</h2>
+    <form method="POST" action="/admin/settings">
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+        <input type="checkbox" name="show_scheduling_button" value="1"
+               {% if settings.show_scheduling_button %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Show the &ldquo;Schedule Time With a J3P Advisor&rdquo; button</strong><br />
+          <span class="muted">
+            When off, the scheduling button is hidden from the chat page and
+            participants use the advisor without a booking prompt. Takes effect
+            immediately for everyone.
+          </span>
+        </span>
+      </label>
+      <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
+    </form>
+  </div>
+
+  <div class="section">
     <h2>Feedback Overview</h2>
     <div class="stats">
       <div class="stat">
@@ -4374,7 +4537,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
   {% if rag_ready %}
   <div class="section">
     <h2>Upload Document</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, DOCX, TXT, MD. Up to 25 MB. The document will be chunked and embedded automatically.</p>
+    <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF. Up to {{ cfg.max_upload_mb }} MB. The document will be chunked and embedded automatically.</p>
     <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
       <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
       <input type="text" name="title" placeholder="Document title (optional)" />
@@ -4768,9 +4931,22 @@ def admin_dashboard():
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
+        settings=load_settings(force=True),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
     )
+
+
+@app.route("/admin/settings", methods=["POST"])
+@admin_required
+def admin_settings():
+    """Persist the display toggles from the admin panel."""
+    show = bool(request.form.get("show_scheduling_button"))
+    if save_setting("show_scheduling_button", show):
+        flash(f"Scheduling button is now {'visible' if show else 'hidden'} for participants.")
+    else:
+        flash("Could not save settings — check the database connection.")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/upload", methods=["POST"])
@@ -4846,7 +5022,7 @@ def admin_upload_folder():
 
     SUPPORTED_EXT = ('.pdf', '.docx', '.txt', '.md')
     MAX_BATCH = 50   # keep request under Railway 5-min timeout for typical files
-    MAX_BYTES = 25 * 1024 * 1024
+    MAX_BYTES = MAX_UPLOAD_BYTES
 
     # Filter to supported extensions first
     supported_files = [f for f in files if f.filename and f.filename.lower().endswith(SUPPORTED_EXT)]
@@ -4875,7 +5051,7 @@ def admin_upload_folder():
 
             file_bytes = file.read()
             if len(file_bytes) > MAX_BYTES:
-                failed.append((basename, "too large (>25 MB)"))
+                failed.append((basename, f"too large (>{MAX_UPLOAD_MB} MB)"))
                 continue
             if not file_bytes:
                 failed.append((basename, "empty file"))
