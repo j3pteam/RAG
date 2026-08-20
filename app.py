@@ -17,6 +17,7 @@ All other env vars from the persona template still apply.
 """
 import os
 import tempfile
+import threading
 from pathlib import Path
 from functools import wraps
 from flask import (
@@ -253,6 +254,140 @@ def save_setting(key: str, value: bool) -> bool:
 
     _settings_cache = None      # force a reload on next read
     return written
+
+
+# ---------------------------------------------------------------------------
+# Approximate location for the conversation log
+# ---------------------------------------------------------------------------
+# Resolves the caller's IP to city / region / country and stores only that.
+# The IP itself is never written down. Lookups run on a background thread so
+# they never slow a reply, and results are cached per IP for the process life.
+# Set GEO_LOOKUP=off to disable entirely.
+
+GEO_LOOKUP_ENABLED = os.environ.get("GEO_LOOKUP", "on").lower() not in ("off", "0", "false")
+_geo_cache = {}
+_geo_lock = threading.Lock()
+
+
+def client_ip() -> str:
+    """Caller's IP, accounting for Railway's proxy."""
+    forwarded = request.headers.get("X-Forwarded-For", "")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.headers.get("X-Real-IP") or request.remote_addr or ""
+
+
+def _is_private_ip(ip: str) -> bool:
+    try:
+        import ipaddress
+        addr = ipaddress.ip_address(ip)
+        return addr.is_private or addr.is_loopback or addr.is_reserved
+    except Exception:
+        return True
+
+
+def resolve_location(ip: str):
+    """Return {'city','region','country'} for an IP, or None."""
+    if not ip or _is_private_ip(ip):
+        return None
+    with _geo_lock:
+        if ip in _geo_cache:
+            return _geo_cache[ip]
+    result = None
+    try:
+        import urllib.request as _url
+        import json as _j
+        req = _url.Request(
+            f"http://ip-api.com/json/{ip}?fields=status,city,regionName,country",
+            headers={"User-Agent": "j3p-advisor"},
+        )
+        with _url.urlopen(req, timeout=4) as resp:
+            data = _j.loads(resp.read().decode("utf-8"))
+        if data.get("status") == "success":
+            result = {
+                "city": data.get("city") or "",
+                "region": data.get("regionName") or "",
+                "country": data.get("country") or "",
+            }
+    except Exception as e:
+        app.logger.warning(f"[geo] lookup failed: {e}")
+    with _geo_lock:
+        _geo_cache[ip] = result
+    return result
+
+
+def _geo_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS interaction_geo (
+                interaction_id BIGINT PRIMARY KEY,
+                city           TEXT,
+                region         TEXT,
+                country        TEXT,
+                captured_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def record_location(interaction_id: int, ip: str):
+    """Look up and store the location for one logged interaction."""
+    if not (GEO_LOOKUP_ENABLED and interaction_id and ip):
+        return
+    loc = resolve_location(ip)
+    if not loc:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _geo_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO interaction_geo (interaction_id, city, region, country)
+                VALUES (%s, %s, %s, %s)
+                ON CONFLICT (interaction_id) DO NOTHING
+            """, (int(interaction_id), loc["city"], loc["region"], loc["country"]))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[geo] store failed: {e}")
+    finally:
+        conn.close()
+
+
+def record_location_async(interaction_id: int, ip: str):
+    """Fire the lookup in the background so the reply isn't delayed."""
+    if not (GEO_LOOKUP_ENABLED and interaction_id and ip):
+        return
+    threading.Thread(
+        target=record_location, args=(interaction_id, ip), daemon=True
+    ).start()
+
+
+def locations_for(interaction_ids):
+    """Map of interaction_id -> 'City, Region, Country' for the admin table."""
+    out = {}
+    ids = [int(i) for i in interaction_ids if i]
+    if not ids:
+        return out
+    conn = _settings_db_conn()
+    if not conn:
+        return out
+    try:
+        _geo_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT interaction_id, city, region, country
+                FROM interaction_geo WHERE interaction_id = ANY(%s)
+            """, (ids,))
+            for iid, city, region, country in cur.fetchall():
+                parts = [p for p in (city, region, country) if p]
+                out[iid] = ", ".join(parts)
+    except Exception as e:
+        app.logger.error(f"[geo] read failed: {e}")
+    finally:
+        conn.close()
+    return out
 
 
 def admin_required(f):
@@ -4053,6 +4188,8 @@ def chat():
             persona=CONFIG["persona_name"],
             attachment_info=attachment_note,
         )
+        # Resolve city/region/country in the background — never blocks the reply
+        record_location_async(interaction_id, client_ip())
     except Exception as e:
         app.logger.error(f"log_interaction failed: {e}")
 
@@ -4739,7 +4876,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
@@ -4751,6 +4888,9 @@ input[type="text"] { flex: 1; min-width: 200px; }
             {% elif f.rating == 'down' %}<span class="tag-down">DOWN</span>
             {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
             {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
+            {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
           </td>
           <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
           <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
@@ -4767,7 +4907,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
           </td>
         </tr>
         <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
-          <td colspan="8">
+          <td colspan="9">
             <div class="feedback-detail-meta">
               Log ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
               · Rating: <strong>
@@ -4776,6 +4916,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
                 {% else %}Unrated{% endif %}
               </strong>
               {% if f.persona %}· Persona: {{ f.persona }}{% endif %}
+              {% if locations.get(f.id) %}· Location: {{ locations[f.id] }}{% endif %}
               {% if f.attachment_info %}· Attachment: {{ f.attachment_info }}{% endif %}
             </div>
 
@@ -4985,6 +5126,7 @@ def admin_dashboard():
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
+        locations=locations_for([r.get("id") for r in feedback_rows]),
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
@@ -5261,8 +5403,9 @@ def admin_export_feedback():
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
+    geo = locations_for([r.get("id") for r in rows])
     writer.writerow([
-        "ID", "Timestamp", "Rating", "User Question", "Bot Reply",
+        "ID", "Timestamp", "Rating", "Location", "User Question", "Bot Reply",
         "Comment", "Persona"
     ])
     for r in rows:
@@ -5270,6 +5413,7 @@ def admin_export_feedback():
             r.get("id", ""),
             r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
             r.get("rating", ""),
+            geo.get(r.get("id"), ""),
             r.get("user_message", "") or "",
             r.get("bot_reply", "") or "",
             r.get("comment", "") or "",
@@ -5315,7 +5459,8 @@ def admin_export_feedback_xlsx():
     ws = wb.active
     ws.title = "Feedback"
 
-    headers = ["ID", "Timestamp", "Rating", "User Question", "Bot Reply", "Comment", "Persona"]
+    geo = locations_for([r.get("id") for r in rows])
+    headers = ["ID", "Timestamp", "Rating", "Location", "User Question", "Bot Reply", "Comment", "Persona"]
     ws.append(headers)
 
     # Header styling — navy background, gold text, bold
@@ -5340,6 +5485,7 @@ def admin_export_feedback_xlsx():
             r.get("id", ""),
             r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
             r.get("rating", ""),
+            geo.get(r.get("id"), ""),
             r.get("user_message", "") or "",
             r.get("bot_reply", "") or "",
             r.get("comment", "") or "",
@@ -5351,7 +5497,7 @@ def admin_export_feedback_xlsx():
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=row_idx, column=col_idx).fill = down_fill
         # Wrap long text cells
-        for col_idx in [4, 5, 6]:  # User Question, Bot Reply, Comment
+        for col_idx in [5, 6, 7]:  # User Question, Bot Reply, Comment
             ws.cell(row=row_idx, column=col_idx).alignment = wrap_align
 
     # Column widths — sized for readable browsing in Excel
@@ -5359,10 +5505,11 @@ def admin_export_feedback_xlsx():
         "A": 8,    # ID
         "B": 20,   # Timestamp
         "C": 8,    # Rating
-        "D": 50,   # User Question
-        "E": 80,   # Bot Reply
-        "F": 40,   # Comment
-        "G": 18,   # Persona
+        "D": 24,   # Location
+        "E": 50,   # User Question
+        "F": 80,   # Bot Reply
+        "G": 40,   # Comment
+        "H": 18,   # Persona
     }
     for col_letter, width in column_widths.items():
         ws.column_dimensions[col_letter].width = width
