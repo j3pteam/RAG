@@ -3313,18 +3313,50 @@ def retrieve_context(query: str) -> str:
     return context
 
 
-@app.route("/")
-@paywall.paywall_required
-def index():
+def _render_chat(force_scheduling=None):
+    """Render the chat page. force_scheduling overrides the admin default."""
     session["messages"] = []
+    if force_scheduling is None:
+        show = load_settings()["show_scheduling_button"]
+    else:
+        show = bool(force_scheduling)
+        # Remember the choice so a reset or refresh keeps the same experience
+        session["force_scheduling"] = show
+    # A visitor who arrived on a fixed link keeps that variant for the session
+    if force_scheduling is None and "force_scheduling" in session:
+        show = bool(session["force_scheduling"])
+
     return render_template_string(
         INDEX_HTML,
         cfg=CONFIG,
-        show_scheduling_button=load_settings()["show_scheduling_button"],
+        show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
     )
+
+
+@app.route("/")
+@paywall.paywall_required
+def index():
+    """Default entry point — follows the admin panel's Display Settings."""
+    return _render_chat()
+
+
+@app.route("/scheduling")
+@paywall.paywall_required
+def index_with_scheduling():
+    """Share this link when you want the booking button shown."""
+    session.pop("force_scheduling", None)
+    return _render_chat(force_scheduling=True)
+
+
+@app.route("/no-scheduling")
+@paywall.paywall_required
+def index_without_scheduling():
+    """Share this link when you want the advisor with no booking prompt."""
+    session.pop("force_scheduling", None)
+    return _render_chat(force_scheduling=False)
 
 
 @app.route("/chat", methods=["POST"])
@@ -4508,6 +4540,27 @@ input[type="text"] { flex: 1; min-width: 200px; }
       </label>
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
+
+    <div style="margin-top: 1.5rem; padding-top: 1.1rem; border-top: 1px dashed var(--line);">
+      <p class="muted" style="margin: 0 0 0.7rem 0; font-size: 0.85rem;">
+        The setting above is the default for <code>{{ base_url }}/</code>.
+        To run both experiences at once, share these fixed links instead —
+        each ignores the default and always behaves the same way.
+      </p>
+      <table style="font-size: 0.85rem;">
+        <tr>
+          <th style="width: 40%;">Link</th><th>Scheduling button</th>
+        </tr>
+        <tr>
+          <td><code>{{ base_url }}/scheduling</code></td>
+          <td>Always shown</td>
+        </tr>
+        <tr>
+          <td><code>{{ base_url }}/no-scheduling</code></td>
+          <td>Always hidden</td>
+        </tr>
+      </table>
+    </div>
   </div>
 
   <div class="section">
@@ -4932,6 +4985,7 @@ def admin_dashboard():
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
+        base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
     )
