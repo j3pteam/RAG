@@ -805,6 +805,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
+    /* Opt-in download offer under a reply — nothing saves without a click */
+    .export-offer {
+      display: flex; align-items: center; flex-wrap: wrap; gap: 0.5rem;
+      margin-top: 0.85rem; padding: 0.6rem 0.75rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-left: 3px solid var(--gold); border-radius: 3px;
+    }
+    .export-offer-label {
+      font-size: 0.82rem; color: var(--navy); margin-right: 0.2rem;
+    }
+    .export-offer-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+    .export-chip {
+      background: var(--paper-2); border: 1px solid var(--line);
+      color: var(--muted); border-radius: 2px;
+      padding: 0.3rem 0.62rem; cursor: pointer;
+      font-family: inherit; font-size: 0.72rem; letter-spacing: 0.02em;
+      transition: all 0.15s ease;
+    }
+    .export-chip:hover:not(:disabled) {
+      border-color: var(--gold); color: var(--navy);
+    }
+    .export-chip.primary {
+      background: var(--navy); border-color: var(--navy); color: var(--gold);
+    }
+    .export-chip.primary:hover:not(:disabled) {
+      background: var(--gold); color: var(--navy); border-color: var(--gold);
+    }
+    .export-chip.dismiss { border-style: dashed; }
+    .export-chip:disabled { opacity: 0.55; cursor: default; }
+    @media (max-width: 640px) {
+      .export-offer { flex-direction: column; align-items: flex-start; }
+    }
+
     /* Multi-document SAVE menu: one row per deliverable */
     .share-menu.multi-doc { min-width: 268px; padding: 0.55rem; }
     .doc-group { padding: 0.5rem 0.55rem 0.6rem; }
@@ -2054,59 +2087,73 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
 
-    // Several deliverables in one reply: download each in its own format,
-    // spaced slightly apart so browsers don't treat them as a download flood.
-    async function autoExportAll(msgDiv, docs, text) {
-      const btn = msgDiv.querySelector(".download-btn");
-      const label = btn ? btn.querySelector(".download-label") : null;
-      if (btn) btn.classList.add("copied");
-      let done = 0;
-      for (const doc of docs) {
-        const fmt = doc.suggested || "docx";
-        if (label) label.textContent = `Building ${done + 1}/${docs.length}\u2026`;
-        try {
-          await downloadExport(fmt, text, doc.index);
-          done += 1;
-        } catch (err) {
-          console.error("Auto-export failed for", doc.title, err);
-        }
-        await new Promise(r => setTimeout(r, 900));
-      }
-      if (label) {
-        label.textContent = done === docs.length
-          ? `${done} files saved`
-          : (done ? `${done} of ${docs.length} saved` : "Tap to save");
-      }
-      setTimeout(() => {
-        if (btn) btn.classList.remove("copied");
-        if (label) label.textContent = "Save";
-      }, 5000);
-    }
+    // Offers a download beneath a reply. Nothing is written to disk unless
+    // the user picks a format — replies never export themselves.
+    function offerExport(msgDiv, text, suggested, docs) {
+      if (!msgDiv || msgDiv.querySelector(".export-offer")) return;
+      const FMT_ORDER = ["docx", "pptx", "xlsx", "pdf"];
+      const primary = FMT_ORDER.includes(suggested) ? suggested : "docx";
 
-    // Builds the requested file and downloads it, showing status on the
-    // message's own SAVE button so the user can see what happened.
-    async function autoExport(msgDiv, fmt, text) {
-      const btn = msgDiv.querySelector(".download-btn");
-      const label = btn ? btn.querySelector(".download-label") : null;
-      const pretty = FORMAT_NAMES[fmt] || fmt.toUpperCase();
-      if (btn) btn.classList.add("copied");
-      if (label) label.textContent = "Building\u2026";
-      try {
-        await downloadExport(fmt, text);
-        if (label) label.textContent = pretty + " saved";
-        setTimeout(() => {
-          if (btn) btn.classList.remove("copied");
-          if (label) label.textContent = "Save";
-        }, 4000);
-      } catch (err) {
-        console.error("Auto-export failed:", err);
-        // Downloads can be blocked by the browser — leave a clear manual path
-        if (label) label.textContent = "Tap to save";
-        if (btn) {
-          btn.classList.remove("copied");
-          btn.title = `Couldn't download automatically — click to save as ${pretty}`;
-        }
-      }
+      const bar = document.createElement("div");
+      bar.className = "export-offer";
+
+      const label = document.createElement("span");
+      label.className = "export-offer-label";
+      label.textContent = (docs && docs.length > 1)
+        ? `Save these ${docs.length} documents as files?`
+        : "Save this as a file?";
+      bar.appendChild(label);
+
+      const chips = document.createElement("span");
+      chips.className = "export-offer-chips";
+
+      const makeChip = (fmt, text2, isPrimary) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "export-chip" + (isPrimary ? " primary" : "");
+        btn.textContent = text2;
+        btn.addEventListener("click", async () => {
+          const original = btn.textContent;
+          chips.querySelectorAll("button").forEach(x => x.disabled = true);
+          btn.textContent = "Building\u2026";
+          try {
+            if (docs && docs.length > 1) {
+              for (const doc of docs) {
+                await downloadExport(fmt, text, doc.index);
+                await new Promise(r => setTimeout(r, 800));
+              }
+            } else {
+              await downloadExport(fmt, text);
+            }
+            btn.textContent = "Saved";
+            setTimeout(() => bar.remove(), 1500);
+          } catch (err) {
+            console.error("Export failed:", err);
+            btn.textContent = "Failed";
+            setTimeout(() => {
+              btn.textContent = original;
+              chips.querySelectorAll("button").forEach(x => x.disabled = false);
+            }, 1800);
+          }
+        });
+        return btn;
+      };
+
+      chips.appendChild(makeChip(primary, FORMAT_NAMES[primary], true));
+      FMT_ORDER.filter(f => f !== primary)
+               .forEach(f => chips.appendChild(makeChip(f, FORMAT_NAMES[f], false)));
+
+      const dismiss = document.createElement("button");
+      dismiss.type = "button";
+      dismiss.className = "export-chip dismiss";
+      dismiss.textContent = "No thanks";
+      dismiss.addEventListener("click", () => bar.remove());
+      chips.appendChild(dismiss);
+
+      bar.appendChild(chips);
+      const actions = msgDiv.querySelector(".feedback");
+      if (actions) msgDiv.insertBefore(bar, actions);
+      else msgDiv.appendChild(bar);
     }
 
     // Minimal, safe markdown renderer for assistant replies. Escapes HTML
@@ -2867,14 +2914,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (data.reply) {
           const msgDiv = addMessage(data.reply, "assistant", true,
                                     data.interaction_id || null, data.documents || null);
-          // The user asked for a specific file — build and download it now
-          // instead of making them hunt for the SAVE button.
+          // Nothing downloads on its own. When the reply looks like a
+          // deliverable, offer a download and let the user decide.
           const docs = data.documents || [];
           if (docs.length > 1 && data.separate_files) {
-            // The user explicitly asked for separate files — one per document
-            autoExportAll(msgDiv, docs, data.reply);
+            offerExport(msgDiv, data.reply, data.export_format, docs);
           } else if (data.export_format) {
-            autoExport(msgDiv, data.export_format, data.reply);
+            offerExport(msgDiv, data.reply, data.export_format, null);
           }
         }
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
@@ -3924,12 +3970,15 @@ def chat():
         "a document. This separation lets each deliverable be downloaded as its "
         "own file in its own format, so it matters. Do not merge two documents "
         "under one title.\n\n"
-        "8. THE FILE IS AUTOMATIC. When someone asks for a specific format, the "
-        "file is generated and downloaded for them the moment you reply. Do not "
-        "tell them you are unable to attach a file, and do not instruct them to "
-        "copy your text into Word or PowerPoint themselves. You may close with "
-        "one short line noting the file is downloading and that SAVE below can "
-        "re-download it in any format. One line only.\n"
+        "8. OFFER THE FILE, DON'T ANNOUNCE ONE. A download is offered beneath "
+        "your reply and beneath that a SAVE button, but nothing is saved unless "
+        "the user chooses a format. Never say a file 'is downloading', 'has been "
+        "attached', or 'is ready' — that would be untrue. Do not tell them you "
+        "are unable to produce a file either, and never instruct them to copy "
+        "your text into Word or PowerPoint themselves. If you mention it at all, "
+        "one short closing line such as 'Use the buttons below to save this as "
+        "Word, PowerPoint, Excel or PDF.' One line only, and it is fine to omit "
+        "it entirely.\n"
     )
 
     # All human contact routes through client services, never an individual.
