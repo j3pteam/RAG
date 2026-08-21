@@ -3132,6 +3132,116 @@ INDEX_HTML = r"""<!DOCTYPE html>
 # about 4 KB, and an oversized cookie is silently discarded — which wipes the
 # entire conversation. Signing and base64 add overhead, so we budget well under
 # that for the message payload itself.
+# ---------------------------------------------------------------------------
+# Conversation history
+# ---------------------------------------------------------------------------
+# History used to live in the Flask session cookie, which browsers cap at ~4 KB.
+# That meant a single cover letter filled the budget and earlier turns were
+# evicted — the advisor would then say it had no cover letter to revise. When
+# Postgres is available the transcript is stored server-side instead, keyed by a
+# random token held in the cookie, so a full working session stays intact.
+
+CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
+
+
+def _history_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS chat_history (
+                id         BIGSERIAL PRIMARY KEY,
+                token      TEXT NOT NULL,
+                role       TEXT NOT NULL,
+                content    TEXT NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS chat_history_token_idx
+            ON chat_history (token, id)
+        """)
+    conn.commit()
+
+
+def _history_token() -> str:
+    """Small random id kept in the cookie; the transcript itself stays server-side."""
+    token = session.get("chat_token")
+    if not token:
+        token = os.urandom(16).hex()
+        session["chat_token"] = token
+    return token
+
+
+def load_history() -> list:
+    """Recent turns for this session, oldest first, within the character budget."""
+    conn = _settings_db_conn()
+    if not conn:
+        return session.get("messages", [])      # cookie fallback
+    token = _history_token()
+    rows = []
+    try:
+        _history_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT role, content FROM chat_history
+                WHERE token = %s ORDER BY id DESC LIMIT 200
+            """, (token,))
+            used = 0
+            for role, content in cur.fetchall():
+                used += len(content or "")
+                if used > CHAT_HISTORY_BUDGET and rows:
+                    break
+                rows.append({"role": role, "content": content})
+        rows.reverse()
+    except Exception as e:
+        app.logger.error(f"[history] read failed: {e}")
+        return session.get("messages", [])
+    finally:
+        conn.close()
+    return rows
+
+
+def append_history(role: str, content: str):
+    """Persist one turn."""
+    if not content:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        msgs = session.get("messages", [])
+        msgs.append({"role": role, "content": content})
+        session["messages"] = _fit_history(msgs)
+        return
+    token = _history_token()
+    try:
+        _history_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO chat_history (token, role, content) VALUES (%s, %s, %s)",
+                (token, role, content))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[history] write failed: {e}")
+    finally:
+        conn.close()
+
+
+def clear_history():
+    """Wipe this session's transcript — used by New Conversation."""
+    session["messages"] = []
+    conn = _settings_db_conn()
+    token = session.get("chat_token")
+    if conn and token:
+        try:
+            _history_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("DELETE FROM chat_history WHERE token = %s", (token,))
+            conn.commit()
+        except Exception as e:
+            app.logger.error(f"[history] clear failed: {e}")
+        finally:
+            conn.close()
+    session.pop("chat_token", None)
+
+
 SESSION_HISTORY_BUDGET = 2600   # characters of message content
 SESSION_MSG_CAP = 1600          # max characters kept for any single message
 
@@ -3496,7 +3606,7 @@ def retrieve_context(query: str) -> str:
 
 def _render_chat(force_scheduling=None):
     """Render the chat page. force_scheduling overrides the admin default."""
-    session["messages"] = []
+    clear_history()
     if force_scheduling is None:
         show = load_settings()["show_scheduling_button"]
     else:
@@ -3756,9 +3866,9 @@ def chat():
     # separately as a content block when building the current-turn message below.
     full_user_content = user_input + attachment_context
 
-    messages = session.get("messages", [])
+    messages = load_history()
 
-    # Cookie-safe summary of this turn. Flask sessions are signed cookies with a
+    # Short summary of this turn for the transcript. Flask sessions are signed cookies with a
     # hard ~4 KB browser limit — if we exceed it the cookie is silently dropped
     # and the ENTIRE conversation history disappears. So attachment text (which
     # can run to tens of thousands of characters) is sent to Claude for this turn
@@ -3785,6 +3895,7 @@ def chat():
         messages_for_api = messages + [{"role": "user", "content": full_user_content}]
 
     messages.append({"role": "user", "content": history_note})
+    append_history("user", history_note)
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
@@ -4059,17 +4170,16 @@ def chat():
             f"Deliverable enforcement: retrying for {requested_format or 'document'} "
             f"(first reply looked like clarifying questions)"
         )
+        # Phrased as an ordinary follow-up from the user. An earlier version
+        # wrapped this in "[SYSTEM DIRECTIVE — OVERRIDES ALL PRIOR GUIDANCE]",
+        # which arrives in a *user* turn claiming system authority — the model
+        # rightly called that a prompt-injection attempt and said so to the user.
         force_note = (
-            "\n\n[SYSTEM DIRECTIVE — OVERRIDES ALL PRIOR GUIDANCE] "
-            "Your previous reply asked questions instead of producing the "
-            "deliverable. The user has already requested the finished document "
-            "and it is being converted into a file automatically the moment you "
-            "reply. Output the COMPLETE document now, in full. Do not ask any "
-            "questions. Do not explain what you are about to do. Do not ask the "
-            "user to paste or re-send anything: everything you need is already "
-            "in this conversation and in any attached documents. Make reasonable "
-            "assumptions from that material, and note those assumptions in a "
-            "single short line at the very end. "
+            "Please don't ask me questions — go ahead and write the complete "
+            "document now, in full, using what's already in our conversation and "
+            "the documents I've attached. Make reasonable assumptions where "
+            "something isn't specified, and note those assumptions in one short "
+            "line at the end. "
         )
         if requested_format == "pptx":
             force_note += (
@@ -4219,7 +4329,8 @@ def chat():
     assistant_text = assistant_text.strip()
 
     messages.append({"role": "assistant", "content": assistant_text})
-    session["messages"] = _fit_history(messages)
+    append_history("assistant", assistant_text)
+    session["messages"] = _fit_history(messages)   # cookie fallback only
 
     # Auto-log every exchange to the DB (rating stays NULL until user gives feedback).
     # We log the visible parts only — the raw user text and the bot's reply.
@@ -4295,7 +4406,7 @@ def chat():
 @app.route("/reset", methods=["POST"])
 @paywall.paywall_required
 def reset():
-    session["messages"] = []
+    clear_history()
     return jsonify({"ok": True})
 
 
@@ -4355,7 +4466,7 @@ def feedback():
     if rating not in ("up", "down"):
         return jsonify({"error": "Invalid rating"}), 400
 
-    messages = session.get("messages", [])
+    messages = load_history()
     last_user_msg = ""
     for m in reversed(messages):
         if m.get("role") == "user":
