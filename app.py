@@ -110,7 +110,9 @@ CONFIG = {
     ),
 
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
-    "max_tokens": int(os.environ.get("MAX_TOKENS", "1024")),
+    # 1024 truncated two-page documents mid-sentence ("...built with this
+    # faculty, not *"). 4096 covers a cover letter plus a strategic plan.
+    "max_tokens": int(os.environ.get("MAX_TOKENS", "4096")),
     "rag_top_k": int(os.environ.get("RAG_TOP_K", "4")),
     "rag_min_similarity": float(os.environ.get("RAG_MIN_SIMILARITY", "0.3")),
     "admin_password": os.environ.get("ADMIN_PASSWORD", ""),
@@ -2089,6 +2091,40 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     // Offers a download beneath a reply. Nothing is written to disk unless
     // the user picks a format — replies never export themselves.
+    // Shows a readable failure with a Retry button, and puts the user's text
+    // back in the composer so nothing they typed is lost.
+    function showRetry(message, originalText, files) {
+      const div = document.createElement("div");
+      div.className = "msg assistant";
+      const body = document.createElement("div");
+      body.className = "msg-body";
+      body.textContent = message;
+      div.appendChild(body);
+
+      const bar = document.createElement("div");
+      bar.className = "export-offer";
+      const retry = document.createElement("button");
+      retry.type = "button";
+      retry.className = "export-chip primary";
+      retry.textContent = "Try again";
+      retry.addEventListener("click", () => {
+        div.remove();
+        input.value = originalText || "";
+        form.dispatchEvent(new Event("submit", { cancelable: true, bubbles: true }));
+      });
+      bar.appendChild(retry);
+      div.appendChild(bar);
+      chat.appendChild(div);
+      chatWrap.scrollTop = chatWrap.scrollHeight;
+
+      // Restore what they typed so it isn't lost either way
+      if (originalText && !input.value) input.value = originalText;
+      if (files && files.length) {
+        attachedFiles = files.slice();
+        refreshAttachmentChip();
+      }
+    }
+
     function offerExport(msgDiv, text, suggested, docs) {
       if (!msgDiv || msgDiv.querySelector(".export-offer")) return;
       const FMT_ORDER = ["docx", "pptx", "xlsx", "pdf"];
@@ -2909,7 +2945,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
             body: JSON.stringify({ message: text }),
           });
         }
-        const data = await res.json();
+        // Railway's proxy returns plain text like "upstream error" on a 502,
+        // so parsing blindly as JSON produced "Unexpected token 'u'".
+        let data;
+        const raw = await res.text();
+        try {
+          data = JSON.parse(raw);
+        } catch (parseErr) {
+          thinking.remove();
+          const detail = (raw || "").trim().slice(0, 120);
+          const friendly = res.status === 502 || /upstream/i.test(detail)
+            ? "The server didn't finish that one — usually a large attachment or a very long conversation. Try again, or start a New conversation if it keeps happening."
+            : `The server returned an unexpected response (${res.status}). Please try again.`;
+          showRetry(friendly, text, paperclipFilesForRequest);
+          return;
+        }
         thinking.remove();
         if (data.reply) {
           const msgDiv = addMessage(data.reply, "assistant", true,
@@ -2926,7 +2976,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
       } catch (err) {
         thinking.remove();
-        addMessage("Network error: " + err.message, "assistant");
+        showRetry(
+          "Couldn't reach the server. Check your connection and try again.",
+          text, paperclipFilesForRequest);
       } finally {
         sendBtn.disabled = false;
         input.focus();
@@ -3867,6 +3919,26 @@ def chat():
     full_user_content = user_input + attachment_context
 
     messages = load_history()
+
+    # A long transcript plus a large attachment can push the request big enough
+    # to time out or exhaust the worker — which surfaces to the user as an
+    # "upstream error". Trim history when an attachment carries most of the
+    # payload this turn.
+    if attachment_context and len(attachment_context) > 20000:
+        room = max(8000, CHAT_HISTORY_BUDGET - len(attachment_context))
+        trimmed, used = [], 0
+        for msg in reversed(messages):
+            body = msg.get("content") or ""
+            if not isinstance(body, str):
+                body = "[attachment]"
+            used += len(body)
+            if used > room and trimmed:
+                break
+            trimmed.append(msg)
+        messages = list(reversed(trimmed))
+        app.logger.info(
+            f"History trimmed to {len(messages)} turns "
+            f"(attachment {len(attachment_context)} chars)")
 
     # Short summary of this turn for the transcript. Flask sessions are signed cookies with a
     # hard ~4 KB browser limit — if we exceed it the cookie is silently dropped
