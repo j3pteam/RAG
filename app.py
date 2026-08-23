@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-e"
-APP_BUILD_NOTES = "editable ratings; release wording without app"
+APP_VERSION = "2026-08-23-f"
+APP_BUILD_NOTES = "editable ratings; release acknowledgement column"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -323,6 +323,76 @@ def resolve_location(ip: str):
     with _geo_lock:
         _geo_cache[ip] = result
     return result
+
+
+def _ack_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS interaction_ack (
+                interaction_id  BIGINT PRIMARY KEY,
+                acknowledged_at TIMESTAMPTZ,
+                ack_version     TEXT
+            )
+        """)
+    conn.commit()
+
+
+def record_acknowledgement(interaction_id: int):
+    """Note that this session had accepted the release, against one interaction."""
+    when = session.get("release_ack_at")
+    if not (interaction_id and when):
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _ack_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO interaction_ack (interaction_id, acknowledged_at, ack_version)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (interaction_id) DO NOTHING
+            """, (int(interaction_id), when, session.get("release_ack_version", "")))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[ack] store failed: {e}")
+    finally:
+        conn.close()
+
+
+def acknowledgements_for(interaction_ids):
+    """Map interaction_id -> acknowledgement timestamp for the admin table."""
+    out = {}
+    ids = [int(i) for i in interaction_ids if i]
+    if not ids:
+        return out
+    conn = _settings_db_conn()
+    if not conn:
+        return out
+    try:
+        _ack_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT interaction_id, acknowledged_at FROM interaction_ack
+                WHERE interaction_id = ANY(%s)
+            """, (ids,))
+            for iid, when in cur.fetchall():
+                if when is None:
+                    continue
+                try:
+                    out[iid] = when.strftime("%m/%d %H:%M")
+                except AttributeError:
+                    # Some drivers hand back an ISO string rather than a datetime
+                    try:
+                        out[iid] = datetime.fromisoformat(
+                            str(when).replace("Z", "")).strftime("%m/%d %H:%M")
+                    except Exception:
+                        out[iid] = str(when)[:16]
+    except Exception as e:
+        app.logger.error(f"[ack] read failed: {e}")
+    finally:
+        conn.close()
+    return out
 
 
 def _geo_ensure_table(conn):
@@ -1610,6 +1680,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         try {
           sessionStorage.setItem(ACK_KEY, new Date().toISOString());
         } catch (e) { /* not persistable — gate will show again */ }
+        // Record it server-side so the admin log can show who acknowledged
+        try {
+          fetch("/acknowledge", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ version: ACK_KEY }),
+            keepalive: true,
+          }).catch(() => {});
+        } catch (e) { /* non-blocking — never hold up entry */ }
         overlay.hidden = true;
         if (composer) composer.removeAttribute("aria-hidden");
         const input = document.getElementById("message");
@@ -4693,6 +4772,7 @@ def chat():
         )
         # Resolve city/region/country in the background — never blocks the reply
         record_location_async(interaction_id, client_ip())
+        record_acknowledgement(interaction_id)
     except Exception as e:
         app.logger.error(f"log_interaction failed: {e}")
 
@@ -4744,6 +4824,17 @@ def chat():
         "single_file": single_file,
         "separate_files": separate_files,
     })
+
+
+@app.route("/acknowledge", methods=["POST"])
+@paywall.paywall_required
+def acknowledge_release():
+    """Records that this session accepted the release and acknowledgment."""
+    data = request.get_json(silent=True) or {}
+    session["release_ack_at"] = datetime.now().isoformat(timespec="seconds")
+    session["release_ack_version"] = str(data.get("version") or "")[:40]
+    app.logger.info("[ack] release acknowledged")
+    return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
 
 
 @app.route("/reset", methods=["POST"])
@@ -5081,6 +5172,7 @@ th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 2px solid var(--na
 td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tag-up { background: #1B998B; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
 .tag-down { background: var(--rust); color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
+.tag-ack { color: #1B998B; font-weight: 600; margin-right: 0.2rem; }
 .rating-set { display: inline-flex; gap: 0.15rem; margin-left: 0.35rem; vertical-align: middle; }
 .rate-btn {
   background: transparent; border: 1px solid var(--line); border-radius: 2px;
@@ -5295,7 +5387,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>Release</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
@@ -5318,6 +5410,12 @@ input[type="text"] { flex: 1; min-width: 200px; }
             </span>
             {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
           </td>
+          <td style="font-size: 0.78rem; white-space: nowrap;">
+            {% if acks.get(f.id) %}
+              <span class="tag-ack" title="Release accepted {{ acks[f.id] }}">&#10003;</span>
+              <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
+            {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
+          </td>
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
             {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
           </td>
@@ -5336,7 +5434,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
           </td>
         </tr>
         <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
-          <td colspan="9">
+          <td colspan="10">
             <div class="feedback-detail-meta">
               Log ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
               · Rating: <strong>
@@ -5346,6 +5444,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
               </strong>
               {% if f.persona %}· Persona: {{ f.persona }}{% endif %}
               {% if locations.get(f.id) %}· Location: {{ locations[f.id] }}{% endif %}
+              {% if acks.get(f.id) %}· Release accepted: {{ acks[f.id] }}{% else %}· Release: not recorded{% endif %}
               {% if f.attachment_info %}· Attachment: {{ f.attachment_info }}{% endif %}
             </div>
 
@@ -5704,6 +5803,7 @@ def admin_dashboard():
         settings=load_settings(force=True),
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
+        acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
@@ -5992,15 +6092,17 @@ def admin_export_feedback():
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
     geo = locations_for([r.get("id") for r in rows])
+    acks = acknowledgements_for([r.get("id") for r in rows])
     writer.writerow([
-        "ID", "Timestamp", "Rating", "Location", "User Question", "Bot Reply",
-        "Comment", "Persona"
+        "ID", "Timestamp", "Rating", "Release Accepted", "Location",
+        "User Question", "Bot Reply", "Comment", "Persona"
     ])
     for r in rows:
         writer.writerow([
             r.get("id", ""),
             r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
             r.get("rating", ""),
+            acks.get(r.get("id"), ""),
             geo.get(r.get("id"), ""),
             r.get("user_message", "") or "",
             r.get("bot_reply", "") or "",
@@ -6048,7 +6150,9 @@ def admin_export_feedback_xlsx():
     ws.title = "Feedback"
 
     geo = locations_for([r.get("id") for r in rows])
-    headers = ["ID", "Timestamp", "Rating", "Location", "User Question", "Bot Reply", "Comment", "Persona"]
+    acks = acknowledgements_for([r.get("id") for r in rows])
+    headers = ["ID", "Timestamp", "Rating", "Release Accepted", "Location",
+               "User Question", "Bot Reply", "Comment", "Persona"]
     ws.append(headers)
 
     # Header styling — navy background, gold text, bold
@@ -6073,6 +6177,7 @@ def admin_export_feedback_xlsx():
             r.get("id", ""),
             r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
             r.get("rating", ""),
+            acks.get(r.get("id"), ""),
             geo.get(r.get("id"), ""),
             r.get("user_message", "") or "",
             r.get("bot_reply", "") or "",
@@ -6085,7 +6190,7 @@ def admin_export_feedback_xlsx():
             for col_idx in range(1, len(headers) + 1):
                 ws.cell(row=row_idx, column=col_idx).fill = down_fill
         # Wrap long text cells
-        for col_idx in [5, 6, 7]:  # User Question, Bot Reply, Comment
+        for col_idx in [6, 7, 8]:  # User Question, Bot Reply, Comment
             ws.cell(row=row_idx, column=col_idx).alignment = wrap_align
 
     # Column widths — sized for readable browsing in Excel
@@ -6093,11 +6198,12 @@ def admin_export_feedback_xlsx():
         "A": 8,    # ID
         "B": 20,   # Timestamp
         "C": 8,    # Rating
-        "D": 24,   # Location
-        "E": 50,   # User Question
-        "F": 80,   # Bot Reply
-        "G": 40,   # Comment
-        "H": 18,   # Persona
+        "D": 18,   # Release Accepted
+        "E": 24,   # Location
+        "F": 50,   # User Question
+        "G": 80,   # Bot Reply
+        "H": 40,   # Comment
+        "I": 18,   # Persona
     }
     for col_letter, width in column_widths.items():
         ws.column_dimensions[col_letter].width = width
