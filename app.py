@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-a"
-APP_BUILD_NOTES = "admin reorder; safety escalation; opt-in export; server-side memory"
+APP_VERSION = "2026-08-23-b"
+APP_BUILD_NOTES = "admin order: feedback, display, conversation log, knowledge base, uploads"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4774,9 +4774,9 @@ def health():
         "version": APP_VERSION,
         "build": APP_BUILD_NOTES,
         "admin_section_order": [
-            "Feedback Overview", "Display Settings", "Knowledge Base",
-            "Upload Document", "Upload Folder", "Add Knowledge from URL",
-            "Conversation Log",
+            "Feedback Overview", "Display Settings", "Conversation Log",
+            "Knowledge Base", "Upload Document", "Upload Folder",
+            "Add Knowledge from URL",
         ],
         "persona": CONFIG["persona_name"],
         "rag_enabled": db.is_enabled() and emb.is_enabled(),
@@ -5170,110 +5170,6 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </div>
   </div>
 
-  {% if rag_ready %}
-  <div class="section">
-    <h2>Knowledge Base ({{ docs|length }} documents)</h2>
-    {% if docs %}
-    <table>
-      <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
-      {% for d in docs %}
-      <tr>
-        <td>{{ d.title }}</td>
-        <td class="muted">{{ d.source or '—' }}</td>
-        <td>{{ d.chunk_count }}</td>
-        <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>
-          <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
-                onsubmit="return confirm('Delete &quot;{{ d.title }}&quot; and all its chunks?');">
-            <button type="submit" class="btn btn-danger">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="muted">No documents yet. Upload your first one above.</p>
-    {% endif %}
-  </div>
-
-  <div class="section">
-    <h2>Upload Document</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF. Up to {{ cfg.max_upload_mb }} MB. The document will be chunked and embedded automatically.</p>
-    <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
-      <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
-      <input type="text" name="title" placeholder="Document title (optional)" />
-      <button type="submit" class="btn">Upload & Embed</button>
-    </form>
-  </div>
-
-  <div class="section">
-    <h2>Upload Folder</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">
-      Select an entire folder. All supported files inside it (including subfolders) will be uploaded and embedded in one batch.
-      Unsupported files and duplicates are skipped automatically. Maximum 50 files per batch.
-    </p>
-    <form method="POST" action="/admin/upload-folder" enctype="multipart/form-data" class="upload" id="folder-upload-form">
-      <input type="file" name="files" id="folder-input" webkitdirectory directory multiple required />
-      <button type="submit" class="btn" id="folder-upload-btn">Upload Folder</button>
-    </form>
-    <p id="folder-preview" class="muted" style="margin: 0.75rem 0 0 0; font-size: 0.85rem; display: none;"></p>
-    <script>
-      (function() {
-        const folderInput = document.getElementById("folder-input");
-        const preview = document.getElementById("folder-preview");
-        const btn = document.getElementById("folder-upload-btn");
-        const form = document.getElementById("folder-upload-form");
-        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
-
-        folderInput.addEventListener("change", () => {
-          const all = Array.from(folderInput.files || []);
-          const supported = all.filter(f => SUPPORTED.test(f.name));
-          const skipped = all.length - supported.length;
-          if (all.length === 0) {
-            preview.style.display = "none";
-            return;
-          }
-          let msg = `${supported.length} supported file${supported.length === 1 ? '' : 's'} ready to upload`;
-          if (skipped > 0) msg += ` · ${skipped} unsupported file${skipped === 1 ? '' : 's'} will be skipped`;
-          if (supported.length > 50) {
-            msg += ` · ⚠ Only the first 50 will be processed`;
-          }
-          if (supported.length === 0) {
-            msg = "⚠ No supported files found in this folder (PDF, DOCX, TXT, MD only).";
-            btn.disabled = true;
-          } else {
-            btn.disabled = false;
-          }
-          preview.textContent = msg;
-          preview.style.display = "block";
-        });
-
-        form.addEventListener("submit", (e) => {
-          const all = Array.from(folderInput.files || []);
-          const supported = all.filter(f => SUPPORTED.test(f.name));
-          if (supported.length === 0) {
-            e.preventDefault();
-            alert("No supported files found in this folder.");
-            return;
-          }
-          btn.textContent = "Uploading… (this may take a while)";
-          btn.disabled = true;
-        });
-      })();
-    </script>
-  </div>
-
-  <div class="section">
-    <h2>Add Knowledge from URL</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">Paste a link to an article, blog post, or web page. The main article text will be extracted and embedded. Works best with article-style pages (not paywalled, login-required, or JavaScript-only sites).</p>
-    <form method="POST" action="/admin/upload-url" class="upload">
-      <input type="url" name="url" placeholder="https://example.com/article" required style="flex: 1.5; min-width: 280px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit;" />
-      <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
-      <button type="submit" class="btn">Fetch & Embed</button>
-    </form>
-  </div>
-  {% endif %}
-
   <div class="section">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
       <h2 style="margin: 0; border: none; padding: 0;">Conversation Log</h2>
@@ -5528,6 +5424,111 @@ input[type="text"] { flex: 1; min-width: 200px; }
     <p class="muted">No feedback yet.</p>
     {% endif %}
   </div>
+
+  {% if rag_ready %}
+  <div class="section">
+    <h2>Knowledge Base ({{ docs|length }} documents)</h2>
+    {% if docs %}
+    <table>
+      <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
+      {% for d in docs %}
+      <tr>
+        <td>{{ d.title }}</td>
+        <td class="muted">{{ d.source or '—' }}</td>
+        <td>{{ d.chunk_count }}</td>
+        <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
+                onsubmit="return confirm('Delete &quot;{{ d.title }}&quot; and all its chunks?');">
+            <button type="submit" class="btn btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No documents yet. Upload your first one above.</p>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h2>Upload Document</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF. Up to {{ cfg.max_upload_mb }} MB. The document will be chunked and embedded automatically.</p>
+    <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
+      <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
+      <input type="text" name="title" placeholder="Document title (optional)" />
+      <button type="submit" class="btn">Upload & Embed</button>
+    </form>
+  </div>
+
+  <div class="section">
+    <h2>Upload Folder</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Select an entire folder. All supported files inside it (including subfolders) will be uploaded and embedded in one batch.
+      Unsupported files and duplicates are skipped automatically. Maximum 50 files per batch.
+    </p>
+    <form method="POST" action="/admin/upload-folder" enctype="multipart/form-data" class="upload" id="folder-upload-form">
+      <input type="file" name="files" id="folder-input" webkitdirectory directory multiple required />
+      <button type="submit" class="btn" id="folder-upload-btn">Upload Folder</button>
+    </form>
+    <p id="folder-preview" class="muted" style="margin: 0.75rem 0 0 0; font-size: 0.85rem; display: none;"></p>
+    <script>
+      (function() {
+        const folderInput = document.getElementById("folder-input");
+        const preview = document.getElementById("folder-preview");
+        const btn = document.getElementById("folder-upload-btn");
+        const form = document.getElementById("folder-upload-form");
+        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
+
+        folderInput.addEventListener("change", () => {
+          const all = Array.from(folderInput.files || []);
+          const supported = all.filter(f => SUPPORTED.test(f.name));
+          const skipped = all.length - supported.length;
+          if (all.length === 0) {
+            preview.style.display = "none";
+            return;
+          }
+          let msg = `${supported.length} supported file${supported.length === 1 ? '' : 's'} ready to upload`;
+          if (skipped > 0) msg += ` · ${skipped} unsupported file${skipped === 1 ? '' : 's'} will be skipped`;
+          if (supported.length > 50) {
+            msg += ` · ⚠ Only the first 50 will be processed`;
+          }
+          if (supported.length === 0) {
+            msg = "⚠ No supported files found in this folder (PDF, DOCX, TXT, MD only).";
+            btn.disabled = true;
+          } else {
+            btn.disabled = false;
+          }
+          preview.textContent = msg;
+          preview.style.display = "block";
+        });
+
+        form.addEventListener("submit", (e) => {
+          const all = Array.from(folderInput.files || []);
+          const supported = all.filter(f => SUPPORTED.test(f.name));
+          if (supported.length === 0) {
+            e.preventDefault();
+            alert("No supported files found in this folder.");
+            return;
+          }
+          btn.textContent = "Uploading… (this may take a while)";
+          btn.disabled = true;
+        });
+      })();
+    </script>
+  </div>
+
+  <div class="section">
+    <h2>Add Knowledge from URL</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">Paste a link to an article, blog post, or web page. The main article text will be extracted and embedded. Works best with article-style pages (not paywalled, login-required, or JavaScript-only sites).</p>
+    <form method="POST" action="/admin/upload-url" class="upload">
+      <input type="url" name="url" placeholder="https://example.com/article" required style="flex: 1.5; min-width: 280px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit;" />
+      <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
+      <button type="submit" class="btn">Fetch & Embed</button>
+    </form>
+  </div>
+  {% endif %}
+
 </div>
 </body></html>"""
 
