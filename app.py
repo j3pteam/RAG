@@ -17,7 +17,9 @@ All other env vars from the persona template still apply.
 """
 import os
 import tempfile
+import re
 import threading
+from datetime import datetime
 from pathlib import Path
 from functools import wraps
 from flask import (
@@ -61,6 +63,11 @@ def load_system_prompt():
 
 # Per-file upload ceiling. Slide decks with embedded media routinely run past
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
+# Bump this whenever the file changes so it's obvious which build is live.
+# Visible at /health and in the admin header.
+APP_VERSION = "2026-08-23-a"
+APP_BUILD_NOTES = "admin reorder; safety escalation; opt-in export; server-side memory"
+
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 
@@ -390,6 +397,170 @@ def locations_for(interaction_ids):
     finally:
         conn.close()
     return out
+
+
+# ---------------------------------------------------------------------------
+# Safety: risk detection and escalation
+# ---------------------------------------------------------------------------
+# If someone signals suicidal intent, self-harm, or intent to harm another
+# person, the advisor stops coaching, points them to emergency services and a
+# qualified professional, and an alert is emailed. This runs before any model
+# call so the response is deterministic rather than left to the model.
+
+SAFETY_ALERT_EMAIL = os.environ.get("SAFETY_ALERT_EMAIL", "afriedman@j3p.health")
+SAFETY_ALERT_FROM = os.environ.get("SAFETY_ALERT_FROM", "")
+
+# Explicit statements of intent or ideation. Deliberately specific — vague
+# distress ("I'm exhausted", "this is killing me") must not trip this.
+_RISK_PATTERNS = [
+    # Suicidal ideation / intent
+    r"\b(?:want|going|plan|planning|about)\s+to\s+(?:kill|end)\s+(?:myself|my\s+life)\b",
+    r"\bkill(?:ing)?\s+myself\b",
+    r"\bend(?:ing)?\s+(?:my\s+life|it\s+all)\b",
+    r"\btake\s+my\s+own\s+life\b",
+    r"\bcommit(?:ting)?\s+suicide\b",
+    r"\bsuicidal\b",
+    r"\bwant\s+to\s+die\b",
+    r"\bbetter\s+off\s+dead\b",
+    r"\bdon'?t\s+want\s+to\s+(?:be\s+here|live)\s+(?:anymore|any\s+more)\b",
+    r"\bno\s+reason\s+to\s+(?:live|go\s+on)\b",
+    r"\bthinking\s+about\s+(?:killing|ending)\b",
+    # Self-harm
+    r"\b(?:hurt|hurting|harm|harming|cut|cutting|injur\w*|burn|burning)\s+myself\b",
+    r"\bself[-\s]?harm(?:ing)?\b",
+    # Harm to others
+    r"\b(?:want|going|plan|planning)\s+to\s+(?:kill|hurt|harm|attack|shoot)\s+(?:him|her|them|someone|somebody|my\s+\w+)\b",
+    r"\bkill\s+(?:him|her|them)\b",
+    r"\bhurt\s+(?:someone|somebody|him|her|them)\b",
+    # Crisis phrasing
+    r"\bin\s+crisis\b.*\b(?:hurt|harm|die|end)\b",
+]
+_RISK_RE = re.compile("|".join(_RISK_PATTERNS), re.IGNORECASE)
+
+# Figures of speech that use the same words harmlessly
+_RISK_FALSE_POSITIVES = re.compile(
+    r"(this|it|that|deadline|schedule|commute|meeting|workload|job|"
+    r"paperwork|emr|charting)\s+is\s+killing\s+me|"
+    r"\bkilling\s+it\b|\bdying\s+to\b|\bdead\s+line\b|"
+    r"\bshoot\s+(?:me\s+)?an?\s+(?:email|message|note)\b|"
+    r"\bkill(?:ing)?\s+the\s+(?:project|initiative|program|idea)\b",
+    re.IGNORECASE)
+
+
+def detect_risk(text: str) -> bool:
+    """True when a message signals risk of harm to self or others."""
+    if not text:
+        return False
+    body = str(text)
+    if _RISK_FALSE_POSITIVES.search(body) and not _RISK_RE.search(
+            _RISK_FALSE_POSITIVES.sub(" ", body)):
+        return False
+    return bool(_RISK_RE.search(body))
+
+
+SAFETY_RESPONSE = (
+    "I want to stop and address what you just said, because it matters more "
+    "than anything else we were working on.\n\n"
+    "I'm not able to help with this, and you deserve support from someone who "
+    "can. Please reach out right now:\n\n"
+    "- **If you are in immediate danger, call 911.**\n"
+    "- **Call or text 988** (Suicide & Crisis Lifeline, US) to reach a trained "
+    "counsellor any time, day or night.\n"
+    "- If you're outside the US, contact your local emergency number or crisis line.\n\n"
+    "Please also contact a qualified professional — your physician, a licensed "
+    "mental health clinician, or your employee assistance program — as soon as "
+    "you can. If there is someone you trust nearby, tell them what's going on "
+    "and let them stay with you.\n\n"
+    "You don't have to work through this alone, and reaching out is the right "
+    "next step."
+)
+
+
+def send_alert_email(subject: str, body: str) -> bool:
+    """Send an operational alert. Tries Postmark, then SMTP, then logs."""
+    to_addr = SAFETY_ALERT_EMAIL
+    token = (os.environ.get("POSTMARK_SERVER_TOKEN")
+             or os.environ.get("POSTMARK_TOKEN") or "")
+    from_addr = (SAFETY_ALERT_FROM or os.environ.get("POSTMARK_FROM")
+                 or os.environ.get("SMTP_FROM") or to_addr)
+
+    if token:
+        try:
+            import urllib.request as _url
+            import json as _j
+            payload = _j.dumps({
+                "From": from_addr, "To": to_addr,
+                "Subject": subject, "TextBody": body,
+                "MessageStream": os.environ.get("POSTMARK_STREAM", "outbound"),
+            }).encode("utf-8")
+            req = _url.Request(
+                "https://api.postmarkapp.com/email", data=payload,
+                headers={"Accept": "application/json",
+                         "Content-Type": "application/json",
+                         "X-Postmark-Server-Token": token})
+            with _url.urlopen(req, timeout=8) as resp:
+                resp.read()
+            return True
+        except Exception as e:
+            app.logger.error(f"[safety] Postmark alert failed: {e}")
+
+    host = os.environ.get("SMTP_HOST")
+    if host:
+        try:
+            import smtplib
+            from email.message import EmailMessage
+            msg = EmailMessage()
+            msg["Subject"] = subject
+            msg["From"] = from_addr
+            msg["To"] = to_addr
+            msg.set_content(body)
+            port = int(os.environ.get("SMTP_PORT", "587"))
+            with smtplib.SMTP(host, port, timeout=10) as smtp:
+                smtp.starttls()
+                user = os.environ.get("SMTP_USER")
+                if user:
+                    smtp.login(user, os.environ.get("SMTP_PASSWORD", ""))
+                smtp.send_message(msg)
+            return True
+        except Exception as e:
+            app.logger.error(f"[safety] SMTP alert failed: {e}")
+
+    # Nothing configured — make sure it is at least visible in the logs
+    app.logger.error(f"[safety] ALERT NOT EMAILED (no mail transport). "
+                     f"Subject: {subject}\n{body}")
+    return False
+
+
+def raise_safety_alert(user_message: str, ip: str = ""):
+    """Email the alert on a background thread so the reply isn't delayed."""
+    when = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    excerpt = (user_message or "")[:1500]
+    location = ""
+    try:
+        loc = resolve_location(ip) if ip else None
+        if loc:
+            location = ", ".join(p for p in (loc["city"], loc["region"], loc["country"]) if p)
+    except Exception:
+        pass
+    body = (
+        "A J3P Advisor session contained language indicating possible risk of "
+        "harm to self or others.\n\n"
+        f"Time: {when}\n"
+        f"Approximate location: {location or 'unknown'}\n\n"
+        "The participant was shown emergency guidance (911 and 988) and "
+        "directed to a qualified professional. The advisor did not continue "
+        "the coaching conversation.\n\n"
+        "--- Participant message ---\n"
+        f"{excerpt}\n"
+        "---------------------------\n\n"
+        "This alert is generated automatically. Review in the admin "
+        "conversation log for full context."
+    )
+    threading.Thread(
+        target=send_alert_email,
+        args=("J3P Advisor — participant safety alert", body),
+        daemon=True,
+    ).start()
 
 
 def admin_required(f):
@@ -3914,6 +4085,39 @@ def chat():
             f"{images_used} images, {skipped_count} skipped, {total_chars} chars"
         )
 
+    # ---------------------------------------------------------------
+    # Safety check — runs before anything else
+    # ---------------------------------------------------------------
+    # If the message signals risk of harm to self or others, respond with the
+    # fixed safety guidance instead of coaching, and alert by email. Handled
+    # here rather than through the model so the response is guaranteed.
+    if detect_risk(user_input):
+        app.logger.warning("[safety] risk language detected — safety response returned")
+        raise_safety_alert(user_input, client_ip())
+
+        safety_id = None
+        try:
+            safety_id = db.log_interaction(
+                user_message=user_input,
+                bot_reply=SAFETY_RESPONSE,
+                persona=CONFIG["persona_name"],
+                attachment_info="SAFETY ALERT",
+            )
+        except Exception as e:
+            app.logger.error(f"[safety] log_interaction failed: {e}")
+
+        append_history("user", user_input)
+        append_history("assistant", SAFETY_RESPONSE)
+
+        return jsonify({
+            "reply": SAFETY_RESPONSE,
+            "interaction_id": safety_id,
+            "export_format": None,      # never offer to export a crisis reply
+            "documents": [],
+            "single_file": False,
+            "separate_files": False,
+        })
+
     # Combine user text with any attached-document context. Images are added
     # separately as a content block when building the current-turn message below.
     full_user_content = user_input + attachment_context
@@ -4567,6 +4771,13 @@ def feedback():
 def health():
     return jsonify({
         "status": "ok",
+        "version": APP_VERSION,
+        "build": APP_BUILD_NOTES,
+        "admin_section_order": [
+            "Feedback Overview", "Display Settings", "Knowledge Base",
+            "Upload Document", "Upload Folder", "Add Knowledge from URL",
+            "Conversation Log",
+        ],
         "persona": CONFIG["persona_name"],
         "rag_enabled": db.is_enabled() and emb.is_enabled(),
     })
@@ -4869,7 +5080,10 @@ input[type="text"] { flex: 1; min-width: 200px; }
     }
 </style></head><body>
 <header>
-  <h1>{{ cfg.persona_name }} — Admin</h1>
+  <h1>{{ cfg.persona_name }} — Admin
+    <span style="font-size: 0.6rem; letter-spacing: 0.08em; color: rgba(210,188,141,0.55);
+                 margin-left: 0.6rem; text-transform: none;">build {{ app_version }}</span>
+  </h1>
   <div>
     <a href="/" style="margin-right: 1.5rem;">← Back to bot</a>
     <a href="/admin/logout">Sign out</a>
@@ -4888,6 +5102,30 @@ input[type="text"] { flex: 1; min-width: 200px; }
     Once both are set, redeploy and you can upload documents.
   </div>
   {% endif %}
+
+  <div class="section">
+    <h2>Feedback Overview</h2>
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-value">{{ stats.up }}</div>
+        <div class="stat-label">Thumbs up</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ stats.down }}</div>
+        <div class="stat-label">Thumbs down</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">{{ stats.total }}</div>
+        <div class="stat-label">Total ratings</div>
+      </div>
+      <div class="stat">
+        <div class="stat-value">
+          {% if stats.total > 0 %}{{ (100 * stats.up / stats.total)|round(0)|int }}%{% else %}—{% endif %}
+        </div>
+        <div class="stat-label">Helpful rate</div>
+      </div>
+    </div>
+  </div>
 
   <div class="section">
     <h2>Display Settings</h2>
@@ -4932,31 +5170,32 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </div>
   </div>
 
+  {% if rag_ready %}
   <div class="section">
-    <h2>Feedback Overview</h2>
-    <div class="stats">
-      <div class="stat">
-        <div class="stat-value">{{ stats.up }}</div>
-        <div class="stat-label">Thumbs up</div>
-      </div>
-      <div class="stat">
-        <div class="stat-value">{{ stats.down }}</div>
-        <div class="stat-label">Thumbs down</div>
-      </div>
-      <div class="stat">
-        <div class="stat-value">{{ stats.total }}</div>
-        <div class="stat-label">Total ratings</div>
-      </div>
-      <div class="stat">
-        <div class="stat-value">
-          {% if stats.total > 0 %}{{ (100 * stats.up / stats.total)|round(0)|int }}%{% else %}—{% endif %}
-        </div>
-        <div class="stat-label">Helpful rate</div>
-      </div>
-    </div>
+    <h2>Knowledge Base ({{ docs|length }} documents)</h2>
+    {% if docs %}
+    <table>
+      <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
+      {% for d in docs %}
+      <tr>
+        <td>{{ d.title }}</td>
+        <td class="muted">{{ d.source or '—' }}</td>
+        <td>{{ d.chunk_count }}</td>
+        <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>
+          <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
+                onsubmit="return confirm('Delete &quot;{{ d.title }}&quot; and all its chunks?');">
+            <button type="submit" class="btn btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No documents yet. Upload your first one above.</p>
+    {% endif %}
   </div>
 
-  {% if rag_ready %}
   <div class="section">
     <h2>Upload Document</h2>
     <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF. Up to {{ cfg.max_upload_mb }} MB. The document will be chunked and embedded automatically.</p>
@@ -5032,31 +5271,6 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
       <button type="submit" class="btn">Fetch & Embed</button>
     </form>
-  </div>
-
-  <div class="section">
-    <h2>Knowledge Base ({{ docs|length }} documents)</h2>
-    {% if docs %}
-    <table>
-      <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
-      {% for d in docs %}
-      <tr>
-        <td>{{ d.title }}</td>
-        <td class="muted">{{ d.source or '—' }}</td>
-        <td>{{ d.chunk_count }}</td>
-        <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>
-          <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
-                onsubmit="return confirm('Delete &quot;{{ d.title }}&quot; and all its chunks?');">
-            <button type="submit" class="btn btn-danger">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="muted">No documents yet. Upload your first one above.</p>
-    {% endif %}
   </div>
   {% endif %}
 
@@ -5358,6 +5572,7 @@ def admin_dashboard():
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
+        app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
