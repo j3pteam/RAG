@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-i"
-APP_BUILD_NOTES = "distinct voice: anti-generic rules and phrase scrubbing"
+APP_VERSION = "2026-08-23-j"
+APP_BUILD_NOTES = "Knowledge Upload group heading in the admin panel"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5436,6 +5436,12 @@ header a { color: rgba(210,188,141,0.7); text-decoration: none; font-size: 0.75r
 header a:hover { color: var(--gold); }
 .container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
 .section { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; }
+.group-heading {
+  font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--navy); font-weight: 500;
+  margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
+  border-bottom: 2px solid var(--gold);
+}
 .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
 .stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
 .stat { flex: 1; }
@@ -5978,6 +5984,8 @@ input[type="text"] { flex: 1; min-width: 200px; }
     <p class="muted">No documents yet. Upload your first one above.</p>
     {% endif %}
   </div>
+
+  <h2 class="group-heading">Knowledge Upload</h2>
 
   <div class="section">
     <h2>Upload Document</h2>
