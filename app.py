@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-g"
-APP_BUILD_NOTES = "magic-link sign-in; per-participant memory"
+APP_VERSION = "2026-08-23-h"
+APP_BUILD_NOTES = "magic-link sign-in toggle in the admin panel"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -162,6 +162,8 @@ import json as _json
 
 _SETTINGS_DEFAULTS = {
     "show_scheduling_button": True,
+    # Seeded from REQUIRE_LOGIN, then owned by the admin panel
+    "require_login": os.environ.get("REQUIRE_LOGIN", "off").lower() in ("on", "1", "true"),
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -719,6 +721,21 @@ LOGIN_ALLOWED = [e.strip().lower() for e in
                  os.environ.get("LOGIN_ALLOWED", "").split(",") if e.strip()]
 
 
+def mail_transport_configured() -> bool:
+    """True when a sign-in link could actually be delivered."""
+    return bool(os.environ.get("POSTMARK_SERVER_TOKEN")
+                or os.environ.get("POSTMARK_TOKEN")
+                or os.environ.get("SMTP_HOST"))
+
+
+def login_is_required() -> bool:
+    """Admin setting wins; falls back to the environment variable."""
+    try:
+        return bool(load_settings()["require_login"])
+    except Exception:
+        return REQUIRE_LOGIN
+
+
 def _login_serializer():
     from itsdangerous import URLSafeTimedSerializer
     return URLSafeTimedSerializer(app.secret_key, salt="j3p-login")
@@ -754,7 +771,7 @@ def login_required(f):
     """Require a signed-in participant when REQUIRE_LOGIN is on."""
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if REQUIRE_LOGIN and not current_user():
+        if login_is_required() and not current_user():
             return redirect(url_for("login_page", next=request.path))
         return f(*args, **kwargs)
     return wrapper
@@ -5515,6 +5532,32 @@ input[type="text"] { flex: 1; min-width: 200px; }
           </span>
         </span>
       </label>
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="require_login" value="1"
+               {% if settings.require_login %}checked{% endif %}
+               {% if not mail_ready %}disabled{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Require participants to sign in</strong><br />
+          <span class="muted">
+            Participants enter their email and follow a one-time link. Signing in
+            lets the advisor remember previous conversations, so each person
+            picks up where they left off.
+          </span>
+          {% if not mail_ready %}
+          <br /><span style="color: var(--rust); font-size: 0.82rem;">
+            Unavailable: no email is configured, so sign-in links couldn't be
+            delivered and everyone would be locked out. Set POSTMARK_SERVER_TOKEN
+            or SMTP_HOST first.
+          </span>
+          {% endif %}
+        </span>
+      </label>
+
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
 
@@ -6002,6 +6045,7 @@ def admin_dashboard():
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
+        mail_ready=mail_transport_configured(),
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
         acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -6026,11 +6070,24 @@ def admin_set_rating(feedback_id):
 @admin_required
 def admin_settings():
     """Persist the display toggles from the admin panel."""
+    messages = []
+
     show = bool(request.form.get("show_scheduling_button"))
     if save_setting("show_scheduling_button", show):
-        flash(f"Scheduling button is now {'visible' if show else 'hidden'} for participants.")
+        messages.append(f"Scheduling button {'shown' if show else 'hidden'}")
     else:
-        flash("Could not save settings — check the database connection.")
+        messages.append("Could not save the scheduling setting")
+
+    want_login = bool(request.form.get("require_login"))
+    if want_login and not mail_transport_configured():
+        # Refuse rather than lock every participant out
+        messages.append("Sign-in NOT enabled — no email transport is configured")
+    elif save_setting("require_login", want_login):
+        messages.append(f"Sign-in {'required' if want_login else 'not required'}")
+    else:
+        messages.append("Could not save the sign-in setting")
+
+    flash(" · ".join(messages) + ".")
     return redirect(url_for("admin_dashboard"))
 
 
