@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-c"
-APP_BUILD_NOTES = "admin order + editable ratings in the conversation log"
+APP_VERSION = "2026-08-23-d"
+APP_BUILD_NOTES = "editable ratings; release heading wording"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -651,7 +651,7 @@ def admin_required(f):
 # Defined once and rendered into BOTH the session-entry gate and the
 # scheduling gate, so the two can never drift apart. Edit here to change both.
 
-RELEASE_HEADING = "Coaching App Release &amp; Acknowledgment"
+RELEASE_HEADING = "App Release &amp; Acknowledgment"
 
 RELEASE_BODY_HTML = """
   <p>
