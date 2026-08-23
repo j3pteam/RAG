@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-f"
-APP_BUILD_NOTES = "editable ratings; release acknowledgement column"
+APP_VERSION = "2026-08-23-g"
+APP_BUILD_NOTES = "magic-link sign-in; per-participant memory"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -546,13 +546,12 @@ SAFETY_RESPONSE = (
 )
 
 
-def send_alert_email(subject: str, body: str) -> bool:
-    """Send an operational alert. Tries Postmark, then SMTP, then logs."""
-    to_addr = SAFETY_ALERT_EMAIL
+def send_email(to_addr: str, subject: str, body: str) -> bool:
+    """Send one plain-text email. Tries Postmark, then SMTP, then logs."""
     token = (os.environ.get("POSTMARK_SERVER_TOKEN")
              or os.environ.get("POSTMARK_TOKEN") or "")
     from_addr = (SAFETY_ALERT_FROM or os.environ.get("POSTMARK_FROM")
-                 or os.environ.get("SMTP_FROM") or to_addr)
+                 or os.environ.get("SMTP_FROM") or SAFETY_ALERT_EMAIL)
 
     if token:
         try:
@@ -596,9 +595,14 @@ def send_alert_email(subject: str, body: str) -> bool:
             app.logger.error(f"[safety] SMTP alert failed: {e}")
 
     # Nothing configured — make sure it is at least visible in the logs
-    app.logger.error(f"[safety] ALERT NOT EMAILED (no mail transport). "
-                     f"Subject: {subject}\n{body}")
+    app.logger.error(f"[email] NOT SENT (no mail transport configured). "
+                     f"To: {to_addr} Subject: {subject}\n{body}")
     return False
+
+
+def send_alert_email(subject: str, body: str) -> bool:
+    """Operational alert to the safety address."""
+    return send_email(SAFETY_ALERT_EMAIL, subject, body)
 
 
 def raise_safety_alert(user_message: str, ip: str = ""):
@@ -698,6 +702,184 @@ def set_feedback_rating(feedback_id: int, rating) -> bool:
         return False
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Sign-in by magic link
+# ---------------------------------------------------------------------------
+# Independent of paywall.py (which ties sign-in to Stripe). A signed, expiring
+# token is emailed; following it establishes identity. Identity is what makes
+# memory persist across visits — history is keyed to the signed-in address
+# rather than a throwaway browser token.
+
+REQUIRE_LOGIN = os.environ.get("REQUIRE_LOGIN", "off").lower() in ("on", "1", "true")
+LOGIN_LINK_TTL = int(os.environ.get("LOGIN_LINK_TTL_MIN", "30")) * 60
+# Optional allow-list: comma-separated addresses or @domain entries.
+LOGIN_ALLOWED = [e.strip().lower() for e in
+                 os.environ.get("LOGIN_ALLOWED", "").split(",") if e.strip()]
+
+
+def _login_serializer():
+    from itsdangerous import URLSafeTimedSerializer
+    return URLSafeTimedSerializer(app.secret_key, salt="j3p-login")
+
+
+def email_allowed(email: str) -> bool:
+    if not LOGIN_ALLOWED:
+        return True
+    email = (email or "").lower()
+    domain = "@" + email.split("@")[-1]
+    return email in LOGIN_ALLOWED or domain in LOGIN_ALLOWED
+
+
+def make_login_link(email: str, base_url: str) -> str:
+    token = _login_serializer().dumps(email.strip().lower())
+    return f"{base_url.rstrip('/')}/login/verify?token={token}"
+
+
+def read_login_token(token: str):
+    from itsdangerous import BadSignature, SignatureExpired
+    try:
+        return _login_serializer().loads(token, max_age=LOGIN_LINK_TTL)
+    except (BadSignature, SignatureExpired):
+        return None
+
+
+def current_user() -> str:
+    """Signed-in email, or '' when anonymous."""
+    return session.get("user_email", "")
+
+
+def login_required(f):
+    """Require a signed-in participant when REQUIRE_LOGIN is on."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if REQUIRE_LOGIN and not current_user():
+            return redirect(url_for("login_page", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign in — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --navy:#27334A; --gold:#D2BC8D; --paper:#FAF6F0; --line:rgba(39,51,74,0.12); --muted:#6B7280; }
+body { margin:0; font-family:'Jost',-apple-system,sans-serif; background:var(--paper);
+       color:var(--navy); display:flex; align-items:center; justify-content:center;
+       min-height:100vh; padding:1.25rem; }
+.box { background:#fff; border-radius:4px; box-shadow:0 18px 50px rgba(39,51,74,.18);
+       max-width:460px; width:100%; overflow:hidden; }
+.head { background:var(--navy); border-bottom:2px solid var(--gold); padding:1rem 1.75rem;
+        display:flex; align-items:center; gap:1rem; }
+.head img { height:46px; }
+.head span { color:var(--gold); font-size:.8rem; letter-spacing:.22em; text-transform:uppercase; }
+.content { padding:1.75rem 2rem 1.6rem; }
+h1 { font-size:.85rem; letter-spacing:.16em; text-transform:uppercase; margin:0 0 1rem;
+     padding-bottom:.65rem; border-bottom:1px solid var(--line); font-weight:500; }
+p { font-size:.92rem; line-height:1.6; margin:0 0 1rem; }
+input[type=email] { width:100%; padding:.8rem .9rem; border:1px solid var(--line);
+    border-radius:2px; font-family:inherit; font-size:.95rem; background:var(--paper); }
+input[type=email]:focus { outline:none; border-color:var(--gold); }
+button { width:100%; margin-top:.9rem; padding:.85rem; background:var(--navy); color:var(--gold);
+    border:1px solid var(--navy); border-radius:2px; font-family:inherit; font-size:.78rem;
+    letter-spacing:.18em; text-transform:uppercase; cursor:pointer; }
+button:hover { background:var(--gold); color:var(--navy); }
+.note { margin-top:1rem; font-size:.72rem; color:var(--muted); line-height:1.6; }
+.msg { padding:.7rem .9rem; border-radius:2px; font-size:.86rem; margin-bottom:1rem; }
+.ok { background:var(--gold); color:var(--navy); }
+.err { background:#FEE; color:#9D432C; border:1px solid #E7C3BA; }
+</style></head><body>
+<div class="box">
+  <div class="head">
+    <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+    <span>{{ cfg.persona_name }}</span>
+  </div>
+  <div class="content">
+    <h1>Sign in</h1>
+    {% if notice %}<div class="msg {{ 'ok' if notice_ok else 'err' }}">{{ notice }}</div>{% endif %}
+    {% if not sent %}
+    <p>Enter your email and we'll send you a sign-in link. Signing in lets the
+       advisor pick up where you left off next time.</p>
+    <form method="POST" action="/login/send">
+      <input type="hidden" name="next" value="{{ next_path }}" />
+      <input type="email" name="email" placeholder="you@example.com" required autofocus />
+      <button type="submit">Email me a sign-in link</button>
+    </form>
+    <p class="note">The link works once and expires in {{ ttl_minutes }} minutes.</p>
+    {% endif %}
+  </div>
+</div></body></html>"""
+
+
+@app.route("/login", methods=["GET"])
+def login_page():
+    return render_template_string(
+        LOGIN_HTML, cfg=CONFIG, notice=request.args.get("notice"),
+        notice_ok=request.args.get("ok") == "1", sent=False,
+        next_path=request.args.get("next", "/"),
+        ttl_minutes=LOGIN_LINK_TTL // 60)
+
+
+@app.route("/login/send", methods=["POST"])
+def login_send():
+    email = (request.form.get("email") or "").strip().lower()
+    next_path = request.form.get("next") or "/"
+    if not email or "@" not in email:
+        return render_template_string(
+            LOGIN_HTML, cfg=CONFIG, notice="Please enter a valid email address.",
+            notice_ok=False, sent=False, next_path=next_path,
+            ttl_minutes=LOGIN_LINK_TTL // 60)
+    if not email_allowed(email):
+        # Deliberately identical to the success message — don't reveal the list
+        return render_template_string(
+            LOGIN_HTML, cfg=CONFIG,
+            notice=f"If {email} is registered, a sign-in link is on its way.",
+            notice_ok=True, sent=True, next_path=next_path,
+            ttl_minutes=LOGIN_LINK_TTL // 60)
+
+    base = paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")
+    link = make_login_link(email, base)
+    body = (
+        f"Here is your sign-in link for the {CONFIG['persona_name']}:\n\n"
+        f"{link}\n\n"
+        f"It works once and expires in {LOGIN_LINK_TTL // 60} minutes. "
+        "If you didn't request it, you can ignore this message."
+    )
+    sent_ok = send_email(email, f"Your {CONFIG['persona_name']} sign-in link", body)
+    if not sent_ok:
+        app.logger.error("[login] could not send sign-in link")
+    return render_template_string(
+        LOGIN_HTML, cfg=CONFIG,
+        notice=f"Sign-in link sent to {email}. Check your inbox and spam folder.",
+        notice_ok=True, sent=True, next_path=next_path,
+        ttl_minutes=LOGIN_LINK_TTL // 60)
+
+
+@app.route("/login/verify", methods=["GET"])
+def login_verify():
+    email = read_login_token(request.args.get("token", ""))
+    if not email:
+        return redirect(url_for(
+            "login_page",
+            notice="That link has expired or is invalid. Please request a new one."))
+    session["user_email"] = email
+    session.pop("chat_token", None)      # switch to this person's own history
+    app.logger.info(f"[login] signed in: {email}")
+    nxt = request.args.get("next") or "/"
+    return redirect(nxt if nxt.startswith("/") else "/")
+
+
+@app.route("/logout", methods=["GET", "POST"])
+def logout():
+    session.pop("user_email", None)
+    session.pop("chat_token", None)
+    session["messages"] = []
+    return redirect(url_for("login_page", notice="You've been signed out.", ok="1"))
 
 
 def admin_required(f):
@@ -3532,7 +3714,17 @@ def _history_ensure_table(conn):
 
 
 def _history_token() -> str:
-    """Small random id kept in the cookie; the transcript itself stays server-side."""
+    """Identifies whose transcript this is.
+
+    Signed in, it's derived from the email so the conversation continues across
+    visits and devices. Anonymous, it's a random per-browser token as before.
+    """
+    email = session.get("user_email", "")
+    if email:
+        import hashlib
+        digest = hashlib.sha256(
+            (app.secret_key + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
+        return "u_" + digest
     token = session.get("chat_token")
     if not token:
         token = os.urandom(16).hex()
@@ -3975,7 +4167,12 @@ def retrieve_context(query: str) -> str:
 
 def _render_chat(force_scheduling=None):
     """Render the chat page. force_scheduling overrides the admin default."""
-    clear_history()
+    # Anonymous visitors start fresh each visit. Signed-in participants keep
+    # their history — that continuity is the point of signing in.
+    if not current_user():
+        clear_history()
+    else:
+        session["messages"] = []
     if force_scheduling is None:
         show = load_settings()["show_scheduling_button"]
     else:
@@ -3998,6 +4195,7 @@ def _render_chat(force_scheduling=None):
 
 @app.route("/")
 @paywall.paywall_required
+@login_required
 def index():
     """Default entry point — follows the admin panel's Display Settings."""
     return _render_chat()
@@ -4005,6 +4203,7 @@ def index():
 
 @app.route("/scheduling")
 @paywall.paywall_required
+@login_required
 def index_with_scheduling():
     """Share this link when you want the booking button shown."""
     session.pop("force_scheduling", None)
@@ -4013,6 +4212,7 @@ def index_with_scheduling():
 
 @app.route("/no-scheduling")
 @paywall.paywall_required
+@login_required
 def index_without_scheduling():
     """Share this link when you want the advisor with no booking prompt."""
     session.pop("force_scheduling", None)
@@ -4021,6 +4221,7 @@ def index_without_scheduling():
 
 @app.route("/chat", methods=["POST"])
 @paywall.paywall_required
+@login_required
 def chat():
     # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
     # Attachment paths:
