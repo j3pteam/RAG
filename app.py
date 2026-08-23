@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-d"
-APP_BUILD_NOTES = "editable ratings; release heading wording"
+APP_VERSION = "2026-08-23-e"
+APP_BUILD_NOTES = "editable ratings; release wording without app"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -651,7 +651,7 @@ def admin_required(f):
 # Defined once and rendered into BOTH the session-entry gate and the
 # scheduling gate, so the two can never drift apart. Edit here to change both.
 
-RELEASE_HEADING = "App Release &amp; Acknowledgment"
+RELEASE_HEADING = "Release &amp; Acknowledgment"
 
 RELEASE_BODY_HTML = """
   <p>
@@ -665,7 +665,7 @@ RELEASE_BODY_HTML = """
   <p>
     To the extent permitted by law, I release Residency Select LLC dba
     J3P Health, its coaches, employees, and representatives from liability
-    arising from my voluntary use of the coaching app.
+    arising from my voluntary use of the J3P Advisor.
   </p>
 """
 
