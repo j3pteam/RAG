@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-b"
-APP_BUILD_NOTES = "admin order: feedback, display, conversation log, knowledge base, uploads"
+APP_VERSION = "2026-08-23-c"
+APP_BUILD_NOTES = "admin order + editable ratings in the conversation log"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -561,6 +561,73 @@ def raise_safety_alert(user_message: str, ip: str = ""):
         args=("J3P Advisor — participant safety alert", body),
         daemon=True,
     ).start()
+
+
+# ---------------------------------------------------------------------------
+# Setting ratings from the admin panel
+# ---------------------------------------------------------------------------
+# database.py owns the feedback table, so rather than assume its name the
+# table is discovered once from information_schema by looking for the columns
+# this app knows it has. Clearing a rating back to unrated needs direct SQL,
+# which db.update_feedback_rating doesn't cover.
+
+_feedback_table_cache = None
+
+
+def _feedback_table(conn):
+    """Find the table holding feedback rows. Cached after the first lookup."""
+    global _feedback_table_cache
+    if _feedback_table_cache:
+        return _feedback_table_cache
+    with conn.cursor() as cur:
+        cur.execute("""
+            SELECT table_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND column_name IN ('rating', 'bot_reply', 'user_message')
+            GROUP BY table_name
+            HAVING COUNT(DISTINCT column_name) = 3
+            LIMIT 1
+        """)
+        row = cur.fetchone()
+    if row:
+        _feedback_table_cache = row[0]
+    return _feedback_table_cache
+
+
+def set_feedback_rating(feedback_id: int, rating) -> bool:
+    """Set a row's rating to 'up', 'down', or None to clear it."""
+    if rating not in ("up", "down", None):
+        return False
+
+    # Prefer the database module's own path where it applies
+    if rating in ("up", "down"):
+        try:
+            if db.update_feedback_rating(int(feedback_id), rating, ""):
+                return True
+        except Exception as e:
+            app.logger.warning(f"[rating] db.update_feedback_rating failed: {e}")
+
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        table = _feedback_table(conn)
+        if not table:
+            app.logger.error("[rating] could not locate the feedback table")
+            return False
+        with conn.cursor() as cur:
+            cur.execute(
+                f'UPDATE "{table}" SET rating = %s WHERE id = %s',
+                (rating, int(feedback_id)))
+            changed = cur.rowcount
+        conn.commit()
+        return changed > 0
+    except Exception as e:
+        app.logger.error(f"[rating] update failed: {e}")
+        return False
+    finally:
+        conn.close()
 
 
 def admin_required(f):
@@ -5014,6 +5081,16 @@ th { text-align: left; padding: 0.6rem 0.5rem; border-bottom: 2px solid var(--na
 td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: top; }
 .tag-up { background: #1B998B; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
 .tag-down { background: var(--rust); color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.7rem; }
+.rating-set { display: inline-flex; gap: 0.15rem; margin-left: 0.35rem; vertical-align: middle; }
+.rate-btn {
+  background: transparent; border: 1px solid var(--line); border-radius: 2px;
+  cursor: pointer; padding: 0.1rem 0.3rem; font-size: 0.72rem; line-height: 1.3;
+  color: var(--navy); transition: all 0.15s ease;
+}
+.rate-btn:hover:not(:disabled) { border-color: var(--gold); background: #fff; }
+.rate-btn.on-up { background: #1B998B; border-color: #1B998B; }
+.rate-btn.on-down { background: var(--rust); border-color: var(--rust); }
+.rate-btn:disabled { opacity: 0.5; cursor: default; }
 .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
               margin-left: 0.3rem; letter-spacing: 0.05em; }
 .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -5225,10 +5302,20 @@ input[type="text"] { flex: 1; min-width: 200px; }
         <tr id="row-{{ f.id }}">
           <td><input type="checkbox" name="feedback_ids" value="{{ f.id }}" class="feedback-checkbox" /></td>
           <td class="muted">{{ f.created_at.strftime('%m/%d %H:%M') }}</td>
-          <td>
-            {% if f.rating == 'up' %}<span class="tag-up">UP</span>
-            {% elif f.rating == 'down' %}<span class="tag-down">DOWN</span>
-            {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
+          <td style="white-space: nowrap;">
+            <span class="rating-state" data-id="{{ f.id }}">
+              {% if f.rating == 'up' %}<span class="tag-up">UP</span>
+              {% elif f.rating == 'down' %}<span class="tag-down">DOWN</span>
+              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
+            </span>
+            <span class="rating-set">
+              <button type="button" class="rate-btn{% if f.rating == 'up' %} on-up{% endif %}"
+                      data-id="{{ f.id }}" data-rating="up" title="Mark helpful">&#128077;</button>
+              <button type="button" class="rate-btn{% if f.rating == 'down' %} on-down{% endif %}"
+                      data-id="{{ f.id }}" data-rating="down" title="Mark not helpful">&#128078;</button>
+              <button type="button" class="rate-btn" data-id="{{ f.id }}" data-rating=""
+                      title="Clear rating">&times;</button>
+            </span>
             {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
           </td>
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
@@ -5311,6 +5398,48 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </form>
 
     <script>
+      // Set or clear a rating straight from the log
+      (function() {
+        document.querySelectorAll(".rate-btn").forEach(btn => {
+          btn.addEventListener("click", async () => {
+            const id = btn.dataset.id;
+            const rating = btn.dataset.rating || "";
+            const group = btn.closest(".rating-set");
+            group.querySelectorAll("button").forEach(b => b.disabled = true);
+            try {
+              const body = new URLSearchParams();
+              body.set("rating", rating);
+              const resp = await fetch(`/admin/feedback/${id}/rating`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: body.toString(),
+              });
+              const data = await resp.json();
+              if (!data.ok) throw new Error(data.error || "Update failed");
+
+              // Reflect the new state without a page reload
+              const state = document.querySelector(`.rating-state[data-id="${id}"]`);
+              if (state) {
+                state.innerHTML = rating === "up"
+                  ? '<span class="tag-up">UP</span>'
+                  : rating === "down"
+                    ? '<span class="tag-down">DOWN</span>'
+                    : '<span class="muted" style="font-size: 0.7rem;">—</span>';
+              }
+              group.querySelectorAll("button").forEach(b => {
+                b.classList.remove("on-up", "on-down");
+                if (b.dataset.rating === "up" && rating === "up") b.classList.add("on-up");
+                if (b.dataset.rating === "down" && rating === "down") b.classList.add("on-down");
+              });
+            } catch (err) {
+              alert("Couldn't update that rating: " + err.message);
+            } finally {
+              group.querySelectorAll("button").forEach(b => b.disabled = false);
+            }
+          });
+        });
+      })();
+
       // Toggle expanded feedback detail rows
       (function() {
         document.querySelectorAll('.expand-btn').forEach(btn => {
@@ -5579,6 +5708,17 @@ def admin_dashboard():
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
     )
+
+
+@app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
+@admin_required
+def admin_set_rating(feedback_id):
+    """Set or clear a rating from the conversation log."""
+    value = (request.form.get("rating") or "").strip().lower()
+    rating = value if value in ("up", "down") else None
+    if set_feedback_rating(feedback_id, rating):
+        return jsonify({"ok": True, "rating": rating})
+    return jsonify({"ok": False, "error": "Could not update that rating."}), 400
 
 
 @app.route("/admin/settings", methods=["POST"])
