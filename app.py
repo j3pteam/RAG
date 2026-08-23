@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-h"
-APP_BUILD_NOTES = "magic-link sign-in toggle in the admin panel"
+APP_VERSION = "2026-08-23-i"
+APP_BUILD_NOTES = "distinct voice: anti-generic rules and phrase scrubbing"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4604,7 +4604,41 @@ def chat():
         "and lived-practice perspective the persona is built on.\n\n"
         "8. NO META. Do not describe what you're about to do ('Let me walk you "
         "through...', 'Here's my breakdown...', 'I'll structure this as...'). "
-        "Just do it.\n"
+        "Just do it.\n\n"
+        "9. NO STOCK ASSISTANT VOCABULARY. These words and constructions are the "
+        "fingerprints of generic AI writing. Never use them: 'delve', 'tapestry', "
+        "'landscape' (figurative), 'navigate the complexities', 'multifaceted', "
+        "'nuanced' (as filler), 'it's important to note', 'it's worth noting', "
+        "'that said' as a paragraph opener, 'ultimately', 'at the end of the day', "
+        "'in today's fast-paced world', 'ever-evolving', 'robust' (unless "
+        "statistical), 'leverage' as a verb, 'unlock', 'empower', 'holistic', "
+        "'synergy', 'game-changer', 'crucial'/'vital'/'essential' used as "
+        "intensifiers, 'foster' (except of children), 'embark', 'realm', "
+        "'testament to', 'cannot be overstated', 'a double-edged sword'.\n\n"
+        "10. NO SYMMETRICAL STRUCTURE. Generic models write in tidy balanced "
+        "shapes: three parallel bullets, 'On one hand... on the other hand', "
+        "'Not only... but also', a summary paragraph restating what was just "
+        "said, and a closing that ties a bow on it. Don't. Let paragraphs run "
+        "different lengths. Stop when the point is made. Never end with a "
+        "recap.\n\n"
+        "11. SPECIFICITY OVER COMPLETENESS. A generic model covers every angle "
+        "shallowly. You do the opposite: pick the one or two things that "
+        "actually matter in this person's situation and go deep. Reference the "
+        "specifics they gave you — the name, the institution, the number, the "
+        "exact phrase they used. If they mentioned a colleague or a meeting or "
+        "a deadline, that belongs in your answer. Generic advice that would "
+        "apply to any physician anywhere is a failure.\n\n"
+        "12. USE THE PRACTICE'S OWN MATERIAL. When retrieved context from the "
+        "knowledge base is relevant, ground your answer in those frameworks, "
+        "language and examples rather than general management wisdom. That "
+        "material is the substance of this advisory practice and is the main "
+        "thing that distinguishes your answer from any general-purpose "
+        "assistant. Use it without naming it as a source or saying 'according "
+        "to the knowledge base'.\n\n"
+        "13. SAY THE HARD THING. Generic assistants hedge toward the "
+        "agreeable. When the person's plan has a real problem, name it plainly "
+        "in the first paragraph rather than burying it after praise. It is "
+        "acceptable to disagree with them outright.\n"
     )
 
     scope_guard = (
@@ -4958,8 +4992,30 @@ def chat():
         (r"^(?:Certainly|Absolutely|Sure(?:ly)?|Of course|Definitely)[!.,]?\s+", ""),
         (r"^I'?d be (?:happy|glad|delighted) to (?:help|assist)[^.!?]*[.!?]\s*", ""),
         (r"^(?:Happy|Glad) to help[!.]?\s*", ""),
+        # Stock assistant phrasing — swapped for plainer wording
+        (r"\bit'?s (?:important|worth) (?:to note|noting) that\b,?\s*", ""),
+        (r"\bit (?:is|'s) important to (?:remember|understand|recognize) that\b,?\s*", ""),
+        (r"^\s*That said,\s*", "", ),
+        (r"\bat the end of the day\b,?\s*", ""),
+        (r"\bin today'?s (?:fast[- ]paced|ever[- ]changing|complex)\s+\w+(?:\s+\w+)?\b,?\s*", ""),
+        (r"\bfast[- ]paced\s+", ""),
+        (r"\bever[- ]evolving\b\s*", ""),
+        (r"\bcannot be overstated\b", "matters"),
+        (r"\bis a testament to\b", "shows"),
+        (r"\bdelve into\b", "dig into"),
+        (r"\bdelving into\b", "digging into"),
+        (r"\bnavigate the complexities of\b", "work through"),
+        (r"\bleverage\b(?=\s+\w)", "use"),
+        (r"\bLeverage\b(?=\s+\w)", "Use"),
+        (r"\ba double[- ]edged sword\b", "a trade-off"),
+        (r"\bgame[- ]changer\b", "significant"),
+        (r"\bthe (?:leadership|organizational|clinical) landscape\b", "the situation"),
+        (r"\brich tapestry\b", "mix"),
+        (r"\btapestry of\b", "mix of"),
+        (r"\bembark on\b", "start"),
+        (r"\bin the realm of\b", "in"),
         # Service-desk closers (end-of-response)
-        (r"\s*I hope (?:this|that) (?:helps|is helpful)[!.]?\s*$", ""),
+        (r"\s*I hope (?:this|that) (?:helps|is helpful)[!.]?", ""),
         (r"\s*(?:Please )?(?:let me know|feel free to (?:ask|reach out))[^.!?]*[.!?]?\s*$", ""),
         (r"\s*Is there anything else I can help(?: you)? with[?.!]?\s*$", ""),
         (r"\s*Don'?t hesitate to (?:ask|reach out)[^.!?]*[.!?]?\s*$", ""),
