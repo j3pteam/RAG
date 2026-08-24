@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-k"
-APP_BUILD_NOTES = "wider admin layout"
+APP_VERSION = "2026-08-24-a"
+APP_BUILD_NOTES = "labelled header buttons on mobile"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1007,6 +1007,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .reset-label { display: inline; }
     .autospeak-icon { width: 16px; height: 16px; }
     .autospeak-label { display: inline; }
+    .reset-short { display: none; }
     /* Highlight the auto-speak button when it's ON */
     #autospeak-btn.on {
       background: var(--gold);
@@ -1656,15 +1657,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
       }
       .cta-btn svg { width: 15px; height: 15px; }
     }
-    /* Very narrow phones: hide the persona tag + divider, swap button to icon only */
+    /* Very narrow phones: drop the persona tag, and stack a short caption under
+       each header icon. Icons alone were ambiguous — the voice button in
+       particular read as an unlabelled box. */
     @media (max-width: 480px) {
       .brand-divider, .brand-tag { display: none; }
-      .reset-label { display: none; }
       .reset-icon { display: inline-block; }
-      .autospeak-label { display: none; }
-      .voice-label { display: none; }
-      header button { padding: 0.5rem; min-width: 38px; min-height: 38px;
-                      display: inline-flex; align-items: center; justify-content: center; }
+      header button {
+        padding: 0.35rem 0.45rem; min-width: 46px; min-height: 42px;
+        display: inline-flex; flex-direction: column; align-items: center;
+        justify-content: center; gap: 0.12rem; line-height: 1;
+      }
+      header button svg { width: 16px; height: 16px; }
+      .autospeak-label, .voice-label, .reset-label {
+        display: block; font-size: 0.5rem; letter-spacing: 0.04em;
+        text-transform: uppercase; white-space: nowrap;
+      }
+      .reset-full { display: none; }
+      .reset-short { display: inline; }
       /* Hide action button text labels — keep icons only */
       .action-btn span { display: none; }
       .action-btn { padding: 0.45rem 0.55rem; }
@@ -1762,7 +1772,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <svg class="reset-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M12 5v14M5 12h14"/>
       </svg>
-      <span class="reset-label">New conversation</span>
+      <span class="reset-label"><span class="reset-full">New conversation</span><span class="reset-short">New chat</span></span>
     </button>
   </header>
 
