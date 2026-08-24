@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-24-a"
-APP_BUILD_NOTES = "labelled header buttons on mobile"
+APP_VERSION = "2026-08-24-b"
+APP_BUILD_NOTES = "mobile header: wordmark beside logo, labelled buttons"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1661,7 +1661,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
        each header icon. Icons alone were ambiguous — the voice button in
        particular read as an unlabelled box. */
     @media (max-width: 480px) {
-      .brand-divider, .brand-tag { display: none; }
+      /* Keep the J3P ADVISOR wordmark beside the logo, as on desktop.
+         It shrinks rather than disappearing. */
+      .brand-divider { display: block; height: 22px; }
+      .brand-tag { display: inline; font-size: 0.56rem; letter-spacing: 0.1em; }
+      .brand { gap: 0.45rem; min-width: 0; }
+      .brand-logo { height: 34px; }
+      header { gap: 0.35rem; padding: 0.6rem 0.7rem; }
       .reset-icon { display: inline-block; }
       header button {
         padding: 0.35rem 0.45rem; min-width: 46px; min-height: 42px;
