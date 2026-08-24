@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-24-c"
-APP_BUILD_NOTES = "branded admin login; mobile header wordmark"
+APP_VERSION = "2026-08-24-d"
+APP_BUILD_NOTES = "branded admin login (US spelling)"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5501,7 +5501,7 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
       <input type="password" name="password" placeholder="Password" autofocus required />
       <button type="submit">Sign in</button>
-      <div class="foot">Authorised access only</div>
+      <div class="foot">Authorized access only</div>
     </div>
   </form>
 </body></html>"""
