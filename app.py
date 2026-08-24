@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-23-j"
-APP_BUILD_NOTES = "Knowledge Upload group heading in the admin panel"
+APP_VERSION = "2026-08-23-k"
+APP_BUILD_NOTES = "wider admin layout"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5434,7 +5434,13 @@ header { background: var(--navy); color: #fff; padding: 1rem 2rem; display: flex
 header h1 { margin: 0; font-size: 1rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); font-weight: 400; }
 header a { color: rgba(210,188,141,0.7); text-decoration: none; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; }
 header a:hover { color: var(--gold); }
-.container { max-width: 1000px; margin: 0 auto; padding: 2rem; }
+*, *::before, *::after { box-sizing: border-box; }
+/* Use most of the window — the conversation log is wide and was cramped
+   inside a 1000px column on a large screen. */
+.container { max-width: 1800px; width: 95%; margin: 0 auto; padding: 2rem 1.5rem; }
+/* A wide log scrolls inside its own card rather than the whole page */
+.section { overflow-x: auto; }
+@media (max-width: 900px) { .container { width: 100%; padding: 1.25rem 1rem; } }
 .section { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; }
 .group-heading {
   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
