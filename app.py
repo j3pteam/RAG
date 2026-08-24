@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-24-b"
-APP_BUILD_NOTES = "mobile header: wordmark beside logo, labelled buttons"
+APP_VERSION = "2026-08-24-c"
+APP_BUILD_NOTES = "branded admin login; mobile header wordmark"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5419,26 +5419,92 @@ def serve_jpg(filename):
 # Admin panel
 # ---------------------------------------------------------------------------
 
-ADMIN_LOGIN_HTML = """<!DOCTYPE html><html><head><title>Admin Login</title>
+ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
-body { font-family: -apple-system, sans-serif; background: #27334A; color: #fff;
-       display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; }
-.box { background: #fff; color: #27334A; padding: 2rem 2.5rem; border-radius: 4px;
-       border-top: 3px solid #D2BC8D; min-width: 300px; }
-h1 { margin: 0 0 1rem 0; font-size: 1.1rem; letter-spacing: 0.1em; text-transform: uppercase; color: #27334A; }
-input { width: 100%; padding: 0.7rem; border: 1px solid #ccc; border-radius: 2px; font-size: 1rem; margin-bottom: 1rem; }
-input:focus { outline: none; border-color: #D2BC8D; }
-button { width: 100%; padding: 0.7rem; background: #27334A; color: #D2BC8D; border: none;
-         border-radius: 2px; cursor: pointer; letter-spacing: 0.15em; text-transform: uppercase; font-size: 0.85rem; }
-button:hover { background: #D2BC8D; color: #27334A; }
-.err { color: #9D432C; font-size: 0.85rem; margin-bottom: 0.5rem; }
+  :root {
+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper); color: var(--navy);
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 1.25rem;
+  }
+  .box {
+    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
+    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
+  }
+  .box-head {
+    background: var(--navy); border-bottom: 2px solid var(--gold);
+    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
+  }
+  .box-head img { height: 44px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 26px; background: rgba(210,188,141,0.45); }
+  .box-head span {
+    color: var(--gold); font-size: 0.78rem;
+    letter-spacing: 0.22em; text-transform: uppercase; font-weight: 400;
+  }
+  .content { padding: 1.75rem 2rem 1.7rem; }
+  h1 {
+    margin: 0 0 1.2rem; font-size: 0.85rem; font-weight: 500;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
+    padding-bottom: 0.65rem; border-bottom: 1px solid var(--line);
+  }
+  input {
+    width: 100%; padding: 0.8rem 0.9rem; border: 1px solid var(--line);
+    border-radius: 2px; font-family: inherit; font-size: 0.95rem;
+    background: var(--paper); color: var(--navy);
+  }
+  input:focus { outline: none; border-color: var(--gold); background: #fff; }
+  button {
+    width: 100%; margin-top: 0.9rem; padding: 0.85rem;
+    background: var(--navy); color: var(--gold); border: 1px solid var(--navy);
+    border-radius: 2px; cursor: pointer; font-family: inherit;
+    font-size: 0.78rem; letter-spacing: 0.18em; text-transform: uppercase;
+    transition: background 0.2s ease, color 0.2s ease;
+  }
+  button:hover { background: var(--gold); color: var(--navy); }
+  .err {
+    background: #FEE; color: var(--rust); border: 1px solid #E7C3BA;
+    padding: 0.65rem 0.85rem; border-radius: 2px;
+    font-size: 0.85rem; margin-bottom: 1rem;
+  }
+  .foot {
+    margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
+    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
+  }
+  @media (max-width: 480px) {
+    .box-head { padding: 0.85rem 1.2rem; gap: 0.7rem; }
+    .box-head img { height: 36px; }
+    .box-head span { font-size: 0.68rem; letter-spacing: 0.16em; }
+    .content { padding: 1.4rem 1.3rem 1.3rem; }
+  }
 </style></head><body>
-<form method="POST" class="box">
-  <h1>Admin Login</h1>
-  {% if error %}<div class="err">{{ error }}</div>{% endif %}
-  <input type="password" name="password" placeholder="Password" autofocus required />
-  <button type="submit">Sign in</button>
-</form></body></html>"""
+  <form method="POST" class="box">
+    <div class="box-head">
+      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+      <div class="brand-divider"></div>
+      <span>{{ cfg.persona_name }}</span>
+    </div>
+    <div class="content">
+      <h1>Admin sign in</h1>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <input type="password" name="password" placeholder="Password" autofocus required />
+      <button type="submit">Sign in</button>
+      <div class="foot">Authorised access only</div>
+    </div>
+  </form>
+</body></html>"""
 
 ADMIN_HTML = """<!DOCTYPE html><html><head>
 <title>Admin — {{ cfg.persona_name }}</title>
@@ -6099,10 +6165,10 @@ def admin_login():
         if request.form.get("password") == CONFIG["admin_password"]:
             session["is_admin"] = True
             return redirect(url_for("admin_dashboard"))
-        return render_template_string(ADMIN_LOGIN_HTML, error="Incorrect password")
+        return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error="Incorrect password")
     if session.get("is_admin"):
         return redirect(url_for("admin_dashboard"))
-    return render_template_string(ADMIN_LOGIN_HTML, error=None)
+    return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
 
 
 @app.route("/admin/logout")
