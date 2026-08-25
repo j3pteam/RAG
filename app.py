@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-24-d"
-APP_BUILD_NOTES = "branded admin login (US spelling)"
+APP_VERSION = "2026-08-25-a"
+APP_BUILD_NOTES = "end-of-session rating nudge"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1314,6 +1314,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
+
+    /* Gentle nudge to rate the last reply when a session looks finished */
+    .rate-nudge {
+      display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
+      margin-top: 0.8rem; padding: 0.55rem 0.75rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-left: 3px solid var(--gold); border-radius: 3px;
+      font-size: 0.82rem; color: var(--navy);
+      animation: nudge-in 0.35s ease;
+    }
+    @keyframes nudge-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; } }
+    .rate-nudge .nudge-dismiss {
+      margin-left: auto; background: none; border: none; cursor: pointer;
+      color: var(--muted); font-size: 1rem; line-height: 1; padding: 0 0.2rem;
+    }
+    .rate-nudge .nudge-dismiss:hover { color: var(--navy); }
+    /* Draw the eye to the thumbs on the row above */
+    .feedback.nudged .feedback-btn {
+      border-color: var(--gold);
+      box-shadow: 0 0 0 3px rgba(210,188,141,0.28);
+    }
 
     /* Opt-in download offer under a reply — nothing saves without a click */
     .export-offer {
@@ -2621,6 +2642,80 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     const FORMAT_NAMES = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
 
+    // ---------------------------------------------------------------
+    // Rating nudge
+    // ---------------------------------------------------------------
+    // A session has no explicit end, so the nudge appears on the most recent
+    // unrated reply when the conversation looks finished: the person has gone
+    // quiet, has said something valedictory, or is starting a new conversation.
+    let idleNudgeTimer = null;
+    const IDLE_NUDGE_MS = 75000;
+
+    function lastUnratedReply() {
+      const msgs = Array.from(document.querySelectorAll(".msg.assistant"));
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const fb = msgs[i].querySelector(".feedback");
+        if (!fb) continue;
+        if (fb.dataset.rated === "1") return null;   // already rated: no nudge
+        return msgs[i];
+      }
+      return null;
+    }
+
+    function showRatingNudge(reason) {
+      const msgDiv = lastUnratedReply();
+      if (!msgDiv) return;
+      if (msgDiv.querySelector(".rate-nudge")) return;
+      if (msgDiv.querySelector(".safety-reply")) return;   // never on a crisis reply
+
+      const fb = msgDiv.querySelector(".feedback");
+      if (fb) fb.classList.add("nudged");
+
+      const bar = document.createElement("div");
+      bar.className = "rate-nudge";
+      const text = document.createElement("span");
+      text.textContent = reason === "farewell"
+        ? "Before you go — was this helpful? Use the thumbs above; it's how the advisor improves."
+        : "Was this helpful? A thumbs up or down above helps improve the advisor.";
+      bar.appendChild(text);
+
+      const close = document.createElement("button");
+      close.type = "button";
+      close.className = "nudge-dismiss";
+      close.setAttribute("aria-label", "Dismiss");
+      close.innerHTML = "&times;";
+      close.addEventListener("click", () => {
+        bar.remove();
+        if (fb) fb.classList.remove("nudged");
+      });
+      bar.appendChild(close);
+
+      msgDiv.appendChild(bar);
+      chatWrap.scrollTop = chatWrap.scrollHeight;
+    }
+
+    function clearRatingNudge() {
+      document.querySelectorAll(".rate-nudge").forEach(n => n.remove());
+      document.querySelectorAll(".feedback.nudged").forEach(f => f.classList.remove("nudged"));
+    }
+
+    function armIdleNudge() {
+      if (idleNudgeTimer) clearTimeout(idleNudgeTimer);
+      idleNudgeTimer = setTimeout(() => showRatingNudge("idle"), IDLE_NUDGE_MS);
+    }
+
+    // "thanks, that's all" and similar — a session ending politely
+    const FAREWELL_RE = new RegExp(
+      "\\b(thank you|thanks|thx|that'?s all|that helps|perfect|appreciate it"
+      + "|goodbye|bye|talk soon|see you|have a good|that'?s everything"
+      + "|all set|nothing else|we'?re done|i'?m done|very helpful)\\b", "i");
+
+    function looksLikeFarewell(text) {
+      const t = (text || "").trim();
+      if (!t || t.length > 90) return false;         // long messages aren't sign-offs
+      return FAREWELL_RE.test(t);
+    }
+
     // Offers a download beneath a reply. Nothing is written to disk unless
     // the user picks a format — replies never export themselves.
     // Shows a readable failure with a Retry button, and puts the user's text
@@ -2914,6 +3009,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
         btn.addEventListener("click", async () => {
           if (btn.disabled) return;
           const rating = btn.dataset.rating;
+          // Rated — retire the nudge for this reply
+          wrap.dataset.rated = "1";
+          wrap.classList.remove("nudged");
+          const ownNudge = wrap.parentElement
+            ? wrap.parentElement.querySelector(".rate-nudge") : null;
+          if (ownNudge) ownNudge.remove();
 
           if (rating === "up") {
             // Thumbs up: simple submit, no comment needed
@@ -3419,6 +3520,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
       const text = input.value.trim();
+      const wasFarewell = looksLikeFarewell(text);
       const paperclipFiles = attachedFiles.slice();
       const folderFiles = attachedFolderFiles.slice();
       const folderName = attachedFolderName;
@@ -3498,6 +3600,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
                                     data.interaction_id || null, data.documents || null);
           // Nothing downloads on its own. When the reply looks like a
           // deliverable, offer a download and let the user decide.
+          clearRatingNudge();
+          if (wasFarewell) setTimeout(() => showRatingNudge("farewell"), 900);
+          else armIdleNudge();
           const docs = data.documents || [];
           if (docs.length > 1 && data.separate_files) {
             offerExport(msgDiv, data.reply, data.export_format, docs);
@@ -3517,7 +3622,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
       }
     });
 
+    let resetArmed = false;
     resetBtn.addEventListener("click", async () => {
+      // If the last reply is unrated, ask once before wiping the conversation.
+      // Showing the nudge and then clearing the chat would be pointless, so the
+      // first click surfaces it and the second proceeds.
+      if (!resetArmed && lastUnratedReply()) {
+        showRatingNudge("farewell");
+        resetArmed = true;
+        setTimeout(() => { resetArmed = false; }, 12000);
+        return;
+      }
+      resetArmed = false;
       // Stop any in-progress speech before wiping the chat
       J3PSpeech.stop();
       window.__activeSpeakBtn = null;
