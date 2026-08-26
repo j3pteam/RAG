@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-25-a"
-APP_BUILD_NOTES = "end-of-session rating nudge"
+APP_VERSION = "2026-08-26-a"
+APP_BUILD_NOTES = "fix contact scrubber damaging letters; no export chatter in deliverables"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4893,9 +4893,9 @@ def chat():
         "attached', or 'is ready' — that would be untrue. Do not tell them you "
         "are unable to produce a file either, and never instruct them to copy "
         "your text into Word or PowerPoint themselves. If you mention it at all, "
-        "one short closing line such as 'Use the buttons below to save this as "
-        "Word, PowerPoint, Excel or PDF.' One line only, and it is fine to omit "
-        "it entirely.\n"
+        "nothing at all about files. The buttons speak for themselves, and any "
+        "such line ends up inside the document itself when the user saves it. "
+        "Write the deliverable and stop.\n"
     )
 
     # All human contact routes through client services, never an individual.
@@ -5066,6 +5066,12 @@ def chat():
                      "dblake", "diane.blake", "dianeblake")
 
     def _is_internal_email(addr: str) -> bool:
+        # The client services address is the approved destination, so a passage
+        # containing it is correct and must be left alone. Treating it as
+        # "internal" made the scrubber delete legitimate contact paragraphs
+        # from letters the advisor had been asked to write.
+        if addr.lower() == CONTACT.lower():
+            return False
         domain = addr.split("@")[-1].lower()
         local = addr.split("@")[0].lower()
         return (domain in _INTERNAL_DOMAINS
@@ -5095,7 +5101,11 @@ def chat():
         assistant_text = _re.sub(r"\s+([,.;:])", r"\1", assistant_text)
         assistant_text = _re.sub(r"[ \t]{2,}", " ", assistant_text)
         assistant_text = _re.sub(r"\n{3,}", "\n\n", assistant_text).strip()
-        if CONTACT.lower() not in assistant_text.lower():
+        # Only add the pointer to a conversational reply. Appending it to a
+        # letter or deck would put J3P's internal routing line inside the
+        # user's own deliverable.
+        is_deliverable = looks_like_document(assistant_text)
+        if CONTACT.lower() not in assistant_text.lower() and not is_deliverable:
             line = (f"For anything that needs a person — scheduling, "
                     f"administration, or getting started — contact {CONTACT} "
                     f"and the team will route it.")
@@ -5124,6 +5134,13 @@ def chat():
         (r"^(?:Certainly|Absolutely|Sure(?:ly)?|Of course|Definitely)[!.,]?\s+", ""),
         (r"^I'?d be (?:happy|glad|delighted) to (?:help|assist)[^.!?]*[.!?]\s*", ""),
         (r"^(?:Happy|Glad) to help[!.]?\s*", ""),
+        # File/export chatter has no place in a deliverable — it would be
+        # carried into the exported document
+        (r"\n*[*_]{0,2}Use the buttons? below to save this as[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}You can save this (?:as|in)[^\n]*using the buttons?[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}Use SAVE below to[^\n]*", "\n"),
+        # Tidy an orphaned emphasis marker left behind on its own line
+        (r"\n\s*[*_]{1,2}\s*$", ""),
         # Stock assistant phrasing — swapped for plainer wording
         (r"\bit'?s (?:important|worth) (?:to note|noting) that\b,?\s*", ""),
         (r"\bit (?:is|'s) important to (?:remember|understand|recognize) that\b,?\s*", ""),
