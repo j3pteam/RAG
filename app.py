@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-i"
-APP_BUILD_NOTES = "learning toggle moved into the Feedback section"
+APP_VERSION = "2026-08-27-j"
+APP_BUILD_NOTES = "Logs section grouping in the admin panel"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6268,6 +6268,44 @@ input[type="text"] { flex: 1; min-width: 200px; }
   </div>
 
   <div class="section">
+    <h2>Continuous Learning</h2>
+    <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
+      When a participant marks a reply unhelpful <em>and</em> leaves a comment
+      explaining why, that exchange can become a lesson: the advisor sees it
+      whenever a similar question comes up again and avoids repeating the
+      mistake. This turns those comments into lessons in bulk instead of one at
+      a time.
+    </p>
+    <form method="POST" action="/admin/learning/run" style="display: inline;">
+      <button type="submit" name="preview" value="1" class="btn"
+              style="background: transparent; color: var(--navy);">Preview</button>
+    </form>
+    <form method="POST" action="/admin/learning/run" style="display: inline;">
+      <button type="submit" class="btn">Learn from feedback now</button>
+    </form>
+    <p class="muted" style="margin: 0.9rem 0 0; font-size: 0.8rem;">
+      Preview shows what would happen without changing anything. Exchanges
+      mentioning compensation, discipline, litigation, patient detail, or a
+      safety escalation are always held back for you to review by hand.
+    </p>
+    {% if learning_runs %}
+    <table style="margin-top: 1.3rem; font-size: 0.84rem;">
+      <tr><th>When</th><th>Trigger</th><th>Learned</th><th>Held back</th></tr>
+      {% for run in learning_runs %}
+      <tr>
+        <td>{{ run.when }}</td>
+        <td class="muted">{{ run.trigger }}</td>
+        <td><strong>{{ run.approved }}</strong></td>
+        <td class="muted">{{ run.skipped }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </div>
+
+  <h2 class="group-heading">Logs</h2>
+
+  <div class="section">
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
       <h2 style="margin: 0; border: none; padding: 0;">Conversation Log</h2>
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
@@ -6721,42 +6759,6 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </script>
     {% else %}
     <p class="muted">No feedback yet.</p>
-    {% endif %}
-  </div>
-
-  <div class="section">
-    <h2>Continuous Learning</h2>
-    <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
-      When a participant marks a reply unhelpful <em>and</em> leaves a comment
-      explaining why, that exchange can become a lesson: the advisor sees it
-      whenever a similar question comes up again and avoids repeating the
-      mistake. This turns those comments into lessons in bulk instead of one at
-      a time.
-    </p>
-    <form method="POST" action="/admin/learning/run" style="display: inline;">
-      <button type="submit" name="preview" value="1" class="btn"
-              style="background: transparent; color: var(--navy);">Preview</button>
-    </form>
-    <form method="POST" action="/admin/learning/run" style="display: inline;">
-      <button type="submit" class="btn">Learn from feedback now</button>
-    </form>
-    <p class="muted" style="margin: 0.9rem 0 0; font-size: 0.8rem;">
-      Preview shows what would happen without changing anything. Exchanges
-      mentioning compensation, discipline, litigation, patient detail, or a
-      safety escalation are always held back for you to review by hand.
-    </p>
-    {% if learning_runs %}
-    <table style="margin-top: 1.3rem; font-size: 0.84rem;">
-      <tr><th>When</th><th>Trigger</th><th>Learned</th><th>Held back</th></tr>
-      {% for run in learning_runs %}
-      <tr>
-        <td>{{ run.when }}</td>
-        <td class="muted">{{ run.trigger }}</td>
-        <td><strong>{{ run.approved }}</strong></td>
-        <td class="muted">{{ run.skipped }}</td>
-      </tr>
-      {% endfor %}
-    </table>
     {% endif %}
   </div>
 
