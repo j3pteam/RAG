@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-j"
-APP_BUILD_NOTES = "Logs section grouping in the admin panel"
+APP_VERSION = "2026-08-27-k"
+APP_BUILD_NOTES = "learning from both thumbs up and thumbs down"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1010,9 +1010,13 @@ def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
         return {"ok": False, "error": "Database or embeddings not configured."}
 
     considered = approved = skipped = 0
+    up_count = down_count = 0
     notes = []
     try:
-        rows = db.list_feedback(limit=500, rating="down")
+        # Both ratings teach something: thumbs-down shows what to avoid,
+        # thumbs-up shows the shape of a reply that landed well.
+        rows = list(db.list_feedback(limit=500, rating="down"))
+        rows += list(db.list_feedback(limit=500, rating="up"))
     except Exception as e:
         app.logger.error(f"[learning] could not list feedback: {e}")
         return {"ok": False, "error": str(e)[:200]}
@@ -1020,10 +1024,18 @@ def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
     for row in rows:
         if row.get("approved_for_learning"):
             continue
+        rating = (row.get("rating") or "").lower()
         comment = (row.get("comment") or "").strip()
-        if len(comment) < LEARNING_MIN_COMMENT_CHARS:
+
+        # A thumbs-down needs an explanation — without one there's nothing to
+        # learn from. A thumbs-up is self-explanatory: the reply worked.
+        if rating == "down" and len(comment) < LEARNING_MIN_COMMENT_CHARS:
             skipped += 1
-            notes.append(f"#{row.get('id')}: no usable comment")
+            notes.append(f"#{row.get('id')}: thumbs-down with no comment — nothing to learn")
+            continue
+        if rating == "up" and len(row.get("bot_reply") or "") < 120:
+            skipped += 1
+            notes.append(f"#{row.get('id')}: reply too short to be a useful example")
             continue
 
         considered += 1
@@ -1043,7 +1055,11 @@ def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
             question_embedding = emb.embed_text(row.get("user_message") or "")
             if db.approve_feedback_as_lesson(row["id"], question_embedding):
                 approved += 1
-                notes.append(f"#{row['id']}: approved")
+                if rating == "up":
+                    up_count += 1
+                else:
+                    down_count += 1
+                notes.append(f"#{row['id']}: learned ({'what worked' if rating == 'up' else 'what to avoid'})")
             else:
                 skipped += 1
                 notes.append(f"#{row['id']}: not eligible")
@@ -1057,7 +1073,8 @@ def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
     app.logger.info(f"[learning] {trigger}: considered={considered} "
                     f"approved={approved} skipped={skipped}")
     return {"ok": True, "considered": considered, "approved": approved,
-            "skipped": skipped, "detail": detail, "dry_run": dry_run}
+            "skipped": skipped, "detail": detail, "dry_run": dry_run,
+            "up": up_count, "down": down_count}
 
 
 # --- Scheduler -------------------------------------------------------------
@@ -1068,19 +1085,63 @@ LEARNING_INTERVAL_HOURS = int(os.environ.get("LEARNING_INTERVAL_HOURS", "24"))
 _learning_thread_started = False
 
 
+def _claim_scheduled_run(conn) -> bool:
+    """Only one worker should run the cycle.
+
+    Gunicorn starts several worker processes and each was launching its own
+    scheduler thread, so the same pass ran two or three times — visible as
+    duplicate rows with identical timestamps. A worker now has to claim the
+    slot in the database before running, and the claim only succeeds if enough
+    time has passed since the last run.
+    """
+    try:
+        _learning_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ran_at FROM learning_runs
+                WHERE trigger = 'scheduled' ORDER BY id DESC LIMIT 1
+            """)
+            row = cur.fetchone()
+        if not row or not row[0]:
+            return True
+        last = row[0]
+        try:
+            from datetime import timezone
+            now = datetime.now(last.tzinfo) if last.tzinfo else datetime.now()
+            elapsed_h = (now - last).total_seconds() / 3600.0
+        except Exception:
+            return True
+        # A margin below the interval avoids a worker being locked out by
+        # clock drift, while still blocking near-simultaneous duplicates.
+        return elapsed_h >= max(1, LEARNING_INTERVAL_HOURS) * 0.9
+    except Exception as e:
+        app.logger.error(f"[learning] claim check failed: {e}")
+        return False
+
+
 def _learning_loop():
     import time
-    # Let the app finish starting before the first pass
-    time.sleep(120)
+    # Let the app finish starting before the first pass, and stagger workers
+    # so two don't reach the claim check in the same instant.
+    time.sleep(120 + (os.getpid() % 47))
     while True:
         try:
             if load_settings().get("auto_learning"):
-                with app.app_context():
-                    run_learning_cycle(trigger="scheduled")
+                conn = _settings_db_conn()
+                may_run = True
+                if conn:
+                    try:
+                        may_run = _claim_scheduled_run(conn)
+                    finally:
+                        conn.close()
+                if may_run:
+                    with app.app_context():
+                        run_learning_cycle(trigger="scheduled")
+                else:
+                    app.logger.info("[learning] another worker ran recently — skipping")
         except Exception as e:
             app.logger.error(f"[learning] scheduled run failed: {e}")
-        import time as _t
-        _t.sleep(max(1, LEARNING_INTERVAL_HOURS) * 3600)
+        time.sleep(max(1, LEARNING_INTERVAL_HOURS) * 3600)
 
 
 def start_learning_scheduler():
@@ -4914,18 +4975,32 @@ def chat():
     if lessons:
         lesson_items = []
         for i, lesson in enumerate(lessons, 1):
+            # Lessons come from both ratings, so each one has to say which it
+            # is. Presenting a thumbs-up example under "why that was unhelpful"
+            # would teach the model that a good answer was a mistake.
+            worked = (lesson.get("rating") or "").lower() == "up"
+            note = (lesson.get("comment") or "").strip()
+            if worked:
+                verdict = "WHAT WORKED — the participant marked this reply helpful."
+                note_line = (f"  What they valued: {note[:500]}\n" if note else "")
+                guidance = "  Aim for this again: same structure, depth and directness.\n"
+            else:
+                verdict = "WHAT DID NOT WORK — the participant marked this reply unhelpful."
+                note_line = (f"  Why it fell short: {note[:500]}\n" if note else "")
+                guidance = "  Do not repeat this pattern.\n"
             lesson_items.append(
-                f"Lesson {i}:\n"
-                f"  Previous question (similar to this one): {lesson['user_message'][:500]}\n"
-                f"  What I said before: {lesson['bot_reply'][:500]}\n"
-                f"  Why that was unhelpful: {lesson['comment'][:500]}"
+                f"Lesson {i} — {verdict}\n"
+                f"  Their question (similar to the current one): {lesson['user_message'][:500]}\n"
+                f"  The reply given: {lesson['bot_reply'][:500]}\n"
+                + note_line + guidance
             )
         lessons_block = (
             "\n\n---\n"
-            "LESSONS FROM PRIOR FEEDBACK — these are reviewed and approved examples "
-            "of times your previous responses to similar questions were unhelpful. "
-            "Use them to avoid repeating the same mistakes. Do NOT mention these "
-            "lessons to the user; just internalize them.\n\n"
+            "LESSONS FROM PRIOR FEEDBACK — reviewed examples from real sessions on "
+            "questions like this one. Some show replies that landed well and some "
+            "show replies that did not; each is labelled. Follow the patterns that "
+            "worked and avoid the ones that did not. Do NOT mention these lessons "
+            "to the participant; just internalize them.\n\n"
             + "\n\n".join(lesson_items)
             + "\n"
         )
@@ -6270,11 +6345,11 @@ input[type="text"] { flex: 1; min-width: 200px; }
   <div class="section">
     <h2>Continuous Learning</h2>
     <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
-      When a participant marks a reply unhelpful <em>and</em> leaves a comment
-      explaining why, that exchange can become a lesson: the advisor sees it
-      whenever a similar question comes up again and avoids repeating the
-      mistake. This turns those comments into lessons in bulk instead of one at
-      a time.
+      Rated exchanges become lessons the advisor sees whenever a similar
+      question comes up again. A <strong>thumbs up</strong> teaches it the shape
+      of a reply that landed well; a <strong>thumbs down</strong> with a comment
+      teaches it what to avoid. This processes them in bulk instead of one at a
+      time.
     </p>
     <form method="POST" action="/admin/learning/run" style="display: inline;">
       <button type="submit" name="preview" value="1" class="btn"
@@ -6947,8 +7022,14 @@ def admin_run_learning():
         flash(f"Preview — {result['approved']} would be learned from, "
               f"{result['skipped']} held back. Nothing changed.")
     else:
+        parts = []
+        if result.get("up"):
+            parts.append(f"{result['up']} that worked well")
+        if result.get("down"):
+            parts.append(f"{result['down']} to avoid repeating")
+        breakdown = (" (" + ", ".join(parts) + ")") if parts else ""
         flash(f"\u2713 Learned from {result['approved']} exchange"
-              f"{'s' if result['approved'] != 1 else ''}; "
+              f"{'s' if result['approved'] != 1 else ''}{breakdown}; "
               f"{result['skipped']} held back for review.")
     return redirect(url_for("admin_dashboard"))
 
