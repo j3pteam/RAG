@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-e"
-APP_BUILD_NOTES = "advisor avatar beside replies"
+APP_VERSION = "2026-08-27-f"
+APP_BUILD_NOTES = "advisor avatar with admin on/off toggle"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -168,6 +168,8 @@ _SETTINGS_DEFAULTS = {
     "require_login": os.environ.get("REQUIRE_LOGIN", "off").lower() in ("on", "1", "true"),
     # Auto-approve eligible feedback as lessons on a schedule
     "auto_learning": False,
+    # Show the advisor photo beside replies
+    "show_avatar": True,
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -2011,7 +2013,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <div id="chat-wrap">
     <div id="chat">
-      {% if cfg.avatar_url %}
+      {% if show_avatar and cfg.avatar_url %}
       <div class="msg-row">
         <img class="avatar" src="{{ cfg.avatar_url }}" alt="" aria-hidden="true"
              onerror="this.remove()" />
@@ -3107,7 +3109,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return html;
     }
 
-    const ADVISOR_AVATAR = "{{ cfg.avatar_url }}";
+    const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}"{% else %}""{% endif %};
 
     function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
       const div = document.createElement("div");
@@ -4568,6 +4570,7 @@ def _render_chat(force_scheduling=None):
     return render_template_string(
         INDEX_HTML,
         cfg=CONFIG,
+        show_avatar=bool(load_settings().get("show_avatar")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
@@ -6157,6 +6160,29 @@ input[type="text"] { flex: 1; min-width: 200px; }
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
                     margin-top: 1.1rem; padding-top: 1.1rem;
                     border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="show_avatar" value="1"
+               {% if settings.show_avatar %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Show the advisor photo beside replies</strong><br />
+          <span class="muted">
+            When off, replies appear without the photo. Turn it off if you'd
+            rather participants not read the advisor as a specific person.
+          </span>
+          {% if settings.show_avatar %}
+          <br /><img src="{{ cfg.avatar_url }}" alt="" onerror="this.remove()"
+               style="width: 34px; height: 34px; border-radius: 50%;
+                      object-fit: cover; margin-top: 0.45rem;
+                      border: 1.5px solid var(--gold);" />
+          {% endif %}
+        </span>
+      </label>
+
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
         <input type="checkbox" name="require_login" value="1"
                {% if settings.require_login %}checked{% endif %}
                {% if not mail_ready %}disabled{% endif %}
@@ -6918,6 +6944,12 @@ def admin_settings():
         messages.append(f"Scheduling button {'shown' if show else 'hidden'}")
     else:
         messages.append("Could not save the scheduling setting")
+
+    show_avatar = bool(request.form.get("show_avatar"))
+    if save_setting("show_avatar", show_avatar):
+        messages.append(f"Advisor photo {'shown' if show_avatar else 'hidden'}")
+    else:
+        messages.append("Could not save the photo setting")
 
     auto_learn = bool(request.form.get("auto_learning"))
     if save_setting("auto_learning", auto_learn):
