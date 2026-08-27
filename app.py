@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-g"
-APP_BUILD_NOTES = "Feedback section grouping in the admin panel"
+APP_VERSION = "2026-08-27-h"
+APP_BUILD_NOTES = "Scheduling section grouping in the admin panel"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6203,26 +6203,35 @@ input[type="text"] { flex: 1; min-width: 200px; }
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
 
-    <div style="margin-top: 1.5rem; padding-top: 1.1rem; border-top: 1px dashed var(--line);">
-      <p class="muted" style="margin: 0 0 0.7rem 0; font-size: 0.85rem;">
-        The setting above is the default for <code>{{ base_url }}/</code>.
-        To run both experiences at once, share these fixed links instead —
-        each ignores the default and always behaves the same way.
-      </p>
-      <table style="font-size: 0.85rem;">
-        <tr>
-          <th style="width: 40%;">Link</th><th>Scheduling button</th>
-        </tr>
-        <tr>
-          <td><code>{{ base_url }}/scheduling</code></td>
-          <td>Always shown</td>
-        </tr>
-        <tr>
-          <td><code>{{ base_url }}/no-scheduling</code></td>
-          <td>Always hidden</td>
-        </tr>
-      </table>
-    </div>
+  </div>
+
+  <h2 class="group-heading">Scheduling</h2>
+
+  <div class="section">
+    <h2>Scheduling Links</h2>
+    <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
+      The scheduling toggle in Display Settings is the default for
+      <code>{{ base_url }}/</code>. To run both experiences at once, share these
+      fixed links instead — each ignores the default and always behaves the same
+      way, whoever opens it.
+    </p>
+    <table style="font-size: 0.85rem;">
+      <tr>
+        <th style="width: 45%;">Link</th><th>Scheduling button</th>
+      </tr>
+      <tr>
+        <td><code>{{ base_url }}/scheduling</code></td>
+        <td>Always shown</td>
+      </tr>
+      <tr>
+        <td><code>{{ base_url }}/no-scheduling</code></td>
+        <td>Always hidden</td>
+      </tr>
+      <tr>
+        <td><code>{{ base_url }}/</code></td>
+        <td class="muted">Follows the Display Settings toggle</td>
+      </tr>
+    </table>
   </div>
 
   <h2 class="group-heading">Feedback</h2>
