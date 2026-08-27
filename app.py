@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-b"
-APP_BUILD_NOTES = "learning from feedback log: scope, revisions, file chatter"
+APP_VERSION = "2026-08-27-c"
+APP_BUILD_NOTES = "continuous learning pipeline with review guardrails"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -164,6 +164,8 @@ _SETTINGS_DEFAULTS = {
     "show_scheduling_button": True,
     # Seeded from REQUIRE_LOGIN, then owned by the admin panel
     "require_login": os.environ.get("REQUIRE_LOGIN", "off").lower() in ("on", "1", "true"),
+    # Auto-approve eligible feedback as lessons on a schedule
+    "auto_learning": False,
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -897,6 +899,194 @@ def logout():
     session.pop("chat_token", None)
     session["messages"] = []
     return redirect(url_for("login_page", notice="You've been signed out.", ok="1"))
+
+
+# ---------------------------------------------------------------------------
+# Continuous learning from feedback
+# ---------------------------------------------------------------------------
+# Thumbs-down rows with a comment are the raw material for lessons. Approving
+# them one at a time doesn't scale, so this finds eligible rows, embeds the
+# question, and approves them in a batch — either on demand from the admin
+# panel or on a schedule.
+#
+# Deliberately NOT automatic for everything: a lesson is injected into other
+# participants' prompts, so anything auto-approved needs a comment explaining
+# what went wrong, and needs its text checked for confidential detail first.
+
+LEARNING_MIN_COMMENT_CHARS = 8
+LEARNING_BATCH_CAP = 25
+
+
+def _learning_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS learning_runs (
+                id          BIGSERIAL PRIMARY KEY,
+                ran_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                considered  INTEGER NOT NULL DEFAULT 0,
+                approved    INTEGER NOT NULL DEFAULT 0,
+                skipped     INTEGER NOT NULL DEFAULT 0,
+                detail      TEXT,
+                trigger     TEXT
+            )
+        """)
+    conn.commit()
+
+
+def _record_learning_run(considered, approved, skipped, detail, trigger):
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _learning_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO learning_runs (considered, approved, skipped, detail, trigger)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (considered, approved, skipped, detail[:4000], trigger))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[learning] could not record run: {e}")
+    finally:
+        conn.close()
+
+
+def recent_learning_runs(limit=8):
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _learning_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT ran_at, considered, approved, skipped, trigger, detail
+                FROM learning_runs ORDER BY id DESC LIMIT %s
+            """, (limit,))
+            for ran_at, considered, approved, skipped, trigger, detail in cur.fetchall():
+                out.append({
+                    "when": _fmt_ts(ran_at), "considered": considered,
+                    "approved": approved, "skipped": skipped,
+                    "trigger": trigger or "", "detail": detail or "",
+                })
+    except Exception as e:
+        app.logger.error(f"[learning] could not read runs: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+# Detail that must never be carried into another participant's prompt
+_CONFIDENTIAL_RE = re.compile(
+    r"\b(salary|compensation|rvu target|severance|terminat\w+|fired|"
+    r"lawsuit|litigation|malpractice|hipaa|patient name|mrn|"
+    r"diagnos\w+|medication|prescri\w+|probation|grievance|"
+    r"disciplinary|investigation)\b", re.IGNORECASE)
+
+
+def lesson_is_safe_to_share(row) -> tuple:
+    """Should this feedback row become a lesson visible in others' sessions?"""
+    text = " ".join([
+        row.get("user_message") or "", row.get("bot_reply") or "",
+        row.get("comment") or "",
+    ])
+    if row.get("attachment_info") == "SAFETY ALERT":
+        return False, "safety escalation"
+    hit = _CONFIDENTIAL_RE.search(text)
+    if hit:
+        return False, f"mentions '{hit.group(0)}' — needs manual review"
+    if len(row.get("user_message") or "") > 4000:
+        return False, "question too long to generalise"
+    return True, ""
+
+
+def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
+    """Approve eligible thumbs-down feedback as lessons. Returns a summary."""
+    if not (db.is_enabled() and emb.is_enabled()):
+        return {"ok": False, "error": "Database or embeddings not configured."}
+
+    considered = approved = skipped = 0
+    notes = []
+    try:
+        rows = db.list_feedback(limit=500, rating="down")
+    except Exception as e:
+        app.logger.error(f"[learning] could not list feedback: {e}")
+        return {"ok": False, "error": str(e)[:200]}
+
+    for row in rows:
+        if row.get("approved_for_learning"):
+            continue
+        comment = (row.get("comment") or "").strip()
+        if len(comment) < LEARNING_MIN_COMMENT_CHARS:
+            skipped += 1
+            notes.append(f"#{row.get('id')}: no usable comment")
+            continue
+
+        considered += 1
+        safe, why = lesson_is_safe_to_share(row)
+        if not safe:
+            skipped += 1
+            notes.append(f"#{row.get('id')}: held back — {why}")
+            continue
+        if dry_run:
+            approved += 1
+            notes.append(f"#{row.get('id')}: would be approved")
+            continue
+        if approved >= LEARNING_BATCH_CAP:
+            notes.append(f"batch cap of {LEARNING_BATCH_CAP} reached — run again for the rest")
+            break
+        try:
+            question_embedding = emb.embed_text(row.get("user_message") or "")
+            if db.approve_feedback_as_lesson(row["id"], question_embedding):
+                approved += 1
+                notes.append(f"#{row['id']}: approved")
+            else:
+                skipped += 1
+                notes.append(f"#{row['id']}: not eligible")
+        except Exception as e:
+            skipped += 1
+            notes.append(f"#{row.get('id')}: failed — {str(e)[:80]}")
+
+    detail = "\n".join(notes[:120])
+    if not dry_run:
+        _record_learning_run(considered, approved, skipped, detail, trigger)
+    app.logger.info(f"[learning] {trigger}: considered={considered} "
+                    f"approved={approved} skipped={skipped}")
+    return {"ok": True, "considered": considered, "approved": approved,
+            "skipped": skipped, "detail": detail, "dry_run": dry_run}
+
+
+# --- Scheduler -------------------------------------------------------------
+# A background thread rather than an external cron, so there's nothing extra
+# to configure on Railway. Runs only when the admin has switched it on.
+
+LEARNING_INTERVAL_HOURS = int(os.environ.get("LEARNING_INTERVAL_HOURS", "24"))
+_learning_thread_started = False
+
+
+def _learning_loop():
+    import time
+    # Let the app finish starting before the first pass
+    time.sleep(120)
+    while True:
+        try:
+            if load_settings().get("auto_learning"):
+                with app.app_context():
+                    run_learning_cycle(trigger="scheduled")
+        except Exception as e:
+            app.logger.error(f"[learning] scheduled run failed: {e}")
+        import time as _t
+        _t.sleep(max(1, LEARNING_INTERVAL_HOURS) * 3600)
+
+
+def start_learning_scheduler():
+    global _learning_thread_started
+    if _learning_thread_started:
+        return
+    _learning_thread_started = True
+    threading.Thread(target=_learning_loop, daemon=True).start()
+    app.logger.info(f"[learning] scheduler started "
+                    f"(every {LEARNING_INTERVAL_HOURS}h when enabled)")
 
 
 def admin_required(f):
@@ -5881,6 +6071,25 @@ input[type="text"] { flex: 1; min-width: 200px; }
         </span>
       </label>
 
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="auto_learning" value="1"
+               {% if settings.auto_learning %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Learn from feedback automatically</strong><br />
+          <span class="muted">
+            Runs the Continuous Learning step below on a schedule (every
+            {{ learning_interval }}h) so commented thumbs-down feedback becomes
+            lessons without you doing anything. Sensitive exchanges are still
+            held back for manual review.
+          </span>
+        </span>
+      </label>
+
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
 
@@ -5904,6 +6113,42 @@ input[type="text"] { flex: 1; min-width: 200px; }
         </tr>
       </table>
     </div>
+  </div>
+
+  <div class="section">
+    <h2>Continuous Learning</h2>
+    <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
+      When a participant marks a reply unhelpful <em>and</em> leaves a comment
+      explaining why, that exchange can become a lesson: the advisor sees it
+      whenever a similar question comes up again and avoids repeating the
+      mistake. This turns those comments into lessons in bulk instead of one at
+      a time.
+    </p>
+    <form method="POST" action="/admin/learning/run" style="display: inline;">
+      <button type="submit" name="preview" value="1" class="btn"
+              style="background: transparent; color: var(--navy);">Preview</button>
+    </form>
+    <form method="POST" action="/admin/learning/run" style="display: inline;">
+      <button type="submit" class="btn">Learn from feedback now</button>
+    </form>
+    <p class="muted" style="margin: 0.9rem 0 0; font-size: 0.8rem;">
+      Preview shows what would happen without changing anything. Exchanges
+      mentioning compensation, discipline, litigation, patient detail, or a
+      safety escalation are always held back for you to review by hand.
+    </p>
+    {% if learning_runs %}
+    <table style="margin-top: 1.3rem; font-size: 0.84rem;">
+      <tr><th>When</th><th>Trigger</th><th>Learned</th><th>Held back</th></tr>
+      {% for run in learning_runs %}
+      <tr>
+        <td>{{ run.when }}</td>
+        <td class="muted">{{ run.trigger }}</td>
+        <td><strong>{{ run.approved }}</strong></td>
+        <td class="muted">{{ run.skipped }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
   </div>
 
   <div class="section">
@@ -6371,6 +6616,8 @@ def admin_dashboard():
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
+        learning_runs=recent_learning_runs(),
+        learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
         acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -6391,6 +6638,24 @@ def admin_set_rating(feedback_id):
     return jsonify({"ok": False, "error": "Could not update that rating."}), 400
 
 
+@app.route("/admin/learning/run", methods=["POST"])
+@admin_required
+def admin_run_learning():
+    """Process pending feedback into lessons now."""
+    dry = bool(request.form.get("preview"))
+    result = run_learning_cycle(trigger="manual preview" if dry else "manual", dry_run=dry)
+    if not result.get("ok"):
+        flash(f"Learning run failed: {result.get('error')}")
+    elif dry:
+        flash(f"Preview — {result['approved']} would be learned from, "
+              f"{result['skipped']} held back. Nothing changed.")
+    else:
+        flash(f"\u2713 Learned from {result['approved']} exchange"
+              f"{'s' if result['approved'] != 1 else ''}; "
+              f"{result['skipped']} held back for review.")
+    return redirect(url_for("admin_dashboard"))
+
+
 @app.route("/admin/settings", methods=["POST"])
 @admin_required
 def admin_settings():
@@ -6402,6 +6667,12 @@ def admin_settings():
         messages.append(f"Scheduling button {'shown' if show else 'hidden'}")
     else:
         messages.append("Could not save the scheduling setting")
+
+    auto_learn = bool(request.form.get("auto_learning"))
+    if save_setting("auto_learning", auto_learn):
+        messages.append(f"Continuous learning {'on' if auto_learn else 'off'}")
+    else:
+        messages.append("Could not save the learning setting")
 
     want_login = bool(request.form.get("require_login"))
     if want_login and not mail_transport_configured():
@@ -7113,6 +7384,8 @@ def email_webhook():
         "errors": errors,
     }), 200
 
+
+start_learning_scheduler()
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
