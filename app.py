@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-a"
-APP_BUILD_NOTES = "fix Excel export crash on control characters"
+APP_VERSION = "2026-08-27-b"
+APP_BUILD_NOTES = "learning from feedback log: scope, revisions, file chatter"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4767,6 +4767,15 @@ def chat():
         "thing that distinguishes your answer from any general-purpose "
         "assistant. Use it without naming it as a source or saying 'according "
         "to the knowledge base'.\n\n"
+        "14. REVISIONS ARE EDITS, NOT REWRITES. When asked to revise, refine, "
+        "or 'keep the original but add X', treat the previous version as the "
+        "base text and change only what was asked. Preserve the existing "
+        "opening, structure, names, dates, facts and closing verbatim unless "
+        "the change requires altering them. Never silently drop paragraphs the "
+        "user did not ask you to remove — a participant asked to keep the "
+        "original elements and add new messaging, and the reply came back "
+        "missing the original opening. That is a failure. If you believe "
+        "something should be cut, keep it and say so in one line at the end.\n\n"
         "13. SAY THE HARD THING. Generic assistants hedge toward the "
         "agreeable. When the person's plan has a real problem, name it plainly "
         "in the first paragraph rather than burying it after praise. It is "
@@ -4788,6 +4797,27 @@ def chat():
         "memos, board and executive summaries, slide decks, one-pagers, "
         "agendas, development plans, feedback scripts, and similar. Producing "
         "one of these is a core function, not an off-topic request.\n\n"
+        "1c. DEFAULT TO IN SCOPE. Before declining, assume the request IS in "
+        "scope and look for the leadership question inside it. Real examples "
+        "that were wrongly declined and must be answered:\n"
+        "   - 'Help me create an org chart for my department' — departmental "
+        "structure, reporting lines and span of control are organizational "
+        "design. Answer it.\n"
+        "   - 'My two deputies are fighting, what should I do' — conflict "
+        "between direct reports is core team dynamics, however casually or "
+        "with whatever typos it is phrased. Answer it.\n"
+        "   - Short follow-ups about work already in progress — 'Please create "
+        "in word', 'make it shorter', 'in a PDF', 'add a section on X'. These "
+        "refer to the deliverable earlier in the conversation. Act on the "
+        "previous document; never treat them as off-topic.\n"
+        "   Structure, staffing, workload, meetings, hiring, performance, "
+        "conflict, culture, workflow and org design are all in scope when a "
+        "leader is asking about their own organization.\n\n"
+        "1d. NEVER DECLINE OVER A TYPO. Messages arrive dictated or typed in "
+        "haste ('Little boxer that my two deputies are fighting' means 'Look, "
+        "bother that...'). Read through the noise to the intent. If the intent "
+        "is plausibly a leadership question, answer it. Ask what they meant "
+        "only if it is genuinely unreadable.\n\n"
         "2. If the user asks about ANYTHING outside this scope — including but "
         "not limited to: general trivia, animals, science, history, cooking, "
         "sports, entertainment, politics, current events, math, coding, weather, "
@@ -5136,9 +5166,19 @@ def chat():
         (r"^(?:Happy|Glad) to help[!.]?\s*", ""),
         # File/export chatter has no place in a deliverable — it would be
         # carried into the exported document
-        (r"\n*[*_]{0,2}Use the buttons? below to save this as[^\n]*", "\n"),
-        (r"\n*[*_]{0,2}You can save this (?:as|in)[^\n]*using the buttons?[^\n]*", "\n"),
-        (r"\n*[*_]{0,2}Use SAVE below to[^\n]*", "\n"),
+        # Every phrasing observed in the conversation log. Several claimed a
+        # download had begun when nothing had — downloads are opt-in now.
+        # Can appear mid-line, not only at the start of one (seen in the log)
+        (r"\s*[*_]{0,2}Use the buttons? below to save[^\n]*", ""),
+        (r"\n*[*_]{0,2}Use the SAVE button[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}Use SAVE (?:below|beneath)[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}You can save (?:this|it)[^\n]*button[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}(?:Your |The )?(?:file|document|deck|Word document|PDF)"
+         r"\s+is\s+(?:downloading|ready|attached)[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}The deck is written and ready[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}If you don'?t see the SAVE button[^\n]*", "\n"),
+        (r"\n*[*_]{0,2}Use the SAVE button beneath each[^\n]*", "\n"),
+        (r"[^.\n]*\bre-?download\b[^.\n]*\.?", ""),
         # Tidy an orphaned emphasis marker left behind on its own line
         (r"\n\s*[*_]{1,2}\s*$", ""),
         # Stock assistant phrasing — swapped for plainer wording
