@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-h"
-APP_BUILD_NOTES = "Scheduling section grouping in the admin panel"
+APP_VERSION = "2026-08-27-i"
+APP_BUILD_NOTES = "learning toggle moved into the Feedback section"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6117,6 +6117,8 @@ input[type="text"] { flex: 1; min-width: 200px; }
   <div class="section">
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings">
+      <input type="hidden" name="_fields"
+             value="show_scheduling_button,show_avatar,require_login" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -6181,23 +6183,6 @@ input[type="text"] { flex: 1; min-width: 200px; }
         </span>
       </label>
 
-      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
-                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                    margin-top: 1.1rem; padding-top: 1.1rem;
-                    border-top: 1px dashed var(--line);">
-        <input type="checkbox" name="auto_learning" value="1"
-               {% if settings.auto_learning %}checked{% endif %}
-               style="margin-top: 0.2rem; width: 17px; height: 17px;
-                      accent-color: var(--navy); cursor: pointer;" />
-        <span>
-          <strong>Learn from feedback automatically</strong><br />
-          <span class="muted">
-            Runs the Continuous Learning step below on a schedule (every
-            {{ learning_interval }}h) so commented thumbs-down feedback becomes
-            lessons without you doing anything. Sensitive exchanges are still
-            held back for manual review.
-          </span>
-        </span>
       </label>
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
@@ -6258,6 +6243,28 @@ input[type="text"] { flex: 1; min-width: 200px; }
         <div class="stat-label">Helpful rate</div>
       </div>
     </div>
+    <form method="POST" action="/admin/settings"
+          style="margin-top: 1.4rem; padding-top: 1.1rem;
+                 border-top: 1px dashed var(--line);">
+      <input type="hidden" name="_fields" value="auto_learning" />
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+        <input type="checkbox" name="auto_learning" value="1"
+               {% if settings.auto_learning %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Learn from feedback automatically</strong><br />
+          <span class="muted">
+            Runs the Continuous Learning step below on a schedule (every
+            {{ learning_interval }}h), so commented thumbs-down feedback becomes
+            lessons without you doing anything. Sensitive exchanges are still
+            held back for manual review.
+          </span>
+        </span>
+      </label>
+      <button type="submit" class="btn" style="margin-top: 0.9rem;">Save</button>
+    </form>
   </div>
 
   <div class="section">
@@ -6948,36 +6955,39 @@ def admin_run_learning():
 @admin_required
 def admin_settings():
     """Persist the display toggles from the admin panel."""
+    # Settings now live in more than one form, so each form declares which
+    # keys it owns. Without this, saving one form would switch off every
+    # toggle it didn't happen to include.
+    managed = [f.strip() for f in (request.form.get("_fields") or "").split(",")
+               if f.strip()]
+    if not managed:
+        managed = list(_SETTINGS_DEFAULTS.keys())
+
+    labels = {
+        "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
+        "show_avatar": ("Advisor photo", "shown", "hidden"),
+        "auto_learning": ("Continuous learning", "on", "off"),
+        "require_login": ("Sign-in", "required", "not required"),
+    }
     messages = []
 
-    show = bool(request.form.get("show_scheduling_button"))
-    if save_setting("show_scheduling_button", show):
-        messages.append(f"Scheduling button {'shown' if show else 'hidden'}")
-    else:
-        messages.append("Could not save the scheduling setting")
+    for key in managed:
+        if key not in _SETTINGS_DEFAULTS:
+            continue
+        value = bool(request.form.get(key))
+        name, on_word, off_word = labels.get(key, (key, "on", "off"))
 
-    show_avatar = bool(request.form.get("show_avatar"))
-    if save_setting("show_avatar", show_avatar):
-        messages.append(f"Advisor photo {'shown' if show_avatar else 'hidden'}")
-    else:
-        messages.append("Could not save the photo setting")
+        # Enabling sign-in without email would lock every participant out
+        if key == "require_login" and value and not mail_transport_configured():
+            messages.append("Sign-in NOT enabled — no email transport is configured")
+            continue
 
-    auto_learn = bool(request.form.get("auto_learning"))
-    if save_setting("auto_learning", auto_learn):
-        messages.append(f"Continuous learning {'on' if auto_learn else 'off'}")
-    else:
-        messages.append("Could not save the learning setting")
+        if save_setting(key, value):
+            messages.append(f"{name} {on_word if value else off_word}")
+        else:
+            messages.append(f"Could not save {name.lower()}")
 
-    want_login = bool(request.form.get("require_login"))
-    if want_login and not mail_transport_configured():
-        # Refuse rather than lock every participant out
-        messages.append("Sign-in NOT enabled — no email transport is configured")
-    elif save_setting("require_login", want_login):
-        messages.append(f"Sign-in {'required' if want_login else 'not required'}")
-    else:
-        messages.append("Could not save the sign-in setting")
-
-    flash(" · ".join(messages) + ".")
+    flash((" · ".join(messages) + ".") if messages else "Nothing to save.")
     return redirect(url_for("admin_dashboard"))
 
 
