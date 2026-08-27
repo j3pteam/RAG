@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-c"
-APP_BUILD_NOTES = "continuous learning pipeline with review guardrails"
+APP_VERSION = "2026-08-27-e"
+APP_BUILD_NOTES = "advisor avatar beside replies"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -87,6 +87,8 @@ CONFIG = {
 
     "logo_url": os.environ.get("BRAND_LOGO_URL", "/full_logo.png"),
     "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
+    # Avatar shown beside advisor replies. Set ADVISOR_AVATAR_URL="" to hide it.
+    "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", "/advisor_avatar.jpg"),
     "navy": os.environ.get("BRAND_NAVY", "#27334A"),
     "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
     "paper": os.environ.get("BRAND_PAPER", "#FAF6F0"),
@@ -1254,6 +1256,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
+    /* Avatar beside advisor replies */
+    .msg-row { display: flex; align-items: flex-start; gap: 0.7rem; }
+    .avatar {
+      flex: 0 0 auto; width: 38px; height: 38px; border-radius: 50%;
+      object-fit: cover; margin-top: 0.2rem;
+      border: 1.5px solid var(--gold);
+      box-shadow: 0 2px 6px rgba(39,51,74,0.14);
+    }
+    .msg-row > .msg { flex: 1 1 auto; min-width: 0; }
+    @media (max-width: 640px) {
+      .avatar { width: 30px; height: 30px; }
+      .msg-row { gap: 0.5rem; }
+    }
+
     .msg {
       margin-bottom: 1.25rem; padding: 1rem 1.2rem; border-radius: 4px;
       white-space: pre-wrap; word-wrap: break-word; font-size: 0.95rem;
@@ -1995,7 +2011,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <div id="chat-wrap">
     <div id="chat">
+      {% if cfg.avatar_url %}
+      <div class="msg-row">
+        <img class="avatar" src="{{ cfg.avatar_url }}" alt="" aria-hidden="true"
+             onerror="this.remove()" />
+        <div class="msg assistant">{{ cfg.opening }}</div>
+      </div>
+      {% else %}
       <div class="msg assistant">{{ cfg.opening }}</div>
+      {% endif %}
     </div>
   </div>
 
@@ -3083,6 +3107,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return html;
     }
 
+    const ADVISOR_AVATAR = "{{ cfg.avatar_url }}";
+
     function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
@@ -3098,7 +3124,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
       }
       div.appendChild(textNode);
       if (withFeedback) attachFeedback(div, text, interactionId, documents);
-      chat.appendChild(div);
+      // Advisor replies are preceded by the avatar, when one is configured.
+      // If the image fails to load it removes itself, so a missing file just
+      // leaves the reply looking as it did before.
+      if (ADVISOR_AVATAR && role.startsWith("assistant") && !role.includes("typing")) {
+        const row = document.createElement("div");
+        row.className = "msg-row";
+        const img = document.createElement("img");
+        img.className = "avatar";
+        img.src = ADVISOR_AVATAR;
+        img.alt = "";
+        img.setAttribute("aria-hidden", "true");
+        img.addEventListener("error", () => img.remove());
+        row.appendChild(img);
+        row.appendChild(div);
+        chat.appendChild(row);
+      } else {
+        chat.appendChild(div);
+      }
       chatWrap.scrollTop = chatWrap.scrollHeight;
       // If auto-speak is enabled and this is a fresh assistant reply (with feedback
       // row, meaning it was just received from the API), start reading it aloud.
@@ -5778,6 +5821,12 @@ def serve_jpg(filename):
     return send_from_directory(".", f"{filename}.jpg")
 
 
+@app.route("/advisor_avatar.jpg")
+def advisor_avatar():
+    """The avatar shown beside advisor replies."""
+    return send_from_directory(".", "advisor_avatar.jpg")
+
+
 # ---------------------------------------------------------------------------
 # Admin panel
 # ---------------------------------------------------------------------------
@@ -5887,6 +5936,44 @@ header a:hover { color: var(--gold); }
 .section { overflow-x: auto; }
 @media (max-width: 900px) { .container { width: 100%; padding: 1.25rem 1rem; } }
 .section { background: #fff; border: 1px solid var(--line); border-radius: 4px; padding: 1.5rem 1.75rem; margin-bottom: 1.5rem; }
+.confirm-overlay {
+  position: fixed; inset: 0; background: rgba(39,51,74,0.55);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1000; padding: 1.25rem;
+}
+.confirm-overlay[hidden] { display: none; }
+.confirm-box {
+  background: #fff; border-radius: 4px; max-width: 460px; width: 100%;
+  box-shadow: 0 20px 60px rgba(39,51,74,0.3); overflow: hidden;
+}
+.confirm-head {
+  background: var(--navy); border-bottom: 2px solid var(--rust);
+  padding: 0.9rem 1.4rem;
+}
+.confirm-head h3 {
+  margin: 0; color: var(--paper); font-size: 0.82rem; font-weight: 500;
+  letter-spacing: 0.16em; text-transform: uppercase;
+}
+.confirm-body { padding: 1.3rem 1.4rem 1rem; }
+.confirm-body p { margin: 0 0 0.8rem; font-size: 0.93rem; line-height: 1.6; }
+.confirm-detail {
+  background: var(--paper); border-left: 3px solid var(--rust);
+  padding: 0.6rem 0.8rem; margin-bottom: 0.9rem;
+  font-size: 0.85rem; max-height: 160px; overflow-y: auto;
+}
+.confirm-type-label { display: block; font-size: 0.82rem; margin-bottom: 0.4rem; }
+#confirm-type {
+  width: 100%; padding: 0.6rem 0.7rem; border: 1px solid var(--line);
+  border-radius: 2px; font-family: inherit; font-size: 0.95rem;
+  letter-spacing: 0.1em; text-transform: uppercase;
+}
+#confirm-type:focus { outline: none; border-color: var(--rust); }
+.confirm-actions {
+  display: flex; justify-content: flex-end; gap: 0.6rem;
+  padding: 0 1.4rem 1.3rem;
+}
+.confirm-cancel { background: transparent; color: var(--navy); }
+#confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
 .group-heading {
   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--navy); font-weight: 500;
@@ -6002,6 +6089,27 @@ input[type="text"] { flex: 1; min-width: 200px; }
     Once both are set, redeploy and you can upload documents.
   </div>
   {% endif %}
+
+  <!-- Confirmation gate for every destructive action -->
+  <div id="confirm-overlay" class="confirm-overlay" hidden>
+    <div class="confirm-box" role="dialog" aria-modal="true" aria-labelledby="confirm-title">
+      <div class="confirm-head">
+        <h3 id="confirm-title">Confirm deletion</h3>
+      </div>
+      <div class="confirm-body">
+        <p id="confirm-message">This cannot be undone.</p>
+        <div id="confirm-detail" class="confirm-detail" hidden></div>
+        <label id="confirm-type-wrap" hidden>
+          <span class="confirm-type-label">Type <strong>DELETE</strong> to confirm:</span>
+          <input type="text" id="confirm-type" autocomplete="off" spellcheck="false" />
+        </label>
+      </div>
+      <div class="confirm-actions">
+        <button type="button" id="confirm-cancel" class="btn confirm-cancel">Cancel</button>
+        <button type="button" id="confirm-go" class="btn btn-danger">Delete</button>
+      </div>
+    </div>
+  </div>
 
   <div class="section">
     <h2>Feedback Overview</h2>
@@ -6309,6 +6417,149 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </form>
 
     <script>
+      // ---------------------------------------------------------------
+      // Deletion gate
+      // ---------------------------------------------------------------
+      // Every destructive form routes through one modal. Browser confirm()
+      // is a single reflexive click; this states exactly what will be lost,
+      // and for bulk or irreversible actions requires typing DELETE.
+      (function() {
+        const overlay  = document.getElementById("confirm-overlay");
+        const msgEl    = document.getElementById("confirm-message");
+        const detailEl = document.getElementById("confirm-detail");
+        const typeWrap = document.getElementById("confirm-type-wrap");
+        const typeIn   = document.getElementById("confirm-type");
+        const goBtn    = document.getElementById("confirm-go");
+        const cancelBtn= document.getElementById("confirm-cancel");
+        if (!overlay) return;
+
+        let pendingForm = null;
+
+        function close() {
+          overlay.hidden = true;
+          pendingForm = null;
+          typeIn.value = "";
+          typeWrap.hidden = true;
+          detailEl.hidden = true;
+          detailEl.textContent = "";
+        }
+
+        function refreshGo() {
+          goBtn.disabled = !typeWrap.hidden && typeIn.value.trim().toUpperCase() !== "DELETE";
+        }
+
+        function open(form, opts) {
+          pendingForm = form;
+          noSubmit = !!opts.noSubmit;
+          msgEl.textContent = opts.message;
+          if (opts.detail) {
+            detailEl.textContent = opts.detail;
+            detailEl.hidden = false;
+          }
+          typeWrap.hidden = !opts.requireTyping;
+          goBtn.textContent = opts.buttonLabel || "Delete";
+          overlay.hidden = false;
+          refreshGo();
+          setTimeout(() => (opts.requireTyping ? typeIn : goBtn).focus(), 60);
+        }
+
+        typeIn.addEventListener("input", refreshGo);
+        typeIn.addEventListener("keydown", e => {
+          if (e.key === "Enter" && !goBtn.disabled) { e.preventDefault(); goBtn.click(); }
+        });
+        cancelBtn.addEventListener("click", close);
+        overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+        document.addEventListener("keydown", e => {
+          if (e.key === "Escape" && !overlay.hidden) close();
+        });
+
+        let noSubmit = false;
+        goBtn.addEventListener("click", () => {
+          if (goBtn.disabled) return;
+          const form = pendingForm;
+          const informationalOnly = noSubmit;
+          close();
+          if (form && !informationalOnly) {
+            form.dataset.confirmed = "1";
+            form.submit();
+          }
+        });
+
+        // Delegated so it covers forms that appear later in the document
+        // than this script — the clear-all form does, and per-form listeners
+        // silently missed it.
+        document.addEventListener("submit", e => {
+          const form = e.target;
+          if (!form || form.tagName !== "FORM") return;
+          const action = form.getAttribute("action") || "";
+          const isDelete = action.indexOf("/delete") !== -1;
+          const isRevoke = action.indexOf("revoke-lesson") !== -1;
+          if (!isDelete && !isRevoke) return;
+
+          if (form.dataset.confirmed === "1") {
+            form.dataset.confirmed = "";
+            return;                        // already approved — let it through
+          }
+          e.preventDefault();
+          form.removeAttribute("onsubmit");   // supersede any inline confirm()
+
+          if (action.indexOf("delete-all") !== -1) {
+            open(form, {
+              message: "This permanently deletes EVERY conversation log entry, "
+                     + "including all ratings, comments and approved lessons. "
+                     + "It cannot be undone and there is no backup.",
+              requireTyping: true,
+              buttonLabel: "Delete everything",
+            });
+            return;
+          }
+
+          if (action.indexOf("delete-selected") !== -1) {
+            const boxes = document.querySelectorAll(".feedback-checkbox:checked");
+            if (boxes.length === 0) {
+              open(form, { message: "No rows are ticked, so nothing would be deleted.",
+                           buttonLabel: "OK", noSubmit: true });
+              return;
+            }
+            const NL = String.fromCharCode(10);
+            const preview = Array.from(boxes).slice(0, 8).map(b => {
+              const row = b.closest("tr");
+              const q = row ? row.querySelector(".truncate") : null;
+              return "\u2022 " + (q ? q.textContent.trim().slice(0, 70) : "row " + b.value);
+            }).join(NL);
+            open(form, {
+              message: "Delete " + boxes.length + " conversation log entr"
+                     + (boxes.length === 1 ? "y" : "ies")
+                     + "? This cannot be undone.",
+              detail: preview + (boxes.length > 8
+                      ? NL + "\u2026and " + (boxes.length - 8) + " more" : ""),
+              requireTyping: boxes.length >= 10,
+              buttonLabel: "Delete " + boxes.length,
+            });
+            return;
+          }
+
+          if (isRevoke) {
+            open(form, {
+              message: "Stop using this exchange as a lesson? The advisor will no "
+                     + "longer learn from it, though the log entry itself is kept.",
+              buttonLabel: "Remove lesson",
+            });
+            return;
+          }
+
+          open(form, {
+            message: "Delete this document and every embedded chunk from the "
+                   + "knowledge base? The advisor will stop drawing on it. "
+                   + "You would need to upload the file again to restore it.",
+            detail: form.dataset.docTitle || "",
+            buttonLabel: "Delete document",
+          });
+        }, true);
+      })();
+    </script>
+
+    <script>
       // Set or clear a rating straight from the log
       (function() {
         document.querySelectorAll(".rate-btn").forEach(btn => {
@@ -6479,7 +6730,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
         <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
         <td>
           <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
-                onsubmit="return confirm('Delete &quot;{{ d.title }}&quot; and all its chunks?');">
+                data-doc-title="{{ d.title }}">
             <button type="submit" class="btn btn-danger">Delete</button>
           </form>
         </td>
