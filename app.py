@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-26-a"
-APP_BUILD_NOTES = "fix contact scrubber damaging letters; no export chatter in deliverables"
+APP_VERSION = "2026-08-27-a"
+APP_BUILD_NOTES = "fix Excel export crash on control characters"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6597,6 +6597,39 @@ def admin_delete(doc_id):
     return redirect(url_for("admin_dashboard"))
 
 
+def _fmt_ts(value) -> str:
+    """Format a timestamp defensively — drivers don't always return datetimes."""
+    if not value:
+        return ""
+    try:
+        return value.strftime("%Y-%m-%d %H:%M:%S")
+    except AttributeError:
+        return str(value)[:19]
+
+
+_XLSX_ILLEGAL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+XLSX_CELL_LIMIT = 32000        # Excel's hard limit is 32,767
+
+
+def xlsx_safe(value):
+    """Make a value safe for an Excel cell.
+
+    openpyxl raises IllegalCharacterError on control characters, which turn up
+    in text extracted from PDFs and pasted documents — one such character
+    anywhere in the log made the whole export fail with a 500. Cells also have
+    a hard length limit that long generated documents can exceed.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return value
+    text = str(value)
+    text = _XLSX_ILLEGAL.sub(" ", text)
+    if len(text) > XLSX_CELL_LIMIT:
+        text = text[:XLSX_CELL_LIMIT] + "… [truncated for Excel]"
+    return text
+
+
 def _rows_for_export():
     """Rows to export: only the selected ids when given, otherwise everything.
 
@@ -6622,6 +6655,15 @@ def _rows_for_export():
     return filtered, len(wanted)
 
 
+def _export_error(kind: str, err: Exception):
+    """Readable failure instead of a bare 500 page."""
+    app.logger.error(f"[export] {kind} export failed: {err}", exc_info=True)
+    return (f"<h2 style='font-family:sans-serif'>{kind} export failed</h2>"
+            f"<p style='font-family:sans-serif'>{type(err).__name__}: {err}</p>"
+            f"<p style='font-family:sans-serif'>The details are in the Railway "
+            f"deploy logs. Try the other format, or fewer rows, meanwhile.</p>"), 500
+
+
 @app.route("/admin/export/feedback.csv")
 @admin_required
 def admin_export_feedback():
@@ -6630,7 +6672,10 @@ def admin_export_feedback():
     import io
     from flask import Response
 
-    rows, selected_count = _rows_for_export()
+    try:
+        rows, selected_count = _rows_for_export()
+    except Exception as e:
+        return _export_error("CSV", e)
 
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
@@ -6643,7 +6688,7 @@ def admin_export_feedback():
     for r in rows:
         writer.writerow([
             r.get("id", ""),
-            r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
+            _fmt_ts(r.get("created_at")),
             r.get("rating", ""),
             acks.get(r.get("id"), ""),
             geo.get(r.get("id"), ""),
@@ -6686,7 +6731,10 @@ def admin_export_feedback_xlsx():
         return ("Excel export unavailable: openpyxl not installed. "
                 "Use CSV export instead, or add 'openpyxl' to requirements.txt."), 500
 
-    rows, selected_count = _rows_for_export()
+    try:
+        rows, selected_count = _rows_for_export()
+    except Exception as e:
+        return _export_error("Excel", e)
 
     wb = Workbook()
     ws = wb.active
@@ -6718,14 +6766,14 @@ def admin_export_feedback_xlsx():
     for r in rows:
         ws.append([
             r.get("id", ""),
-            r["created_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("created_at") else "",
-            r.get("rating", ""),
-            acks.get(r.get("id"), ""),
-            geo.get(r.get("id"), ""),
-            r.get("user_message", "") or "",
-            r.get("bot_reply", "") or "",
-            r.get("comment", "") or "",
-            r.get("persona", "") or "",
+            xlsx_safe(_fmt_ts(r.get("created_at"))),
+            xlsx_safe(r.get("rating", "")),
+            xlsx_safe(acks.get(r.get("id"), "")),
+            xlsx_safe(geo.get(r.get("id"), "")),
+            xlsx_safe(r.get("user_message", "")),
+            xlsx_safe(r.get("bot_reply", "")),
+            xlsx_safe(r.get("comment", "")),
+            xlsx_safe(r.get("persona", "")),
         ])
         row_idx = ws.max_row
         # Highlight thumbs-down rows so they're easy to spot when reviewing
@@ -6760,7 +6808,10 @@ def admin_export_feedback_xlsx():
     # Stream to a BytesIO
     import io
     buffer = io.BytesIO()
-    wb.save(buffer)
+    try:
+        wb.save(buffer)
+    except Exception as e:
+        return _export_error("Excel", e)
     buffer.seek(0)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
