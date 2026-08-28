@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-28-a"
-APP_BUILD_NOTES = "animated interactive avatar"
+APP_VERSION = "2026-08-28-c"
+APP_BUILD_NOTES = "replies written for all physicians, not just surgeons"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1345,6 +1345,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .avatar-wrap .avatar { animation: av-breathe 5.5s ease-in-out infinite; }
     .avatar-wrap.is-thinking .avatar,
     .avatar-wrap.is-speaking .avatar { animation: none; }
+    .avatar-wrap.is-thinking .avatar { opacity: 0.85; }
 
     .avatar-ring {
       position: absolute; inset: -3px; border-radius: 50%;
@@ -1361,6 +1362,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
       position: absolute; inset: 0; border-radius: 50%;
       border: 2px solid var(--gold); pointer-events: none;
       opacity: 0; 
+    }
+    /* Responding: a gentle nod plus a soft glow while the reply lands */
+    @keyframes av-respond {
+      0%, 100% { transform: scale(1) translateY(0); }
+      25%      { transform: scale(1.06) translateY(-1px); }
+      60%      { transform: scale(1.02) translateY(1px); }
+    }
+    @keyframes av-glow {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(210,188,141,0.0); }
+      50%      { box-shadow: 0 0 0 5px rgba(210,188,141,0.45); }
+    }
+    .avatar-wrap.is-responding .avatar {
+      animation: av-respond 1.15s ease-in-out infinite,
+                 av-glow 1.15s ease-in-out infinite;
     }
     .avatar-wrap.is-speaking .avatar-pulse { animation: av-pulse 1.6s ease-out infinite; }
     .avatar-wrap.is-speaking .avatar-pulse:nth-of-type(2) { animation-delay: 0.55s; }
@@ -1384,7 +1399,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .avatar-wrap .avatar,
       .avatar-wrap.is-speaking .avatar-pulse,
       .avatar-wrap.is-thinking .avatar-ring { animation: none !important; }
-      .avatar-wrap.is-speaking .avatar-ring { display: block; border: 2px solid var(--gold); }
+      .avatar-wrap.is-speaking .avatar-ring,
+      .avatar-wrap.is-responding .avatar-ring { display: block; border: 2px solid var(--gold); }
     }
 
     /* Avatar beside advisor replies */
@@ -3285,6 +3301,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
 
       if (msgDiv) msgDiv.__avatarWrap = wrap;
+      // The placeholder's avatar starts in the thinking state immediately
+      if (msgDiv && msgDiv.className.includes("typing")) {
+        wrap.classList.add("is-thinking");
+        const h = wrap.querySelector(".avatar-hint");
+        if (h) h.textContent = "Thinking\u2026";
+        wrap.setAttribute("aria-label", "Preparing a reply");
+      }
       return wrap;
     }
 
@@ -3296,6 +3319,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
       last.classList.toggle("is-thinking", !!on);
       const hint = last.querySelector(".avatar-hint");
       if (hint) hint.textContent = on ? "Thinking…" : "Click to listen";
+    }
+
+    // Plays for a few seconds as a reply appears, so the avatar is visibly
+    // active while responding even when the reply isn't being read aloud.
+    function setAvatarResponding(msgDiv, seconds = 4) {
+      const wrap = msgDiv && msgDiv.__avatarWrap ? msgDiv.__avatarWrap : null;
+      if (!wrap) return;
+      wrap.classList.add("is-responding");
+      if (wrap.__respondTimer) clearTimeout(wrap.__respondTimer);
+      wrap.__respondTimer = setTimeout(() => {
+        wrap.classList.remove("is-responding");
+      }, seconds * 1000);
     }
 
     function setAvatarSpeaking(msgDiv, on) {
@@ -3352,7 +3387,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Advisor replies are preceded by the avatar, when one is configured.
       // If the image fails to load it removes itself, so a missing file just
       // leaves the reply looking as it did before.
-      if (ADVISOR_AVATAR && role.startsWith("assistant") && !role.includes("typing")) {
+      if (ADVISOR_AVATAR && role.startsWith("assistant")) {
         const row = document.createElement("div");
         row.className = "msg-row";
         row.appendChild(buildAvatar(div));
@@ -4058,6 +4093,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                                     data.interaction_id || null, data.documents || null);
           // Nothing downloads on its own. When the reply looks like a
           // deliverable, offer a download and let the user decide.
+          setAvatarResponding(msgDiv);
           clearRatingNudge();
           if (wasFarewell) setTimeout(() => showRatingNudge("farewell"), 900);
           else armIdleNudge();
@@ -5250,6 +5286,27 @@ def chat():
         "original elements and add new messaging, and the reply came back "
         "missing the original opening. That is a failure. If you believe "
         "something should be cut, keep it and say so in one line at the end.\n\n"
+        "15. DON'T ASSUME A SPECIALTY. The audience is physician leaders of every "
+        "kind — internists, paediatricians, psychiatrists, radiologists, "
+        "pathologists, anaesthesiologists, emergency physicians, oncologists, "
+        "surgeons, primary care, and non-clinical executives too. Unless the "
+        "person has told you their specialty, write for a physician leader "
+        "generally: say 'physicians', 'clinicians', 'faculty' or 'clinical "
+        "leaders', never 'surgeons'. A reply that opened 'The mistake most "
+        "surgeons make is waiting to be noticed' was wrong: the participant "
+        "never said they were a surgeon.\n"
+        "   Examples must generalise too. Reach for illustrations that hold "
+        "across specialties — clinic throughput, call burden, service line "
+        "growth, RVU pressure, quality metrics, team conflict — rather than "
+        "operative volume or block time, which only apply to proceduralists.\n"
+        "   If they DO state a specialty, use it and be specific to it. Mirror "
+        "their language exactly.\n\n"
+        "16. RETRIEVED MATERIAL MAY BE SPECIALTY-SPECIFIC. The knowledge base "
+        "contains work done with particular clients, much of it orthopaedic and "
+        "sports medicine. Take the principle from that material, not the "
+        "specialty. Never import a specialty from retrieved context into a "
+        "reply for someone who hasn't named one, and never imply the "
+        "participant works in a field they haven't mentioned.\n\n"
         "13. SAY THE HARD THING. Generic assistants hedge toward the "
         "agreeable. When the person's plan has a real problem, name it plainly "
         "in the first paragraph rather than burying it after praise. It is "
