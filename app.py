@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-28-c"
-APP_BUILD_NOTES = "replies written for all physicians, not just surgeons"
+APP_VERSION = "2026-08-28-d"
+APP_BUILD_NOTES = "asks the participant their specialty, once, and remembers it"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4432,6 +4432,8 @@ def append_history(role: str, content: str):
 def clear_history():
     """Wipe this session's transcript — used by New Conversation."""
     session["messages"] = []
+    session.pop("specialty", None)
+    session.pop("specialty_asked", None)
     conn = _settings_db_conn()
     token = session.get("chat_token")
     if conn and token:
@@ -4580,6 +4582,89 @@ def rejected_formats(text: str) -> set:
             if _is_negated(low, m.start()):
                 out.add(fmt)
     return out
+
+
+# ---------------------------------------------------------------------------
+# Specialty awareness
+# ---------------------------------------------------------------------------
+# Replies were defaulting to surgical framing. Rather than guess, the advisor
+# asks once — and once the participant says it, it's remembered for the session
+# so they're never asked twice.
+
+_SPECIALTY_PATTERNS = [
+    (r"\b(orthopaed?ic|orthopedic|ortho)\b", "orthopaedics"),
+    (r"\bsports medicine\b", "sports medicine"),
+    (r"\b(cardiolog|cardiac)\w*\b", "cardiology"),
+    (r"\bcardiothoracic|CT surgery\b", "cardiothoracic surgery"),
+    (r"\b(neurosurg|neurolog)\w*\b", "neurosciences"),
+    (r"\b(oncolog|hematolog|haematolog)\w*\b", "oncology"),
+    (r"\b(paediatric|pediatric|peds)\w*\b", "paediatrics"),
+    (r"\b(psychiatr|behavioral health|behavioural health)\w*\b", "psychiatry"),
+    (r"\b(radiolog|imaging)\w*\b", "radiology"),
+    (r"\bpatholog\w*\b", "pathology"),
+    (r"\b(anesthesiolog|anaesthesiolog|anesthesia|anaesthesia)\w*\b", "anaesthesiology"),
+    (r"\b(emergency medicine|emergency department|\bED\b|\bER\b)", "emergency medicine"),
+    (r"\b(internal medicine|internist|hospitalist)\b", "internal medicine"),
+    (r"\b(primary care|family medicine|family practice)\b", "primary care"),
+    (r"\b(obstetric|gynecolog|gynaecolog|OB-?GYN)\w*\b", "obstetrics and gynaecology"),
+    (r"\b(general surgery|surgical oncology|colorectal|vascular surgery)\b", "surgery"),
+    (r"\b(urolog)\w*\b", "urology"),
+    (r"\b(dermatolog)\w*\b", "dermatology"),
+    (r"\b(ophthalmolog|eye institute)\w*\b", "ophthalmology"),
+    (r"\b(otolaryngolog|ENT|head and neck)\b", "otolaryngology"),
+    (r"\b(pulmonolog|critical care|intensivist|ICU)\b", "pulmonary and critical care"),
+    (r"\b(gastroenterolog|\bGI\b)\w*\b", "gastroenterology"),
+    (r"\b(nephrolog)\w*\b", "nephrology"),
+    (r"\b(endocrinolog)\w*\b", "endocrinology"),
+    (r"\b(rheumatolog)\w*\b", "rheumatology"),
+    (r"\b(infectious disease|\bID\b)\b", "infectious disease"),
+    (r"\b(physiatr|rehabilitation medicine|PM&R)\b", "rehabilitation medicine"),
+    (r"\b(radiation oncolog)\w*\b", "radiation oncology"),
+    (r"\b(palliative)\w*\b", "palliative care"),
+    (r"\b(geriatric)\w*\b", "geriatrics"),
+    (r"\b(plastic surgery|plastics)\b", "plastic surgery"),
+    (r"\b(transplant)\w*\b", "transplant"),
+    (r"\b(trauma surgery|trauma service)\b", "trauma surgery"),
+]
+
+
+def detect_specialty(text: str):
+    """Pick up a specialty the participant mentions, so we needn't ask again."""
+    if not text:
+        return None
+    low = str(text).lower()
+    for pattern, name in _SPECIALTY_PATTERNS:
+        if re.search(pattern, low, re.IGNORECASE):
+            return name
+    return None
+
+
+def specialty_guidance() -> str:
+    """Prompt text: use a known specialty, or ask once for it."""
+    known = session.get("specialty")
+    if known:
+        return (
+            "\n\n---\n"
+            f"PARTICIPANT'S FIELD: they work in {known}. Write for that context "
+            "specifically — use its language, its pressures and its examples. "
+            "Do not ask them what their specialty is; you already know.\n"
+        )
+    if session.get("specialty_asked"):
+        return (
+            "\n\n---\n"
+            "PARTICIPANT'S FIELD: unknown, and you have already asked once. Do "
+            "not ask again. Write for a physician leader generally.\n"
+        )
+    return (
+        "\n\n---\n"
+        "PARTICIPANT'S FIELD: not yet known. Where the answer would genuinely "
+        "differ by specialty, ask which field they work in — but ONLY as a short "
+        "closing question AFTER giving a substantive answer. Never withhold help "
+        "pending the answer, never open with the question, and never ask it when "
+        "they have requested a document or a revision: produce that first. One "
+        "sentence, e.g. 'What's your specialty? I can make this more specific.' "
+        "Ask at most once in the conversation.\n"
+    )
 
 
 def detect_deliverable_request(text: str) -> bool:
@@ -5112,6 +5197,13 @@ def chat():
 
     # Combine user text with any attached-document context. Images are added
     # separately as a content block when building the current-turn message below.
+    # Remember a specialty as soon as it's mentioned, so it's used from here on
+    # and they're never asked again.
+    found_specialty = detect_specialty(user_input)
+    if found_specialty and not session.get("specialty"):
+        session["specialty"] = found_specialty
+        app.logger.info(f"[specialty] noted: {found_specialty}")
+
     full_user_content = user_input + attachment_context
 
     messages = load_history()
@@ -5494,11 +5586,12 @@ def chat():
             + voice_guard
             + document_guard
             + contact_guard
+            + specialty_guidance()
         )
     else:
         composed_prompt = (
             base_prompt + lessons_block + scope_guard + voice_guard
-            + document_guard + contact_guard
+            + document_guard + contact_guard + specialty_guidance()
         )
 
     try:
@@ -5745,6 +5838,12 @@ def chat():
     assistant_text = assistant_text.strip()
 
     messages.append({"role": "assistant", "content": assistant_text})
+    # Note when the advisor has asked about specialty, so it asks only once
+    if not session.get("specialty") and not session.get("specialty_asked"):
+        if re.search(r"(what|which)[^.?]{0,60}(specialty|speciality|field|"
+                     r"area of medicine|kind of medicine)", assistant_text, re.I):
+            session["specialty_asked"] = True
+
     append_history("assistant", assistant_text)
     session["messages"] = _fit_history(messages)   # cookie fallback only
 
