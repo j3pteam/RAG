@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-27-k"
-APP_BUILD_NOTES = "learning from both thumbs up and thumbs down"
+APP_VERSION = "2026-08-28-a"
+APP_BUILD_NOTES = "animated interactive avatar"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1319,6 +1319,74 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
+    /* Avatar beside advisor replies — animated states */
+    .avatar-wrap {
+      position: relative; flex: 0 0 auto; width: 38px; height: 38px;
+      margin-top: 0.2rem; cursor: pointer; border-radius: 50%;
+      background: none; border: none; padding: 0;
+    }
+    .avatar-wrap:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+    /* Idle: a slow breath so it doesn't look like a dead image */
+    @keyframes av-breathe {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.035); }
+    }
+    /* Thinking: gold ring travelling round the edge */
+    @keyframes av-think {
+      0%   { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+    /* Speaking: concentric pulses radiating outward */
+    @keyframes av-pulse {
+      0%   { transform: scale(1); opacity: 0.55; }
+      70%  { transform: scale(1.75); opacity: 0; }
+      100% { transform: scale(1.75); opacity: 0; }
+    }
+    .avatar-wrap .avatar { animation: av-breathe 5.5s ease-in-out infinite; }
+    .avatar-wrap.is-thinking .avatar,
+    .avatar-wrap.is-speaking .avatar { animation: none; }
+
+    .avatar-ring {
+      position: absolute; inset: -3px; border-radius: 50%;
+      pointer-events: none; display: none;
+    }
+    .avatar-wrap.is-thinking .avatar-ring {
+      display: block;
+      border: 2px solid transparent;
+      border-top-color: var(--gold);
+      border-right-color: rgba(210,188,141,0.4);
+      animation: av-think 0.9s linear infinite;
+    }
+    .avatar-pulse {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 2px solid var(--gold); pointer-events: none;
+      opacity: 0; 
+    }
+    .avatar-wrap.is-speaking .avatar-pulse { animation: av-pulse 1.6s ease-out infinite; }
+    .avatar-wrap.is-speaking .avatar-pulse:nth-of-type(2) { animation-delay: 0.55s; }
+    .avatar-wrap.is-speaking .avatar-pulse:nth-of-type(3) { animation-delay: 1.1s; }
+    .avatar-wrap.is-speaking .avatar { box-shadow: 0 0 0 2px var(--gold); }
+
+    /* Small hint on hover, matching the mic tooltip */
+    .avatar-hint {
+      position: absolute; left: 50%; transform: translateX(-50%);
+      bottom: calc(100% + 8px); white-space: nowrap;
+      background: var(--navy); color: var(--paper);
+      font-size: 0.66rem; letter-spacing: 0.02em;
+      padding: 0.3rem 0.55rem; border-radius: 3px;
+      opacity: 0; visibility: hidden; transition: opacity 0.15s ease;
+      pointer-events: none; z-index: 20;
+    }
+    .avatar-wrap:hover .avatar-hint,
+    .avatar-wrap:focus-visible .avatar-hint { opacity: 1; visibility: visible; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .avatar-wrap .avatar,
+      .avatar-wrap.is-speaking .avatar-pulse,
+      .avatar-wrap.is-thinking .avatar-ring { animation: none !important; }
+      .avatar-wrap.is-speaking .avatar-ring { display: block; border: 2px solid var(--gold); }
+    }
+
     /* Avatar beside advisor replies */
     .msg-row { display: flex; align-items: flex-start; gap: 0.7rem; }
     .avatar {
@@ -2076,8 +2144,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
     <div id="chat">
       {% if show_avatar and cfg.avatar_url %}
       <div class="msg-row">
-        <img class="avatar" src="{{ cfg.avatar_url }}" alt="" aria-hidden="true"
-             onerror="this.remove()" />
+        <span class="avatar-wrap" aria-hidden="true">
+          <img class="avatar" src="{{ cfg.avatar_url }}" alt=""
+               onerror="this.closest('.avatar-wrap').remove()" />
+          <span class="avatar-ring"></span>
+        </span>
         <div class="msg assistant">{{ cfg.opening }}</div>
       </div>
       {% else %}
@@ -3172,6 +3243,97 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}"{% else %}""{% endif %};
 
+    // ---------------------------------------------------------------
+    // Animated, interactive avatar
+    // ---------------------------------------------------------------
+    // Three states: idle breathes gently, thinking shows a travelling ring
+    // while a reply is being generated, speaking radiates pulses while the
+    // reply is read aloud. Clicking it starts or stops that reply's audio,
+    // which is the same action as the SPEAK button beside the message.
+    function buildAvatar(msgDiv) {
+      const wrap = document.createElement("button");
+      wrap.type = "button";
+      wrap.className = "avatar-wrap";
+      wrap.setAttribute("aria-label", "Read this reply aloud");
+
+      const img = document.createElement("img");
+      img.className = "avatar";
+      img.src = ADVISOR_AVATAR;
+      img.alt = "";
+      img.addEventListener("error", () => wrap.remove());
+      wrap.appendChild(img);
+
+      const ring = document.createElement("span");
+      ring.className = "avatar-ring";
+      wrap.appendChild(ring);
+      for (let i = 0; i < 3; i++) {
+        const pulse = document.createElement("span");
+        pulse.className = "avatar-pulse";
+        wrap.appendChild(pulse);
+      }
+
+      const hint = document.createElement("span");
+      hint.className = "avatar-hint";
+      hint.textContent = "Click to listen";
+      wrap.appendChild(hint);
+
+      // Defer to the message's own SPEAK button so all the platform
+      // handling (iOS gesture lock, chunking, voice choice) is reused.
+      wrap.addEventListener("click", () => {
+        const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
+        if (speakBtn) speakBtn.click();
+      });
+
+      if (msgDiv) msgDiv.__avatarWrap = wrap;
+      return wrap;
+    }
+
+    // While a reply is being generated, the newest avatar shows the thinking ring
+    function setAvatarThinking(on) {
+      const wraps = document.querySelectorAll(".avatar-wrap");
+      const last = wraps[wraps.length - 1];
+      if (!last) return;
+      last.classList.toggle("is-thinking", !!on);
+      const hint = last.querySelector(".avatar-hint");
+      if (hint) hint.textContent = on ? "Thinking…" : "Click to listen";
+    }
+
+    function setAvatarSpeaking(msgDiv, on) {
+      const wrap = msgDiv && msgDiv.__avatarWrap
+        ? msgDiv.__avatarWrap
+        : (msgDiv && msgDiv.parentElement
+            ? msgDiv.parentElement.querySelector(".avatar-wrap") : null);
+      if (!wrap) return;
+      wrap.classList.toggle("is-speaking", !!on);
+      const hint = wrap.querySelector(".avatar-hint");
+      if (hint) hint.textContent = on ? "Click to stop" : "Click to listen";
+      wrap.setAttribute("aria-label", on ? "Stop reading aloud" : "Read this reply aloud");
+    }
+
+    // The speech engine can stop without a callback on some platforms
+    // (navigation, silent switch, interrupted chunk). Poll so a pulsing ring
+    // can never be left running with nothing playing.
+    let quietTicks = 0;
+    setInterval(() => {
+      if (!J3PSpeech) return;
+      if (J3PSpeech.isSpeaking()) { quietTicks = 0; return; }
+      // Two consecutive quiet reads, so this can't race the start of playback
+      if (++quietTicks < 2) return;
+      document.querySelectorAll(".avatar-wrap.is-speaking").forEach(w => {
+        w.classList.remove("is-speaking");
+        const h = w.querySelector(".avatar-hint");
+        if (h) h.textContent = "Click to listen";
+      });
+    }, 900);
+
+    function clearAllAvatarStates() {
+      document.querySelectorAll(".avatar-wrap").forEach(w => {
+        w.classList.remove("is-speaking", "is-thinking");
+        const h = w.querySelector(".avatar-hint");
+        if (h) h.textContent = "Click to listen";
+      });
+    }
+
     function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
@@ -3193,13 +3355,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (ADVISOR_AVATAR && role.startsWith("assistant") && !role.includes("typing")) {
         const row = document.createElement("div");
         row.className = "msg-row";
-        const img = document.createElement("img");
-        img.className = "avatar";
-        img.src = ADVISOR_AVATAR;
-        img.alt = "";
-        img.setAttribute("aria-hidden", "true");
-        img.addEventListener("error", () => img.remove());
-        row.appendChild(img);
+        row.appendChild(buildAvatar(div));
         row.appendChild(div);
         chat.appendChild(row);
       } else {
@@ -3390,12 +3546,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         function resetSpeakUI() {
           speakBtn.classList.remove("speaking", "paused");
           if (speakLabel) speakLabel.textContent = "Speak";
+          setAvatarSpeaking(msgDiv, false);
         }
         function markSpeaking() {
           speakBtn.classList.add("speaking");
           speakBtn.classList.remove("paused");
           // Where pause isn't available the control is stop-only, so say so
           if (speakLabel) speakLabel.textContent = J3PSpeech.canPause ? "Speaking" : "Stop";
+          clearAllAvatarStates();
+          setAvatarSpeaking(msgDiv, true);
         }
 
         // On platforms without pause support, make the intent clear up front
@@ -3845,6 +4004,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       clearAttachment();
       sendBtn.disabled = true;
       const thinking = addMessage("Thinking…", "assistant typing");
+      setAvatarThinking(true);
 
       try {
         let res;
@@ -3883,6 +4043,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           data = JSON.parse(raw);
         } catch (parseErr) {
           thinking.remove();
+        setAvatarThinking(false);
           const detail = (raw || "").trim().slice(0, 120);
           const friendly = res.status === 502 || /upstream/i.test(detail)
             ? "The server didn't finish that one — usually a large attachment or a very long conversation. Try again, or start a New conversation if it keeps happening."
@@ -3891,6 +4052,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           return;
         }
         thinking.remove();
+        setAvatarThinking(false);
         if (data.reply) {
           const msgDiv = addMessage(data.reply, "assistant", true,
                                     data.interaction_id || null, data.documents || null);
@@ -3909,6 +4071,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
       } catch (err) {
         thinking.remove();
+        setAvatarThinking(false);
         showRetry(
           "Couldn't reach the server. Check your connection and try again.",
           text, paperclipFilesForRequest);
