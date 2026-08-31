@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-31-b"
-APP_BUILD_NOTES = "Display group heading; every section now grouped"
+APP_VERSION = "2026-08-31-d"
+APP_BUILD_NOTES = "advisor profiles; deletion gate always loads"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4570,6 +4570,8 @@ def clear_history():
     session["messages"] = []
     session.pop("specialty", None)
     session.pop("specialty_asked", None)
+    # advisor_slug and force_scheduling deliberately survive a reset: the
+    # visitor is still on that advisor's link.
     conn = _settings_db_conn()
     token = session.get("chat_token")
     if conn and token:
@@ -4978,6 +4980,140 @@ def prepare_avatar(raw: bytes):
         return raw, "image/jpeg"
 
 
+# ---------------------------------------------------------------------------
+# Advisor profiles
+# ---------------------------------------------------------------------------
+# Several named advisors can share one deployment. Each has a slug, a display
+# name and its own photo, and gets its own pair of links — with and without the
+# scheduling button. Stored in Postgres so photos survive redeploys.
+
+def _advisors_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisors (
+                slug        TEXT PRIMARY KEY,
+                name        TEXT NOT NULL,
+                photo       BYTEA,
+                photo_mime  TEXT,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def slugify_advisor(name: str) -> str:
+    base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return base[:40] or "advisor"
+
+
+def list_advisors():
+    """All advisor profiles, alphabetical, without the photo bytes."""
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT slug, name, (photo IS NOT NULL) FROM advisors
+                ORDER BY name
+            """)
+            for slug, name, has_photo in cur.fetchall():
+                out.append({"slug": slug, "name": name, "has_photo": bool(has_photo)})
+    except Exception as e:
+        app.logger.error(f"[advisors] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def get_advisor(slug: str):
+    if not slug:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug, name FROM advisors WHERE slug = %s", (slug,))
+            row = cur.fetchone()
+        return {"slug": row[0], "name": row[1]} if row else None
+    except Exception as e:
+        app.logger.error(f"[advisors] get failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_advisor_photo(slug: str):
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT photo, photo_mime FROM advisors WHERE slug = %s", (slug,))
+            row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        data = row[0]
+        return (bytes(data) if not isinstance(data, bytes) else data,
+                row[1] or "image/jpeg")
+    except Exception as e:
+        app.logger.error(f"[advisors] photo read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def save_advisor(slug: str, name: str, photo=None, mime=None) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            if photo is not None:
+                cur.execute("""
+                    INSERT INTO advisors (slug, name, photo, photo_mime)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (slug) DO UPDATE
+                    SET name = EXCLUDED.name, photo = EXCLUDED.photo,
+                        photo_mime = EXCLUDED.photo_mime
+                """, (slug, name, photo, mime))
+            else:
+                cur.execute("""
+                    INSERT INTO advisors (slug, name) VALUES (%s, %s)
+                    ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+                """, (slug, name))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_advisor(slug: str) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisors WHERE slug = %s", (slug,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -5205,8 +5341,12 @@ def retrieve_context(query: str) -> str:
     return context
 
 
-def _render_chat(force_scheduling=None):
-    """Render the chat page. force_scheduling overrides the admin default."""
+def _render_chat(force_scheduling=None, advisor=None):
+    """Render the chat page.
+
+    force_scheduling overrides the admin default; advisor selects a named
+    profile so the page shows that person's photo.
+    """
     # Anonymous visitors start fresh each visit. Signed-in participants keep
     # their history — that continuity is the point of signing in.
     if not current_user():
@@ -5223,9 +5363,19 @@ def _render_chat(force_scheduling=None):
     if force_scheduling is None and "force_scheduling" in session:
         show = bool(session["force_scheduling"])
 
+    # Remember which advisor this visitor is with, so a reset keeps the photo
+    if advisor:
+        session["advisor_slug"] = advisor["slug"]
+    active = advisor or get_advisor(session.get("advisor_slug"))
+
+    page_cfg = dict(CONFIG)
+    if active:
+        page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
+        page_cfg["persona_name"] = active["name"]
+
     return render_template_string(
         INDEX_HTML,
-        cfg=CONFIG,
+        cfg=page_cfg,
         show_avatar=bool(load_settings().get("show_avatar")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
@@ -5249,6 +5399,60 @@ def index_with_scheduling():
     """Share this link when you want the booking button shown."""
     session.pop("force_scheduling", None)
     return _render_chat(force_scheduling=True)
+
+
+@app.route("/a/<slug>")
+@paywall.paywall_required
+@login_required
+def advisor_index(slug):
+    """A named advisor's link — follows the admin scheduling default."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        return _advisor_not_found(slug)
+    session.pop("force_scheduling", None)
+    return _render_chat(advisor=advisor)
+
+
+@app.route("/a/<slug>/scheduling")
+@paywall.paywall_required
+@login_required
+def advisor_index_with_scheduling(slug):
+    advisor = get_advisor(slug)
+    if not advisor:
+        return _advisor_not_found(slug)
+    return _render_chat(force_scheduling=True, advisor=advisor)
+
+
+@app.route("/a/<slug>/no-scheduling")
+@paywall.paywall_required
+@login_required
+def advisor_index_without_scheduling(slug):
+    advisor = get_advisor(slug)
+    if not advisor:
+        return _advisor_not_found(slug)
+    return _render_chat(force_scheduling=False, advisor=advisor)
+
+
+@app.route("/a/<slug>/photo.jpg")
+def advisor_photo(slug):
+    """A named advisor's photo, falling back to the default one."""
+    stored = get_advisor_photo(slug)
+    if stored:
+        data, mime = stored
+        resp = app.response_class(data, mimetype=mime)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    return redirect(url_for("advisor_avatar"))
+
+
+def _advisor_not_found(slug):
+    app.logger.info(f"[advisors] unknown slug requested: {slug}")
+    return (f"<div style='font-family:sans-serif;padding:2.5rem;max-width:34rem'>"
+            f"<h2 style='color:#27334A'>No advisor at that link</h2>"
+            f"<p style='color:#6B7280'>The link <code>/a/{slug}</code> doesn't match "
+            f"an advisor profile. Check the Advisors section of the admin panel.</p>"
+            f"<p><a href='/' style='color:#9D432C'>Go to the default advisor</a></p>"
+            f"</div>"), 404
 
 
 @app.route("/no-scheduling")
@@ -7096,6 +7300,74 @@ input[type="file"], input[type="text"] {
 
   </div>
 
+  <h2 class="group-heading">Advisors</h2>
+
+  <div class="section">
+    <h2>Advisor Profiles</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Each advisor gets their own photo and their own pair of links. Everything
+      else — the knowledge base, the guardrails, the conversation log — is shared
+      across all of them.
+    </p>
+
+    {% if advisors %}
+    <table style="margin-bottom: 1.5rem;">
+      <tr><th style="width: 58px;"></th><th>Advisor</th><th>Links</th><th></th></tr>
+      {% for adv in advisors %}
+      <tr>
+        <td>
+          <img src="/a/{{ adv.slug }}/photo.jpg" alt=""
+               onerror="this.style.display='none'"
+               style="width: 44px; height: 44px; border-radius: 50%;
+                      object-fit: cover; border: 1.5px solid var(--gold);" />
+        </td>
+        <td>
+          <strong>{{ adv.name }}</strong><br />
+          <span class="muted" style="font-size: 0.76rem;">
+            {{ adv.slug }}{% if not adv.has_photo %} · no photo, using the default{% endif %}
+          </span>
+        </td>
+        <td style="font-size: 0.78rem; line-height: 1.9;">
+          <code>{{ base_url }}/a/{{ adv.slug }}/scheduling</code>
+          <span class="muted">— with booking</span><br />
+          <code>{{ base_url }}/a/{{ adv.slug }}/no-scheduling</code>
+          <span class="muted">— without</span><br />
+          <code>{{ base_url }}/a/{{ adv.slug }}</code>
+          <span class="muted">— follows the default</span>
+        </td>
+        <td style="text-align: right;">
+          <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
+                style="display:inline;" data-doc-title="{{ adv.name }}">
+            <button type="submit" class="btn btn-danger">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">
+      No advisor profiles yet. The links above still work and use the default
+      photo; add a profile below to give someone their own.
+    </p>
+    {% endif %}
+
+    <div style="padding-top: 1.1rem; border-top: 1px dashed var(--line);">
+      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
+        <strong>Add or update an advisor</strong>
+      </p>
+      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
+        Re-using an existing name updates that profile. Leave the photo blank to
+        keep the current one.
+      </p>
+      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+            class="upload">
+        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required />
+        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+        <button type="submit" class="btn">Save advisor</button>
+      </form>
+    </div>
+  </div>
+
   <h2 class="group-heading">Access</h2>
 
   <div class="section">
@@ -7420,148 +7692,7 @@ input[type="file"], input[type="text"] {
       </table>
     </form>
 
-    <script>
-      // ---------------------------------------------------------------
-      // Deletion gate
-      // ---------------------------------------------------------------
-      // Every destructive form routes through one modal. Browser confirm()
-      // is a single reflexive click; this states exactly what will be lost,
-      // and for bulk or irreversible actions requires typing DELETE.
-      (function() {
-        const overlay  = document.getElementById("confirm-overlay");
-        const msgEl    = document.getElementById("confirm-message");
-        const detailEl = document.getElementById("confirm-detail");
-        const typeWrap = document.getElementById("confirm-type-wrap");
-        const typeIn   = document.getElementById("confirm-type");
-        const goBtn    = document.getElementById("confirm-go");
-        const cancelBtn= document.getElementById("confirm-cancel");
-        if (!overlay) return;
 
-        let pendingForm = null;
-
-        function close() {
-          overlay.hidden = true;
-          pendingForm = null;
-          typeIn.value = "";
-          typeWrap.hidden = true;
-          detailEl.hidden = true;
-          detailEl.textContent = "";
-        }
-
-        function refreshGo() {
-          goBtn.disabled = !typeWrap.hidden && typeIn.value.trim().toUpperCase() !== "DELETE";
-        }
-
-        function open(form, opts) {
-          pendingForm = form;
-          noSubmit = !!opts.noSubmit;
-          msgEl.textContent = opts.message;
-          if (opts.detail) {
-            detailEl.textContent = opts.detail;
-            detailEl.hidden = false;
-          }
-          typeWrap.hidden = !opts.requireTyping;
-          goBtn.textContent = opts.buttonLabel || "Delete";
-          overlay.hidden = false;
-          refreshGo();
-          setTimeout(() => (opts.requireTyping ? typeIn : goBtn).focus(), 60);
-        }
-
-        typeIn.addEventListener("input", refreshGo);
-        typeIn.addEventListener("keydown", e => {
-          if (e.key === "Enter" && !goBtn.disabled) { e.preventDefault(); goBtn.click(); }
-        });
-        cancelBtn.addEventListener("click", close);
-        overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
-        document.addEventListener("keydown", e => {
-          if (e.key === "Escape" && !overlay.hidden) close();
-        });
-
-        let noSubmit = false;
-        goBtn.addEventListener("click", () => {
-          if (goBtn.disabled) return;
-          const form = pendingForm;
-          const informationalOnly = noSubmit;
-          close();
-          if (form && !informationalOnly) {
-            form.dataset.confirmed = "1";
-            form.submit();
-          }
-        });
-
-        // Delegated so it covers forms that appear later in the document
-        // than this script — the clear-all form does, and per-form listeners
-        // silently missed it.
-        document.addEventListener("submit", e => {
-          const form = e.target;
-          if (!form || form.tagName !== "FORM") return;
-          const action = form.getAttribute("action") || "";
-          const isDelete = action.indexOf("/delete") !== -1;
-          const isRevoke = action.indexOf("revoke-lesson") !== -1;
-          if (!isDelete && !isRevoke) return;
-
-          if (form.dataset.confirmed === "1") {
-            form.dataset.confirmed = "";
-            return;                        // already approved — let it through
-          }
-          e.preventDefault();
-          form.removeAttribute("onsubmit");   // supersede any inline confirm()
-
-          if (action.indexOf("delete-all") !== -1) {
-            open(form, {
-              message: "This permanently deletes EVERY conversation log entry, "
-                     + "including all ratings, comments and approved lessons. "
-                     + "It cannot be undone and there is no backup.",
-              requireTyping: true,
-              buttonLabel: "Delete everything",
-            });
-            return;
-          }
-
-          if (action.indexOf("delete-selected") !== -1) {
-            const boxes = document.querySelectorAll(".feedback-checkbox:checked");
-            if (boxes.length === 0) {
-              open(form, { message: "No rows are ticked, so nothing would be deleted.",
-                           buttonLabel: "OK", noSubmit: true });
-              return;
-            }
-            const NL = String.fromCharCode(10);
-            const preview = Array.from(boxes).slice(0, 8).map(b => {
-              const row = b.closest("tr");
-              const q = row ? row.querySelector(".truncate") : null;
-              return "\u2022 " + (q ? q.textContent.trim().slice(0, 70) : "row " + b.value);
-            }).join(NL);
-            open(form, {
-              message: "Delete " + boxes.length + " conversation log entr"
-                     + (boxes.length === 1 ? "y" : "ies")
-                     + "? This cannot be undone.",
-              detail: preview + (boxes.length > 8
-                      ? NL + "\u2026and " + (boxes.length - 8) + " more" : ""),
-              requireTyping: boxes.length >= 10,
-              buttonLabel: "Delete " + boxes.length,
-            });
-            return;
-          }
-
-          if (isRevoke) {
-            open(form, {
-              message: "Stop using this exchange as a lesson? The advisor will no "
-                     + "longer learn from it, though the log entry itself is kept.",
-              buttonLabel: "Remove lesson",
-            });
-            return;
-          }
-
-          open(form, {
-            message: "Delete this document and every embedded chunk from the "
-                   + "knowledge base? The advisor will stop drawing on it. "
-                   + "You would need to upload the file again to restore it.",
-            detail: form.dataset.docTitle || "",
-            buttonLabel: "Delete document",
-          });
-        }, true);
-      })();
-    </script>
 
     <script>
       // Set or clear a rating straight from the log
@@ -7839,6 +7970,160 @@ input[type="file"], input[type="text"] {
   {% endif %}
 
 </div>
+
+    <script>
+      // ---------------------------------------------------------------
+      // Deletion gate
+      // ---------------------------------------------------------------
+      // Every destructive form routes through one modal. Browser confirm()
+      // is a single reflexive click; this states exactly what will be lost,
+      // and for bulk or irreversible actions requires typing DELETE.
+      (function() {
+        const overlay  = document.getElementById("confirm-overlay");
+        const msgEl    = document.getElementById("confirm-message");
+        const detailEl = document.getElementById("confirm-detail");
+        const typeWrap = document.getElementById("confirm-type-wrap");
+        const typeIn   = document.getElementById("confirm-type");
+        const goBtn    = document.getElementById("confirm-go");
+        const cancelBtn= document.getElementById("confirm-cancel");
+        if (!overlay) return;
+
+        let pendingForm = null;
+
+        function close() {
+          overlay.hidden = true;
+          pendingForm = null;
+          typeIn.value = "";
+          typeWrap.hidden = true;
+          detailEl.hidden = true;
+          detailEl.textContent = "";
+        }
+
+        function refreshGo() {
+          goBtn.disabled = !typeWrap.hidden && typeIn.value.trim().toUpperCase() !== "DELETE";
+        }
+
+        function open(form, opts) {
+          pendingForm = form;
+          noSubmit = !!opts.noSubmit;
+          msgEl.textContent = opts.message;
+          if (opts.detail) {
+            detailEl.textContent = opts.detail;
+            detailEl.hidden = false;
+          }
+          typeWrap.hidden = !opts.requireTyping;
+          goBtn.textContent = opts.buttonLabel || "Delete";
+          overlay.hidden = false;
+          refreshGo();
+          setTimeout(() => (opts.requireTyping ? typeIn : goBtn).focus(), 60);
+        }
+
+        typeIn.addEventListener("input", refreshGo);
+        typeIn.addEventListener("keydown", e => {
+          if (e.key === "Enter" && !goBtn.disabled) { e.preventDefault(); goBtn.click(); }
+        });
+        cancelBtn.addEventListener("click", close);
+        overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+        document.addEventListener("keydown", e => {
+          if (e.key === "Escape" && !overlay.hidden) close();
+        });
+
+        let noSubmit = false;
+        goBtn.addEventListener("click", () => {
+          if (goBtn.disabled) return;
+          const form = pendingForm;
+          const informationalOnly = noSubmit;
+          close();
+          if (form && !informationalOnly) {
+            form.dataset.confirmed = "1";
+            form.submit();
+          }
+        });
+
+        // Delegated so it covers forms that appear later in the document
+        // than this script — the clear-all form does, and per-form listeners
+        // silently missed it.
+        document.addEventListener("submit", e => {
+          const form = e.target;
+          if (!form || form.tagName !== "FORM") return;
+          const action = form.getAttribute("action") || "";
+          const isDelete = action.indexOf("/delete") !== -1;
+          const isRevoke = action.indexOf("revoke-lesson") !== -1;
+          if (!isDelete && !isRevoke) return;
+
+          if (form.dataset.confirmed === "1") {
+            form.dataset.confirmed = "";
+            return;                        // already approved — let it through
+          }
+          e.preventDefault();
+          form.removeAttribute("onsubmit");   // supersede any inline confirm()
+
+          if (action.indexOf("delete-all") !== -1) {
+            open(form, {
+              message: "This permanently deletes EVERY conversation log entry, "
+                     + "including all ratings, comments and approved lessons. "
+                     + "It cannot be undone and there is no backup.",
+              requireTyping: true,
+              buttonLabel: "Delete everything",
+            });
+            return;
+          }
+
+          if (action.indexOf("delete-selected") !== -1) {
+            const boxes = document.querySelectorAll(".feedback-checkbox:checked");
+            if (boxes.length === 0) {
+              open(form, { message: "No rows are ticked, so nothing would be deleted.",
+                           buttonLabel: "OK", noSubmit: true });
+              return;
+            }
+            const NL = String.fromCharCode(10);
+            const preview = Array.from(boxes).slice(0, 8).map(b => {
+              const row = b.closest("tr");
+              const q = row ? row.querySelector(".truncate") : null;
+              return "\u2022 " + (q ? q.textContent.trim().slice(0, 70) : "row " + b.value);
+            }).join(NL);
+            open(form, {
+              message: "Delete " + boxes.length + " conversation log entr"
+                     + (boxes.length === 1 ? "y" : "ies")
+                     + "? This cannot be undone.",
+              detail: preview + (boxes.length > 8
+                      ? NL + "\u2026and " + (boxes.length - 8) + " more" : ""),
+              requireTyping: boxes.length >= 10,
+              buttonLabel: "Delete " + boxes.length,
+            });
+            return;
+          }
+
+          if (isRevoke) {
+            open(form, {
+              message: "Stop using this exchange as a lesson? The advisor will no "
+                     + "longer learn from it, though the log entry itself is kept.",
+              buttonLabel: "Remove lesson",
+            });
+            return;
+          }
+
+          if (action.indexOf("/admin/advisors/delete/") !== -1) {
+            open(form, {
+              message: "Remove this advisor profile? Their dedicated links stop "
+                     + "working immediately and their photo is deleted. The "
+                     + "knowledge base and conversation log are not affected.",
+              detail: form.dataset.docTitle || "",
+              buttonLabel: "Remove advisor",
+            });
+            return;
+          }
+
+          open(form, {
+            message: "Delete this document and every embedded chunk from the "
+                   + "knowledge base? The advisor will stop drawing on it. "
+                   + "You would need to upload the file again to restore it.",
+            detail: form.dataset.docTitle || "",
+            buttonLabel: "Delete document",
+          });
+        }, true);
+      })();
+    </script>
 </body></html>"""
 
 
@@ -7884,6 +8169,7 @@ def admin_dashboard():
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
+        advisors=list_advisors(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
@@ -7950,6 +8236,50 @@ def admin_view_learning_archive():
     """Every archived run, newest first."""
     runs = recent_learning_runs(limit=500, archived=True)
     return render_template_string(LEARNING_ARCHIVE_HTML, cfg=CONFIG, runs=runs)
+
+
+@app.route("/admin/advisors", methods=["POST"])
+@admin_required
+def admin_save_advisor():
+    """Create or update an advisor profile."""
+    name = (request.form.get("name") or "").strip()[:80]
+    if not name:
+        flash("Give the advisor a name.")
+        return redirect(url_for("admin_dashboard"))
+
+    slug = (request.form.get("slug") or "").strip().lower()
+    slug = slugify_advisor(slug or name)
+
+    photo = mime = None
+    file = request.files.get("photo")
+    if file and file.filename:
+        raw = file.read()
+        if len(raw) > AVATAR_MAX_BYTES:
+            flash(f"That photo is {len(raw)/1048576:.1f} MB — the limit is "
+                  f"{AVATAR_MAX_BYTES // 1048576} MB.")
+            return redirect(url_for("admin_dashboard"))
+        ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+        if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+            flash("Use a JPG, PNG, WEBP or GIF photo.")
+            return redirect(url_for("admin_dashboard"))
+        photo, mime = prepare_avatar(raw)
+
+    if save_advisor(slug, name, photo, mime):
+        flash(f"✓ {name} saved — links are listed below.")
+    else:
+        flash("Could not save the advisor — check the database connection.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/advisors/delete/<slug>", methods=["POST"])
+@admin_required
+def admin_delete_advisor(slug):
+    """Remove an advisor profile and its photo."""
+    if delete_advisor(slug):
+        flash(f"Advisor “{slug}” removed. Their links no longer work.")
+    else:
+        flash("Could not remove that advisor.")
+    return redirect(url_for("admin_dashboard"))
 
 
 @app.route("/admin/settings", methods=["POST"])
