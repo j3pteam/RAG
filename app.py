@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-30-f"
-APP_BUILD_NOTES = "Knowledge Base styled to match Knowledge Upload"
+APP_VERSION = "2026-08-31-a"
+APP_BUILD_NOTES = "Access section for participant sign-in"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7015,7 +7015,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,require_login" />
+             value="show_scheduling_button,show_avatar" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -7085,11 +7085,25 @@ input[type="file"], input[type="text"] {
       {% endif %}
     </div>
 
+      <button type="submit" class="btn" form="settings-form"
+              style="margin-top: 1rem;">Save settings</button>
+
+
+
+
+
+  </div>
+
+  <h2 class="group-heading">Access</h2>
+
+  <div class="section">
+    <h2>Participant Access</h2>
+    <form method="POST" action="/admin/settings">
+      <input type="hidden" name="_fields" value="require_login" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                    margin-top: 1.1rem; padding-top: 1.1rem;
-                    border-top: 1px dashed var(--line);">
-        <input type="checkbox" name="require_login" value="1" form="settings-form"
+                    margin-top: 0;">
+        <input type="checkbox" name="require_login" value="1" 
                {% if settings.require_login %}checked{% endif %}
                {% if not mail_ready %}disabled{% endif %}
                style="margin-top: 0.2rem; width: 17px; height: 17px;
@@ -7113,12 +7127,8 @@ input[type="file"], input[type="text"] {
 
       </label>
 
-      <button type="submit" class="btn" form="settings-form"
-              style="margin-top: 1rem;">Save settings</button>
-
-
-
-
+      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
+    </form>
   </div>
 
   <h2 class="group-heading">Scheduling</h2>
