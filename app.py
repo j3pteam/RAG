@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-30-a"
-APP_BUILD_NOTES = "advisor photo can be replaced from the admin panel"
+APP_VERSION = "2026-08-30-b"
+APP_BUILD_NOTES = "photo replacement sits beneath the photo toggle"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6854,7 +6854,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
 
   <div class="section">
     <h2>Display Settings</h2>
-    <form method="POST" action="/admin/settings">
+    <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
              value="show_scheduling_button,show_avatar,require_login" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
@@ -6900,35 +6900,6 @@ input[type="text"] { flex: 1; min-width: 200px; }
         </span>
       </div>
 
-      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
-                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                    margin-top: 1.1rem; padding-top: 1.1rem;
-                    border-top: 1px dashed var(--line);">
-        <input type="checkbox" name="require_login" value="1"
-               {% if settings.require_login %}checked{% endif %}
-               {% if not mail_ready %}disabled{% endif %}
-               style="margin-top: 0.2rem; width: 17px; height: 17px;
-                      accent-color: var(--navy); cursor: pointer;" />
-        <span>
-          <strong>Require participants to sign in</strong><br />
-          <span class="muted">
-            Participants enter their email and follow a one-time link. Signing in
-            lets the advisor remember previous conversations, so each person
-            picks up where they left off.
-          </span>
-          {% if not mail_ready %}
-          <br /><span style="color: var(--rust); font-size: 0.82rem;">
-            Unavailable: no email is configured, so sign-in links couldn't be
-            delivered and everyone would be locked out. Set POSTMARK_SERVER_TOKEN
-            or SMTP_HOST first.
-          </span>
-          {% endif %}
-        </span>
-      </label>
-
-      </label>
-
-      <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
 
     <div style="margin-top: 1.4rem; padding-top: 1.1rem;
@@ -6954,6 +6925,40 @@ input[type="text"] { flex: 1; min-width: 200px; }
       </form>
       {% endif %}
     </div>
+
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="require_login" value="1" form="settings-form"
+               {% if settings.require_login %}checked{% endif %}
+               {% if not mail_ready %}disabled{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Require participants to sign in</strong><br />
+          <span class="muted">
+            Participants enter their email and follow a one-time link. Signing in
+            lets the advisor remember previous conversations, so each person
+            picks up where they left off.
+          </span>
+          {% if not mail_ready %}
+          <br /><span style="color: var(--rust); font-size: 0.82rem;">
+            Unavailable: no email is configured, so sign-in links couldn't be
+            delivered and everyone would be locked out. Set POSTMARK_SERVER_TOKEN
+            or SMTP_HOST first.
+          </span>
+          {% endif %}
+        </span>
+      </label>
+
+      </label>
+
+      <button type="submit" class="btn" form="settings-form"
+              style="margin-top: 1rem;">Save settings</button>
+
+
+
 
   </div>
 
