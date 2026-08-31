@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-28-d"
-APP_BUILD_NOTES = "asks the participant their specialty, once, and remembers it"
+APP_VERSION = "2026-08-28-e"
+APP_BUILD_NOTES = "talking-head avatar integration with demo mode"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -89,6 +89,7 @@ CONFIG = {
     "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
     # Avatar shown beside advisor replies. Set ADVISOR_AVATAR_URL="" to hide it.
     "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", "/advisor_avatar.jpg"),
+    "talking_avatar": os.environ.get("TALKING_AVATAR", "off").lower(),
     "navy": os.environ.get("BRAND_NAVY", "#27334A"),
     "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
     "paper": os.environ.get("BRAND_PAPER", "#FAF6F0"),
@@ -1381,6 +1382,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .avatar-wrap.is-speaking .avatar-pulse:nth-of-type(2) { animation-delay: 0.55s; }
     .avatar-wrap.is-speaking .avatar-pulse:nth-of-type(3) { animation-delay: 1.1s; }
     .avatar-wrap.is-speaking .avatar { box-shadow: 0 0 0 2px var(--gold); }
+
+    /* Talking-head video replaces the photo in the same circle */
+    .avatar-video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      border-radius: 50%; object-fit: cover; display: none;
+      border: 1.5px solid var(--gold);
+    }
+    .avatar-wrap.is-video .avatar-video { display: block; }
+    .avatar-wrap.is-video .avatar { visibility: hidden; }
+    .avatar-wrap.is-loading .avatar { opacity: 0.55; }
+    .avatar-wrap.is-loading .avatar-ring {
+      display: block; border: 2px solid transparent;
+      border-top-color: var(--gold);
+      animation: av-think 0.9s linear infinite;
+    }
 
     /* Small hint on hover, matching the mic tooltip */
     .avatar-hint {
@@ -3258,6 +3274,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}"{% else %}""{% endif %};
+    const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
 
     // ---------------------------------------------------------------
     // Animated, interactive avatar
@@ -3293,11 +3310,75 @@ INDEX_HTML = r"""<!DOCTYPE html>
       hint.textContent = "Click to listen";
       wrap.appendChild(hint);
 
-      // Defer to the message's own SPEAK button so all the platform
-      // handling (iOS gesture lock, chunking, voice choice) is reused.
-      wrap.addEventListener("click", () => {
-        const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
-        if (speakBtn) speakBtn.click();
+      const video = document.createElement("video");
+      video.className = "avatar-video";
+      video.setAttribute("playsinline", "");
+      video.muted = false;
+      wrap.appendChild(video);
+
+      // Point the element at a URL, offering WebM and MP4 where both exist so
+      // Safari (H.264) and Chromium builds without proprietary codecs both play.
+      function setVideoSource(url) {
+        while (video.firstChild) video.removeChild(video.firstChild);
+        video.removeAttribute("src");
+        const alt = url.endsWith(".mp4") ? url.replace(/\.mp4$/, ".webm") : null;
+        if (alt) {
+          const w = document.createElement("source");
+          w.src = alt; w.type = "video/webm";
+          video.appendChild(w);
+        }
+        const m = document.createElement("source");
+        m.src = url;
+        m.type = url.endsWith(".webm") ? "video/webm" : "video/mp4";
+        video.appendChild(m);
+        video.load();
+      }
+
+      // With the talking avatar on, clicking asks the server for a video of
+      // the advisor speaking this reply. Otherwise it falls back to the
+      // browser's own speech, which is instant and free.
+      wrap.addEventListener("click", async () => {
+        if (!TALKING_AVATAR_ON) {
+          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
+          if (speakBtn) speakBtn.click();
+          return;
+        }
+        if (wrap.classList.contains("is-video")) {
+          video.pause();
+          wrap.classList.remove("is-video", "is-speaking");
+          return;
+        }
+        if (wrap.classList.contains("is-loading")) return;
+
+        const text = msgDiv ? (msgDiv.querySelector(".msg-body") || msgDiv).innerText : "";
+        wrap.classList.add("is-loading");
+        const hint = wrap.querySelector(".avatar-hint");
+        if (hint) hint.textContent = "Preparing video\u2026";
+        try {
+          const resp = await fetch("/avatar/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: text }),
+          });
+          const data = await resp.json();
+          if (!data.ok) throw new Error(data.error || "Generation failed");
+          setVideoSource(data.video_url);
+          wrap.classList.remove("is-loading");
+          wrap.classList.add("is-video", "is-speaking");
+          if (hint) hint.textContent = data.demo ? "Demo clip — click to stop"
+                                                 : "Click to stop";
+          video.play().catch(() => {});
+          video.onended = () => {
+            wrap.classList.remove("is-video", "is-speaking");
+            if (hint) hint.textContent = "Click to listen";
+          };
+        } catch (err) {
+          // Never leave a dead frame — fall back to browser speech
+          wrap.classList.remove("is-loading", "is-video");
+          if (hint) hint.textContent = "Click to listen";
+          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
+          if (speakBtn) speakBtn.click();
+        }
       });
 
       if (msgDiv) msgDiv.__avatarWrap = wrap;
@@ -4665,6 +4746,75 @@ def specialty_guidance() -> str:
         "sentence, e.g. 'What's your specialty? I can make this more specific.' "
         "Ask at most once in the conversation.\n"
     )
+
+
+# ---------------------------------------------------------------------------
+# Talking-head avatar (D-ID)
+# ---------------------------------------------------------------------------
+# Sends the reply text to D-ID, which returns a video of the photo speaking it.
+# Three modes:
+#   off   — the animated still photo only (default; no cost, no dependency)
+#   demo  — plays a bundled placeholder clip so the experience can be judged
+#           before committing to an account. It is NOT lip-synced.
+#   live  — real generation, requires DID_API_KEY
+#
+# Generation takes several seconds, so it is on-demand: the video is requested
+# when the participant clicks the avatar, never automatically for every reply.
+
+TALKING_AVATAR_MODE = os.environ.get("TALKING_AVATAR", "off").lower()
+DID_API_KEY = os.environ.get("DID_API_KEY", "")
+DID_SOURCE_URL = os.environ.get("DID_SOURCE_URL", "")   # public URL of the photo
+DID_VOICE_ID = os.environ.get("DID_VOICE_ID", "en-US-GuyNeural")
+TALKING_MAX_CHARS = int(os.environ.get("TALKING_MAX_CHARS", "800"))
+
+
+def talking_avatar_enabled() -> bool:
+    if TALKING_AVATAR_MODE == "demo":
+        return True
+    return TALKING_AVATAR_MODE == "live" and bool(DID_API_KEY and DID_SOURCE_URL)
+
+
+def _did_request(text: str):
+    """Ask D-ID for a talking-head clip. Returns a video URL, or raises."""
+    import urllib.request as _url
+    import json as _j
+    import base64, time
+
+    auth = base64.b64encode(f"{DID_API_KEY}:".encode()).decode()
+    payload = _j.dumps({
+        "source_url": DID_SOURCE_URL,
+        "script": {
+            "type": "text",
+            "input": text[:TALKING_MAX_CHARS],
+            "provider": {"type": "microsoft", "voice_id": DID_VOICE_ID},
+        },
+        "config": {"stitch": True},
+    }).encode("utf-8")
+
+    req = _url.Request("https://api.d-id.com/talks", data=payload, headers={
+        "Authorization": f"Basic {auth}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    })
+    with _url.urlopen(req, timeout=20) as resp:
+        created = _j.loads(resp.read().decode("utf-8"))
+    talk_id = created.get("id")
+    if not talk_id:
+        raise RuntimeError("D-ID did not return a talk id")
+
+    # Poll until the clip is rendered
+    poll = _url.Request(f"https://api.d-id.com/talks/{talk_id}", headers={
+        "Authorization": f"Basic {auth}", "Accept": "application/json"})
+    for _ in range(30):
+        time.sleep(2)
+        with _url.urlopen(poll, timeout=20) as resp:
+            data = _j.loads(resp.read().decode("utf-8"))
+        status = data.get("status")
+        if status == "done":
+            return data.get("result_url")
+        if status in ("error", "rejected"):
+            raise RuntimeError(f"D-ID {status}: {str(data.get('error'))[:120]}")
+    raise RuntimeError("D-ID timed out")
 
 
 def detect_deliverable_request(text: str) -> bool:
@@ -6216,6 +6366,40 @@ def serve_png(filename):
 @app.route("/<path:filename>.jpg")
 def serve_jpg(filename):
     return send_from_directory(".", f"{filename}.jpg")
+
+
+@app.route("/avatar/speak", methods=["POST"])
+@paywall.paywall_required
+def avatar_speak():
+    """Return a talking-head video for a reply, when the feature is on."""
+    if not talking_avatar_enabled():
+        return jsonify({"ok": False, "error": "Talking avatar is off."}), 400
+
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return jsonify({"ok": False, "error": "Nothing to speak."}), 400
+
+    if TALKING_AVATAR_MODE == "demo":
+        # Bundled clip so the flow can be seen without an account
+        return jsonify({"ok": True, "video_url": "/advisor_placeholder.mp4",
+                        "demo": True})
+    try:
+        url = _did_request(text)
+        return jsonify({"ok": True, "video_url": url, "demo": False})
+    except Exception as e:
+        app.logger.error(f"[avatar] generation failed: {e}")
+        return jsonify({"ok": False, "error": str(e)[:160]}), 502
+
+
+@app.route("/advisor_placeholder.mp4")
+def advisor_placeholder():
+    return send_from_directory(".", "advisor_placeholder.mp4")
+
+
+@app.route("/advisor_placeholder.webm")
+def advisor_placeholder_webm():
+    return send_from_directory(".", "advisor_placeholder.webm")
 
 
 @app.route("/advisor_avatar.jpg")
