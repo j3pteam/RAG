@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-30-e"
-APP_BUILD_NOTES = "three upload rows share one grid and align exactly"
+APP_VERSION = "2026-08-30-f"
+APP_BUILD_NOTES = "Knowledge Base styled to match Knowledge Upload"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6896,6 +6896,23 @@ input[type="file"], input[type="text"] {
 .flash { padding: 0.7rem 1rem; background: var(--gold); color: var(--navy); border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 .muted { color: #6B7280; font-size: 0.8rem; }
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
+/* Knowledge Base table — keeps long source URLs from stretching the row */
+.kb-table { table-layout: fixed; width: 100%; }
+.kb-table th:nth-child(1), .kb-table td:nth-child(1) { width: 34%; }
+.kb-table th:nth-child(2), .kb-table td:nth-child(2) { width: 34%; }
+.kb-table th:nth-child(3), .kb-table td:nth-child(3) { width: 8%; }
+.kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 14%; }
+.kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 10%; }
+.kb-title { font-weight: 500; word-break: break-word; }
+.kb-source {
+  font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; max-width: 0;
+}
+.kb-date { white-space: nowrap; font-size: 0.78rem; }
+@media (max-width: 820px) {
+  .kb-table { table-layout: auto; }
+  .kb-source { white-space: normal; max-width: none; word-break: break-all; }
+}
 .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .expand-btn {
       background: transparent;
@@ -7692,18 +7709,29 @@ input[type="file"], input[type="text"] {
   </div>
 
   {% if rag_ready %}
+  <h2 class="group-heading">Knowledge Base</h2>
+
   <div class="section">
-    <h2>Knowledge Base ({{ docs|length }} documents)</h2>
+    <h2>Documents</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      {{ docs|length }} document{{ 's' if docs|length != 1 else '' }} embedded and
+      available to the advisor. Deleting one removes its chunks and the advisor
+      stops drawing on it.
+    </p>
     {% if docs %}
-    <table>
-      <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th></th></tr>
+    <table class="kb-table">
+      <tr>
+        <th>Title</th><th>Source</th>
+        <th style="text-align: right;">Chunks</th>
+        <th>Uploaded</th><th></th>
+      </tr>
       {% for d in docs %}
       <tr>
-        <td>{{ d.title }}</td>
-        <td class="muted">{{ d.source or '—' }}</td>
-        <td>{{ d.chunk_count }}</td>
-        <td class="muted">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
-        <td>
+        <td class="kb-title">{{ d.title }}</td>
+        <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
+        <td style="text-align: right;">{{ d.chunk_count }}</td>
+        <td class="muted kb-date">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td style="text-align: right;">
           <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
                 data-doc-title="{{ d.title }}">
             <button type="submit" class="btn btn-danger">Delete</button>
@@ -7713,7 +7741,7 @@ input[type="file"], input[type="text"] {
       {% endfor %}
     </table>
     {% else %}
-    <p class="muted">No documents yet. Upload your first one above.</p>
+    <p class="muted">No documents yet. Upload your first one below.</p>
     {% endif %}
   </div>
 
