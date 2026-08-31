@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-28-e"
-APP_BUILD_NOTES = "talking-head avatar integration with demo mode"
+APP_VERSION = "2026-08-30-a"
+APP_BUILD_NOTES = "advisor photo can be replaced from the admin panel"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4817,6 +4817,112 @@ def _did_request(text: str):
     raise RuntimeError("D-ID timed out")
 
 
+# ---------------------------------------------------------------------------
+# Advisor photo storage
+# ---------------------------------------------------------------------------
+# Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
+# deploy, so an uploaded file would silently revert to the bundled one.
+
+AVATAR_MAX_BYTES = 8 * 1024 * 1024
+_AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
+                 "image/webp": "webp", "image/gif": "gif"}
+
+
+def _avatar_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_avatar (
+                id         INTEGER PRIMARY KEY,
+                mime       TEXT NOT NULL,
+                data       BYTEA NOT NULL,
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def store_avatar(data: bytes, mime: str) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _avatar_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO advisor_avatar (id, mime, data, updated_at)
+                VALUES (1, %s, %s, NOW())
+                ON CONFLICT (id) DO UPDATE
+                SET mime = EXCLUDED.mime, data = EXCLUDED.data, updated_at = NOW()
+            """, (mime, data))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[avatar] store failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def load_avatar():
+    """Return (bytes, mime, updated_at) for the uploaded photo, or None."""
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _avatar_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT data, mime, updated_at FROM advisor_avatar WHERE id = 1")
+            row = cur.fetchone()
+        if not row:
+            return None
+        data = row[0]
+        return (bytes(data) if not isinstance(data, bytes) else data, row[1], row[2])
+    except Exception as e:
+        app.logger.error(f"[avatar] read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def clear_avatar() -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _avatar_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisor_avatar WHERE id = 1")
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[avatar] clear failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def prepare_avatar(raw: bytes):
+    """Crop to a centred square and resize. Falls back to the original bytes."""
+    try:
+        from PIL import Image
+        import io as _io
+        im = Image.open(_io.BytesIO(raw))
+        im = im.convert("RGB")
+        w, h = im.size
+        side = min(w, h)
+        # Bias the crop upward — faces sit above centre in most headshots
+        left = (w - side) // 2
+        top = max(0, int((h - side) * 0.28))
+        im = im.crop((left, top, left + side, top + side))
+        im = im.resize((320, 320), Image.LANCZOS)
+        out = _io.BytesIO()
+        im.save(out, "JPEG", quality=88, optimize=True)
+        return out.getvalue(), "image/jpeg"
+    except Exception as e:
+        app.logger.warning(f"[avatar] could not process image, storing as-is: {e}")
+        return raw, "image/jpeg"
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -6404,8 +6510,62 @@ def advisor_placeholder_webm():
 
 @app.route("/advisor_avatar.jpg")
 def advisor_avatar():
-    """The avatar shown beside advisor replies."""
+    """The photo shown beside advisor replies.
+
+    An uploaded photo lives in Postgres so it survives redeploys; the bundled
+    file is the fallback when nothing has been uploaded.
+    """
+    stored = load_avatar()
+    if stored:
+        data, mime, updated = stored
+        resp = app.response_class(data, mimetype=mime or "image/jpeg")
+        # Change the tag when the photo changes so browsers refetch it
+        try:
+            resp.headers["ETag"] = f'"{int(updated.timestamp())}"'
+        except Exception:
+            pass
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
     return send_from_directory(".", "advisor_avatar.jpg")
+
+
+@app.route("/admin/avatar", methods=["POST"])
+@admin_required
+def admin_upload_avatar():
+    """Replace the advisor photo."""
+    file = request.files.get("avatar")
+    if not file or not file.filename:
+        flash("Choose an image first.")
+        return redirect(url_for("admin_dashboard"))
+
+    raw = file.read()
+    if len(raw) > AVATAR_MAX_BYTES:
+        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+              f"{AVATAR_MAX_BYTES // 1048576} MB.")
+        return redirect(url_for("admin_dashboard"))
+
+    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+        flash("Use a JPG, PNG, WEBP or GIF image.")
+        return redirect(url_for("admin_dashboard"))
+
+    data, mime = prepare_avatar(raw)
+    if store_avatar(data, mime):
+        flash("✓ Advisor photo updated. Participants will see it immediately.")
+    else:
+        flash("Could not save the photo — check the database connection.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/avatar/delete", methods=["POST"])
+@admin_required
+def admin_delete_avatar():
+    """Revert to the photo bundled with the app."""
+    if clear_avatar():
+        flash("Reverted to the bundled advisor photo.")
+    else:
+        flash("Could not revert the photo.")
+    return redirect(url_for("admin_dashboard"))
 
 
 # ---------------------------------------------------------------------------
@@ -6726,14 +6886,19 @@ input[type="text"] { flex: 1; min-width: 200px; }
             When off, replies appear without the photo. Turn it off if you'd
             rather participants not read the advisor as a specific person.
           </span>
-          {% if settings.show_avatar %}
-          <br /><img src="{{ cfg.avatar_url }}" alt="" onerror="this.remove()"
-               style="width: 34px; height: 34px; border-radius: 50%;
-                      object-fit: cover; margin-top: 0.45rem;
-                      border: 1.5px solid var(--gold);" />
-          {% endif %}
         </span>
       </label>
+
+      <div style="margin-top: 0.9rem; padding-left: 1.6rem; display: flex;
+                  align-items: center; gap: 0.9rem; flex-wrap: wrap;">
+        <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt="Current advisor photo"
+             onerror="this.style.display='none'"
+             style="width: 54px; height: 54px; border-radius: 50%;
+                    object-fit: cover; border: 1.5px solid var(--gold);" />
+        <span class="muted" style="font-size: 0.8rem;">
+          {% if avatar_custom %}Uploaded photo{% else %}Bundled photo{% endif %}
+        </span>
+      </div>
 
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
@@ -6765,6 +6930,30 @@ input[type="text"] { flex: 1; min-width: 200px; }
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save settings</button>
     </form>
+
+    <div style="margin-top: 1.4rem; padding-top: 1.1rem;
+                border-top: 1px dashed var(--line);">
+      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
+        <strong>Replace the advisor photo</strong>
+      </p>
+      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem; line-height: 1.55;">
+        JPG, PNG, WEBP or GIF, up to {{ avatar_max_mb }} MB. It's cropped to a
+        centred square and resized automatically, and stored in the database so
+        it survives redeploys.
+      </p>
+      <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
+            style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
+        <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required />
+        <button type="submit" class="btn">Upload photo</button>
+      </form>
+      {% if avatar_custom %}
+      <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.7rem;">
+        <button type="submit" class="btn"
+                style="background: transparent; color: var(--rust);
+                       border-color: var(--rust);">Revert to bundled photo</button>
+      </form>
+      {% endif %}
+    </div>
 
   </div>
 
@@ -7491,6 +7680,9 @@ def admin_dashboard():
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
+        avatar_custom=bool(load_avatar()),
+        avatar_version=int(datetime.now().timestamp()),
+        avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
