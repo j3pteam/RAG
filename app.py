@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-30-c"
-APP_BUILD_NOTES = "learning runs archived rather than accumulating"
+APP_VERSION = "2026-08-30-e"
+APP_BUILD_NOTES = "three upload rows share one grid and align exactly"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6870,9 +6870,29 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
-form.upload { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
-input[type="file"], input[type="text"] { padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; }
-input[type="text"] { flex: 1; min-width: 200px; }
+/* All three upload rows share one grid, so the field and the button line up
+   across sections regardless of button label length. */
+form.upload {
+  display: grid;
+  /* Columns collapse on their own when there isn't room, so this holds on a
+     phone regardless of how the browser reports the viewport width. */
+  grid-template-columns: repeat(auto-fit, minmax(280px, auto));
+  grid-template-areas: none;
+  gap: 0.6rem; align-items: center;
+}
+@media (min-width: 860px) {
+  form.upload { grid-template-columns: 320px minmax(0, 1fr) 210px; }
+}
+form.upload > * { min-width: 0; }
+form.upload .btn { width: 100%; justify-content: center; text-align: center; }
+@media (max-width: 820px) {
+  form.upload { grid-template-columns: 1fr; }
+  form.upload .btn { width: auto; justify-self: start; }
+}
+input[type="file"], input[type="text"] {
+  padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px;
+  font-family: inherit; width: 100%;
+}
 .flash { padding: 0.7rem 1rem; background: var(--gold); color: var(--navy); border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 .muted { color: #6B7280; font-size: 0.8rem; }
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
@@ -7717,6 +7737,7 @@ input[type="text"] { flex: 1; min-width: 200px; }
     </p>
     <form method="POST" action="/admin/upload-folder" enctype="multipart/form-data" class="upload" id="folder-upload-form">
       <input type="file" name="files" id="folder-input" webkitdirectory directory multiple required />
+      <input type="text" name="folder_title" placeholder="Folder title (optional)" />
       <button type="submit" class="btn" id="folder-upload-btn">Upload Folder</button>
     </form>
     <p id="folder-preview" class="muted" style="margin: 0.75rem 0 0 0; font-size: 0.85rem; display: none;"></p>
@@ -8014,6 +8035,9 @@ def admin_upload_folder():
     over_limit = max(0, len(supported_files) - MAX_BATCH)
     process_files = supported_files[:MAX_BATCH]
 
+    # Optional label so a batch is recognisable in the knowledge base
+    folder_title = (request.form.get("folder_title") or "").strip()[:80]
+
     uploaded = []       # list of (title, chunk_count, doc_id)
     duplicates = []     # list of (filename, existing_title)
     failed = []         # list of (filename, error)
@@ -8023,6 +8047,7 @@ def admin_upload_folder():
         # Use just the basename as the source and title default.
         full_path = file.filename or "unknown"
         basename = full_path.rsplit("/", 1)[-1]
+        display_title = f"{folder_title} — {basename}" if folder_title else basename
 
         try:
             # Duplicate check first
@@ -8051,8 +8076,10 @@ def admin_upload_folder():
 
             vectors = emb.embed_batch(chunks)
             pairs = list(zip(chunks, vectors))
-            doc_id = db.insert_document(basename, basename, pairs)
-            uploaded.append((basename, len(chunks), doc_id))
+            # Title carries the folder label when given; source stays the
+            # filename so duplicate detection keeps working on re-upload.
+            doc_id = db.insert_document(display_title, basename, pairs)
+            uploaded.append((display_title, len(chunks), doc_id))
             app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
 
         except Exception as e:
