@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-31-a"
-APP_BUILD_NOTES = "Access section for participant sign-in"
+APP_VERSION = "2026-08-31-b"
+APP_BUILD_NOTES = "Display group heading; every section now grouped"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7010,6 +7010,8 @@ input[type="file"], input[type="text"] {
       </div>
     </div>
   </div>
+
+  <h2 class="group-heading">Display</h2>
 
   <div class="section">
     <h2>Display Settings</h2>
