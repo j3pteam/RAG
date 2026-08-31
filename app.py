@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-30-b"
-APP_BUILD_NOTES = "photo replacement sits beneath the photo toggle"
+APP_VERSION = "2026-08-30-c"
+APP_BUILD_NOTES = "learning runs archived rather than accumulating"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -935,6 +935,13 @@ def _learning_ensure_table(conn):
                 trigger     TEXT
             )
         """)
+        # Added later — runs that changed nothing are archived rather than
+        # deleted, so the visible history stays readable but nothing is lost.
+        try:
+            cur.execute("ALTER TABLE learning_runs ADD COLUMN IF NOT EXISTS "
+                        "archived BOOLEAN NOT NULL DEFAULT FALSE")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -944,11 +951,23 @@ def _record_learning_run(considered, approved, skipped, detail, trigger):
         return
     try:
         _learning_ensure_table(conn)
+        # A run that learned nothing is archived immediately — those repeat
+        # every day and would otherwise bury the runs that mattered.
+        archived = (approved == 0)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO learning_runs (considered, approved, skipped, detail, trigger)
-                VALUES (%s, %s, %s, %s, %s)
-            """, (considered, approved, skipped, detail[:4000], trigger))
+                INSERT INTO learning_runs
+                    (considered, approved, skipped, detail, trigger, archived)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (considered, approved, skipped, detail[:4000], trigger, archived))
+            # Keep only the most recent meaningful runs on the main view
+            cur.execute("""
+                UPDATE learning_runs SET archived = TRUE
+                WHERE archived = FALSE AND id NOT IN (
+                    SELECT id FROM learning_runs
+                    WHERE archived = FALSE ORDER BY id DESC LIMIT 10
+                )
+            """)
         conn.commit()
     except Exception as e:
         app.logger.error(f"[learning] could not record run: {e}")
@@ -956,7 +975,7 @@ def _record_learning_run(considered, approved, skipped, detail, trigger):
         conn.close()
 
 
-def recent_learning_runs(limit=8):
+def recent_learning_runs(limit=8, archived=False):
     conn = _settings_db_conn()
     if not conn:
         return []
@@ -966,8 +985,9 @@ def recent_learning_runs(limit=8):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT ran_at, considered, approved, skipped, trigger, detail
-                FROM learning_runs ORDER BY id DESC LIMIT %s
-            """, (limit,))
+                FROM learning_runs WHERE archived = %s
+                ORDER BY id DESC LIMIT %s
+            """, (archived, limit))
             for ran_at, considered, approved, skipped, trigger, detail in cur.fetchall():
                 out.append({
                     "when": _fmt_ts(ran_at), "considered": considered,
@@ -1076,6 +1096,41 @@ def run_learning_cycle(trigger="manual", dry_run=False) -> dict:
     return {"ok": True, "considered": considered, "approved": approved,
             "skipped": skipped, "detail": detail, "dry_run": dry_run,
             "up": up_count, "down": down_count}
+
+
+def archived_run_count() -> int:
+    conn = _settings_db_conn()
+    if not conn:
+        return 0
+    try:
+        _learning_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM learning_runs WHERE archived = TRUE")
+            row = cur.fetchone()
+        return int(row[0]) if row else 0
+    except Exception as e:
+        app.logger.error(f"[learning] archive count failed: {e}")
+        return 0
+    finally:
+        conn.close()
+
+
+def archive_all_learning_runs() -> bool:
+    """Clear the visible history; nothing is deleted."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _learning_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE learning_runs SET archived = TRUE WHERE archived = FALSE")
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[learning] archive failed: {e}")
+        return False
+    finally:
+        conn.close()
 
 
 # --- Scheduler -------------------------------------------------------------
@@ -6659,6 +6714,73 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
   </form>
 </body></html>"""
 
+LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Learning archive — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root { --navy:#27334A; --gold:#D2BC8D; --paper:#FAF6F0; --line:rgba(39,51,74,0.12); --muted:#6B7280; }
+  *,*::before,*::after { box-sizing:border-box; }
+  body { margin:0; font-family:'Jost',-apple-system,sans-serif; background:var(--paper); color:var(--navy); }
+  header { background:var(--navy); border-bottom:2px solid var(--gold);
+           padding:1rem 1.5rem; display:flex; justify-content:space-between; align-items:center; }
+  header h1 { margin:0; font-size:0.85rem; letter-spacing:0.18em; text-transform:uppercase;
+              color:var(--gold); font-weight:500; }
+  header a { color:var(--gold); text-decoration:none; font-size:0.75rem;
+             letter-spacing:0.12em; text-transform:uppercase; }
+  .container { max-width:1100px; width:95%; margin:0 auto; padding:2rem 1.5rem; }
+  .section { background:#fff; border:1px solid var(--line); border-radius:4px; padding:1.5rem; }
+  h2 { margin:0 0 1rem; font-size:0.8rem; letter-spacing:0.14em; text-transform:uppercase;
+       padding-bottom:0.6rem; border-bottom:1px solid var(--line); font-weight:500; }
+  table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+  th { text-align:left; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase;
+       color:var(--muted); padding:0.6rem 0.5rem; border-bottom:2px solid var(--navy); }
+  td { padding:0.6rem 0.5rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  .muted { color:var(--muted); }
+  details summary { cursor:pointer; font-size:0.78rem; color:var(--muted); }
+  pre { white-space:pre-wrap; font-size:0.72rem; background:var(--paper);
+        padding:0.6rem; border-radius:3px; margin:0.5rem 0 0; }
+</style></head><body>
+<header>
+  <h1>{{ cfg.persona_name }} — Learning archive</h1>
+  <a href="/admin">&larr; Back to admin</a>
+</header>
+<div class="container">
+  <div class="section">
+    <h2>Archived runs ({{ runs|length }})</h2>
+    {% if runs %}
+    <p class="muted" style="font-size:0.84rem; margin:0 0 1rem;">
+      Every learning run that has been archived, newest first. Runs that learned
+      nothing are archived automatically so the main panel stays readable.
+    </p>
+    <table>
+      <tr><th>When</th><th>Trigger</th><th>Learned</th><th>Held back</th><th>Detail</th></tr>
+      {% for run in runs %}
+      <tr>
+        <td>{{ run.when }}</td>
+        <td class="muted">{{ run.trigger }}</td>
+        <td><strong>{{ run.approved }}</strong></td>
+        <td class="muted">{{ run.skipped }}</td>
+        <td>
+          {% if run.detail %}
+          <details><summary>Show</summary><pre>{{ run.detail }}</pre></details>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">Nothing archived yet.</p>
+    {% endif %}
+  </div>
+</div>
+</body></html>"""
+
+
 ADMIN_HTML = """<!DOCTYPE html><html><head>
 <title>Admin — {{ cfg.persona_name }}</title>
 <link rel="icon" href="{{ cfg.favicon_url }}" />
@@ -7073,6 +7195,21 @@ input[type="text"] { flex: 1; min-width: 200px; }
       {% endfor %}
     </table>
     {% endif %}
+
+    <div style="margin-top: 1rem; display: flex; gap: 0.8rem; align-items: center;
+                flex-wrap: wrap; font-size: 0.8rem;">
+      {% if learning_runs %}
+      <form method="POST" action="/admin/learning/archive" style="display: inline;">
+        <button type="submit" class="btn"
+                style="background: transparent; color: var(--navy);
+                       font-size: 0.7rem;">Archive this list</button>
+      </form>
+      {% endif %}
+      <a href="/admin/learning/archive" class="muted"
+         style="text-decoration: none; border-bottom: 1px solid var(--gold);">
+        View archive{% if archived_runs %} ({{ archived_runs }}){% endif %}
+      </a>
+    </div>
   </div>
 
   <h2 class="group-heading">Logs</h2>
@@ -7689,6 +7826,7 @@ def admin_dashboard():
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
+        archived_runs=archived_run_count(),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
@@ -7732,6 +7870,25 @@ def admin_run_learning():
               f"{'s' if result['approved'] != 1 else ''}{breakdown}; "
               f"{result['skipped']} held back for review.")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/learning/archive", methods=["POST"])
+@admin_required
+def admin_archive_learning():
+    """Move the visible run history into the archive. Nothing is deleted."""
+    if archive_all_learning_runs():
+        flash("Run history archived — still available under View archive.")
+    else:
+        flash("Could not archive the run history.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/learning/archive", methods=["GET"])
+@admin_required
+def admin_view_learning_archive():
+    """Every archived run, newest first."""
+    runs = recent_learning_runs(limit=500, archived=True)
+    return render_template_string(LEARNING_ARCHIVE_HTML, cfg=CONFIG, runs=runs)
 
 
 @app.route("/admin/settings", methods=["POST"])
