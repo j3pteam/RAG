@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-31-d"
-APP_BUILD_NOTES = "advisor profiles; deletion gate always loads"
+APP_VERSION = "2026-08-31-e"
+APP_BUILD_NOTES = "participants can add their own materials"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1375,6 +1375,85 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     #chat-wrap { flex: 1; overflow-y: auto; }
     #chat { max-width: 760px; margin: 0 auto; padding: 2.25rem 1.5rem 1rem; }
+    /* Participant materials */
+    .materials-link {
+      background: none; border: none; cursor: pointer;
+      font-family: inherit; font-size: 0.62rem; letter-spacing: 0.1em;
+      text-transform: uppercase; color: var(--muted);
+      padding: 0.2rem 0; border-bottom: 1px solid var(--gold);
+    }
+    .materials-link:hover { color: var(--navy); }
+    .mat-overlay {
+      position: fixed; inset: 0; background: rgba(39,51,74,0.55);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 900; padding: 1.25rem;
+    }
+    .mat-overlay[hidden] { display: none; }
+    .mat-box {
+      background: #fff; border-radius: 4px; width: 100%; max-width: 560px;
+      max-height: 88vh; overflow-y: auto;
+      box-shadow: 0 20px 60px rgba(39,51,74,0.3);
+    }
+    .mat-head {
+      background: var(--navy); border-bottom: 2px solid var(--gold);
+      padding: 0.9rem 1.3rem; display: flex; justify-content: space-between;
+      align-items: center; position: sticky; top: 0;
+    }
+    .mat-head h3 {
+      margin: 0; color: var(--gold); font-size: 0.78rem; font-weight: 500;
+      letter-spacing: 0.16em; text-transform: uppercase;
+    }
+    .mat-close {
+      background: none; border: none; color: var(--paper);
+      font-size: 1.3rem; cursor: pointer; line-height: 1; padding: 0 0.2rem;
+    }
+    .mat-body { padding: 1.2rem 1.3rem 1.4rem; }
+    .mat-intro { font-size: 0.86rem; line-height: 1.6; margin: 0 0 1.1rem; }
+    .mat-tabs { display: flex; gap: 0.4rem; margin-bottom: 1rem; }
+    .mat-tab {
+      flex: 1; padding: 0.5rem; font-family: inherit; cursor: pointer;
+      font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+      background: var(--paper); border: 1px solid var(--line);
+      border-radius: 2px; color: var(--navy);
+    }
+    .mat-tab.active { background: var(--navy); color: var(--gold); border-color: var(--navy); }
+    .mat-pane[hidden] { display: none; }
+    .mat-field {
+      width: 100%; padding: 0.6rem 0.7rem; margin-bottom: 0.6rem;
+      border: 1px solid var(--line); border-radius: 2px;
+      font-family: inherit; font-size: 0.9rem; box-sizing: border-box;
+    }
+    textarea.mat-field { min-height: 170px; resize: vertical; line-height: 1.5; }
+    .mat-share {
+      display: flex; align-items: flex-start; gap: 0.5rem;
+      font-size: 0.78rem; color: var(--muted); margin: 0.4rem 0 0.9rem;
+      line-height: 1.5;
+    }
+    .mat-list { margin-top: 1.3rem; padding-top: 1rem; border-top: 1px dashed var(--line); }
+    .mat-item {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.5rem 0; border-bottom: 1px solid var(--line);
+      font-size: 0.85rem;
+    }
+    .mat-item-title { flex: 1; min-width: 0; word-break: break-word; }
+    .mat-item-meta { font-size: 0.7rem; color: var(--muted); white-space: nowrap; }
+    .mat-remove {
+      background: none; border: none; color: var(--rust); cursor: pointer;
+      font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase;
+    }
+    .mat-box .btn {
+      background: var(--navy); color: var(--gold);
+      border: 1px solid var(--navy); border-radius: 2px;
+      padding: 0.7rem 1.2rem; cursor: pointer; font-family: inherit;
+      font-size: 0.72rem; letter-spacing: 0.16em; text-transform: uppercase;
+      transition: background 0.2s ease, color 0.2s ease;
+    }
+    .mat-box .btn:hover { background: var(--gold); color: var(--navy); }
+    .mat-box .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .mat-msg { font-size: 0.82rem; margin: 0.6rem 0 0; }
+    .mat-msg.ok { color: #2F6B4F; }
+    .mat-msg.err { color: var(--rust); }
+
     /* Avatar beside advisor replies — animated states */
     .avatar-wrap {
       position: relative; flex: 0 0 auto; width: 38px; height: 38px;
@@ -2302,9 +2381,64 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </a>
     </div>
     {% endif %}
+    <div style="text-align: center; margin-top: 0.55rem;">
+      <button type="button" class="materials-link" id="materials-open">
+        Add your documents &amp; writing
+      </button>
+    </div>
     <div class="footer-note">
       {{ cfg.footer_disclaimer }}
       <span class="footer-ai-note">{{ cfg.footer_ai_note }}</span>
+    </div>
+  </div>
+
+  <div class="mat-overlay" id="mat-overlay" hidden>
+    <div class="mat-box" role="dialog" aria-modal="true" aria-labelledby="mat-title">
+      <div class="mat-head">
+        <h3 id="mat-title">Your documents &amp; writing</h3>
+        <button type="button" class="mat-close" id="mat-close"
+                aria-label="Close">&times;</button>
+      </div>
+      <div class="mat-body">
+        <p class="mat-intro">
+          Add your CV, a strategic plan, a talk, an article you've written —
+          anything that helps the advisor understand your work and match your
+          voice. These stay <strong>private to you</strong> and are used only in
+          your own sessions.
+        </p>
+
+        <div class="mat-tabs">
+          <button type="button" class="mat-tab active" data-pane="upload">Upload files</button>
+          <button type="button" class="mat-tab" data-pane="paste">Paste writing</button>
+        </div>
+
+        <div class="mat-pane" id="mat-pane-upload">
+          <input type="file" id="mat-files" class="mat-field" multiple
+                 accept=".pdf,.docx,.doc,.pptx,.xlsx,.csv,.txt,.md,.rtf" />
+          <label class="mat-share">
+            <input type="checkbox" id="mat-share-upload" />
+            <span>Also share with J3P so the team can review it. Leave unticked
+              to keep it entirely private to your sessions.</span>
+          </label>
+          <button type="button" class="btn" id="mat-upload-btn">Add to my library</button>
+        </div>
+
+        <div class="mat-pane" id="mat-pane-paste" hidden>
+          <input type="text" id="mat-title-input" class="mat-field"
+                 placeholder="Title (e.g. My leadership philosophy)" />
+          <textarea id="mat-text" class="mat-field"
+                    placeholder="Paste an article, notes, a bio, a draft…"></textarea>
+          <label class="mat-share">
+            <input type="checkbox" id="mat-share-text" />
+            <span>Also share with J3P so the team can review it.</span>
+          </label>
+          <button type="button" class="btn" id="mat-save-btn">Add to my library</button>
+        </div>
+
+        <p class="mat-msg" id="mat-msg"></p>
+
+        <div class="mat-list" id="mat-list"></div>
+      </div>
     </div>
   </div>
 
@@ -3330,6 +3464,157 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}"{% else %}""{% endif %};
     const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
+
+    // ---------------------------------------------------------------
+    // Participant materials
+    // ---------------------------------------------------------------
+    (function () {
+      const overlay = document.getElementById("mat-overlay");
+      const openBtn = document.getElementById("materials-open");
+      if (!overlay || !openBtn) return;
+      const closeBtn = document.getElementById("mat-close");
+      const msg = document.getElementById("mat-msg");
+      const list = document.getElementById("mat-list");
+
+      function say(text, ok) {
+        msg.textContent = text || "";
+        msg.className = "mat-msg" + (text ? (ok ? " ok" : " err") : "");
+      }
+
+      async function refresh() {
+        list.innerHTML = "";
+        try {
+          const resp = await fetch("/materials");
+          const data = await resp.json();
+          if (!data.ok) return;
+          if (!data.docs.length) {
+            const p = document.createElement("p");
+            p.className = "mat-item-meta";
+            p.textContent = "Nothing added yet.";
+            list.appendChild(p);
+            return;
+          }
+          const head = document.createElement("p");
+          head.className = "mat-item-meta";
+          head.textContent = data.docs.length + " of " + data.limit + " items";
+          list.appendChild(head);
+
+          data.docs.forEach(doc => {
+            const row = document.createElement("div");
+            row.className = "mat-item";
+
+            const title = document.createElement("span");
+            title.className = "mat-item-title";
+            title.textContent = doc.title;
+            row.appendChild(title);
+
+            const meta = document.createElement("span");
+            meta.className = "mat-item-meta";
+            meta.textContent = (doc.shared ? "shared · " : "private · ")
+                             + Math.max(1, Math.round(doc.chars / 1000)) + "k chars";
+            row.appendChild(meta);
+
+            const rm = document.createElement("button");
+            rm.type = "button";
+            rm.className = "mat-remove";
+            rm.textContent = "Remove";
+            rm.addEventListener("click", async () => {
+              rm.disabled = true;
+              try {
+                const r = await fetch("/materials/delete/" + doc.id, { method: "POST" });
+                const d = await r.json();
+                if (d.ok) { say("Removed.", true); refresh(); }
+                else { say(d.error || "Could not remove it.", false); rm.disabled = false; }
+              } catch (e) { say("Could not remove it.", false); rm.disabled = false; }
+            });
+            row.appendChild(rm);
+            list.appendChild(row);
+          });
+        } catch (e) { /* leave the list empty */ }
+      }
+
+      function open() { overlay.hidden = false; say(""); refresh(); }
+      function close() { overlay.hidden = true; }
+
+      openBtn.addEventListener("click", open);
+      closeBtn.addEventListener("click", close);
+      overlay.addEventListener("click", e => { if (e.target === overlay) close(); });
+      document.addEventListener("keydown", e => {
+        if (e.key === "Escape" && !overlay.hidden) close();
+      });
+
+      // Tabs
+      document.querySelectorAll(".mat-tab").forEach(tab => {
+        tab.addEventListener("click", () => {
+          document.querySelectorAll(".mat-tab").forEach(t => t.classList.remove("active"));
+          tab.classList.add("active");
+          const which = tab.dataset.pane;
+          document.getElementById("mat-pane-upload").hidden = (which !== "upload");
+          document.getElementById("mat-pane-paste").hidden = (which !== "paste");
+          say("");
+        });
+      });
+
+      // Upload files
+      const upBtn = document.getElementById("mat-upload-btn");
+      upBtn.addEventListener("click", async () => {
+        const input = document.getElementById("mat-files");
+        if (!input.files || !input.files.length) { say("Choose a file first.", false); return; }
+        const fd = new FormData();
+        for (const f of input.files) fd.append("files", f);
+        if (document.getElementById("mat-share-upload").checked) fd.append("shared", "1");
+        upBtn.disabled = true;
+        say("Reading your documents\u2026", true);
+        try {
+          const r = await fetch("/materials/upload", { method: "POST", body: fd });
+          const d = await r.json();
+          if (d.ok) {
+            let note = "Added " + d.added.length + " item"
+                     + (d.added.length === 1 ? "" : "s") + ".";
+            if (d.failed && d.failed.length) note += " Skipped: " + d.failed.join("; ");
+            say(note, true);
+            input.value = "";
+            refresh();
+          } else {
+            say(d.error || "Could not add those.", false);
+          }
+        } catch (e) {
+          say("Could not add those. Check your connection and try again.", false);
+        } finally {
+          upBtn.disabled = false;
+        }
+      });
+
+      // Paste writing
+      const saveBtn = document.getElementById("mat-save-btn");
+      saveBtn.addEventListener("click", async () => {
+        const title = document.getElementById("mat-title-input").value.trim();
+        const content = document.getElementById("mat-text").value.trim();
+        if (content.length < 20) { say("Add a little more text than that.", false); return; }
+        saveBtn.disabled = true;
+        try {
+          const r = await fetch("/materials/text", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: title, content: content,
+                                   shared: document.getElementById("mat-share-text").checked }),
+          });
+          const d = await r.json();
+          if (d.ok) {
+            say("Added to your library.", true);
+            document.getElementById("mat-title-input").value = "";
+            document.getElementById("mat-text").value = "";
+            refresh();
+          } else {
+            say(d.error || "Could not save it.", false);
+          }
+        } catch (e) {
+          say("Could not save it. Check your connection and try again.", false);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+    })();
 
     // ---------------------------------------------------------------
     // Animated, interactive avatar
@@ -5114,6 +5399,164 @@ def delete_advisor(slug: str) -> bool:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Participant materials
+# ---------------------------------------------------------------------------
+# Participants can add their own documents and writing — a CV, a strategic
+# plan, a blog post, notes they've drafted. These are PRIVATE to that
+# participant: they are used only in that person's own sessions and never
+# enter the shared knowledge base, because these transcripts contain
+# personnel and institutional detail that must not surface for anyone else.
+# Sharing with J3P is a separate, explicit opt-in.
+
+PARTICIPANT_DOC_MAX_BYTES = 20 * 1024 * 1024
+PARTICIPANT_DOC_MAX_CHARS = 60000      # per item, kept in the prompt budget
+PARTICIPANT_DOC_LIMIT = 25             # per participant
+
+
+def _participant_docs_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_documents (
+                id          BIGSERIAL PRIMARY KEY,
+                token       TEXT NOT NULL,
+                title       TEXT NOT NULL,
+                kind        TEXT NOT NULL DEFAULT 'upload',
+                content     TEXT NOT NULL,
+                shared      BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""CREATE INDEX IF NOT EXISTS participant_documents_token
+                       ON participant_documents (token)""")
+    conn.commit()
+
+
+def participant_token() -> str:
+    """Identifies whose materials these are — stable for signed-in people."""
+    return _history_token()
+
+
+def list_participant_docs(token=None):
+    token = token or participant_token()
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _participant_docs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, title, kind, shared, created_at, LENGTH(content)
+                FROM participant_documents WHERE token = %s
+                ORDER BY id DESC LIMIT %s
+            """, (token, PARTICIPANT_DOC_LIMIT))
+            for row in cur.fetchall():
+                out.append({"id": row[0], "title": row[1], "kind": row[2],
+                            "shared": bool(row[3]), "when": _fmt_ts(row[4]),
+                            "chars": row[5] or 0})
+    except Exception as e:
+        app.logger.error(f"[materials] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def add_participant_doc(title: str, content: str, kind="upload", shared=False) -> bool:
+    token = participant_token()
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_docs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM participant_documents WHERE token = %s",
+                        (token,))
+            row = cur.fetchone()
+            if row and int(row[0]) >= PARTICIPANT_DOC_LIMIT:
+                app.logger.info("[materials] limit reached for this participant")
+                return False
+            cur.execute("""
+                INSERT INTO participant_documents (token, title, kind, content, shared)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (token, title[:200], kind, content[:PARTICIPANT_DOC_MAX_CHARS], shared))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[materials] add failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_participant_doc(doc_id: int) -> bool:
+    """Scoped to this participant's own token, so nobody can delete another's."""
+    token = participant_token()
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_docs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM participant_documents WHERE id = %s AND token = %s",
+                        (doc_id, token))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[materials] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def participant_materials_block(budget=24000) -> str:
+    """The participant's own materials, for their prompt only."""
+    docs = []
+    conn = _settings_db_conn()
+    if not conn:
+        return ""
+    try:
+        _participant_docs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT title, content FROM participant_documents
+                WHERE token = %s ORDER BY id DESC LIMIT 12
+            """, (participant_token(),))
+            docs = cur.fetchall()
+    except Exception as e:
+        app.logger.error(f"[materials] read failed: {e}")
+        return ""
+    finally:
+        conn.close()
+
+    if not docs:
+        return ""
+
+    parts, used = [], 0
+    for title, content in docs:
+        text = (content or "").strip()
+        if not text:
+            continue
+        room = budget - used
+        if room < 500:
+            break
+        excerpt = text[:room]
+        used += len(excerpt)
+        parts.append(f"--- {title} ---\n{excerpt}")
+
+    if not parts:
+        return ""
+    return (
+        "\n\n---\n"
+        "THE PARTICIPANT'S OWN MATERIALS — documents and writing this person has "
+        "added to their library. Treat these as authoritative about their own "
+        "situation, work and voice. When they ask you to draft something, match "
+        "the voice and reuse the substance found here. Do not mention that you "
+        "are reading from an uploaded library; just use it.\n\n"
+        + "\n\n".join(parts) + "\n"
+    )
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -6102,11 +6545,13 @@ def chat():
             + document_guard
             + contact_guard
             + specialty_guidance()
+            + participant_materials_block()
         )
     else:
         composed_prompt = (
             base_prompt + lessons_block + scope_guard + voice_guard
             + document_guard + contact_guard + specialty_guidance()
+            + participant_materials_block()
         )
 
     try:
@@ -6765,6 +7210,78 @@ def advisor_placeholder():
 @app.route("/advisor_placeholder.webm")
 def advisor_placeholder_webm():
     return send_from_directory(".", "advisor_placeholder.webm")
+
+
+@app.route("/materials", methods=["GET"])
+@paywall.paywall_required
+@login_required
+def materials_list():
+    """This participant's own library."""
+    return jsonify({"ok": True, "docs": list_participant_docs(),
+                    "limit": PARTICIPANT_DOC_LIMIT})
+
+
+@app.route("/materials/text", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def materials_add_text():
+    """Paste in writing — an article, notes, a bio, a draft."""
+    data = request.get_json(silent=True) or {}
+    title = (data.get("title") or "").strip() or "Untitled note"
+    body = (data.get("content") or "").strip()
+    shared = bool(data.get("shared"))
+    if len(body) < 20:
+        return jsonify({"ok": False, "error": "Add a little more text than that."}), 400
+    if add_participant_doc(title, body, kind="text", shared=shared):
+        return jsonify({"ok": True})
+    return jsonify({"ok": False,
+                    "error": f"Could not save it. You can keep up to "
+                             f"{PARTICIPANT_DOC_LIMIT} items."}), 400
+
+
+@app.route("/materials/upload", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def materials_upload():
+    """Upload documents — PDF, Word, PowerPoint, Excel, text."""
+    files = request.files.getlist("files") or []
+    if not files:
+        return jsonify({"ok": False, "error": "Choose a file first."}), 400
+
+    shared = (request.form.get("shared") or "").lower() in ("1", "true", "on")
+    added, failed = [], []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        raw = f.read()
+        if len(raw) > PARTICIPANT_DOC_MAX_BYTES:
+            failed.append(f"{f.filename} (too large)")
+            continue
+        try:
+            text = extract_attachment_text(f.filename, raw)
+        except Exception as e:
+            app.logger.error(f"[materials] extract failed for {f.filename}: {e}")
+            text = ""
+        if not text or not text.strip():
+            failed.append(f"{f.filename} (no text found)")
+            continue
+        if add_participant_doc(f.filename, text, kind="upload", shared=shared):
+            added.append(f.filename)
+        else:
+            failed.append(f"{f.filename} (library full)")
+
+    if not added and failed:
+        return jsonify({"ok": False, "error": "; ".join(failed[:4])}), 400
+    return jsonify({"ok": True, "added": added, "failed": failed})
+
+
+@app.route("/materials/delete/<int:doc_id>", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def materials_delete(doc_id):
+    if delete_participant_doc(doc_id):
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Could not remove that item."}), 400
 
 
 @app.route("/advisor_avatar.jpg")
