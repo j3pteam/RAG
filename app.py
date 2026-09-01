@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-08-31-e"
-APP_BUILD_NOTES = "participants can add their own materials"
+APP_VERSION = "2026-09-01-a"
+APP_BUILD_NOTES = "admin toggle for participant materials"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -171,6 +171,8 @@ _SETTINGS_DEFAULTS = {
     "auto_learning": False,
     # Show the advisor photo beside replies
     "show_avatar": True,
+    # Let participants add their own documents and writing
+    "allow_materials": True,
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -2381,17 +2383,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </a>
     </div>
     {% endif %}
+    {% if allow_materials %}
     <div style="text-align: center; margin-top: 0.55rem;">
       <button type="button" class="materials-link" id="materials-open">
         Add your documents &amp; writing
       </button>
     </div>
+    {% endif %}
     <div class="footer-note">
       {{ cfg.footer_disclaimer }}
       <span class="footer-ai-note">{{ cfg.footer_ai_note }}</span>
     </div>
   </div>
 
+  {% if allow_materials %}
   <div class="mat-overlay" id="mat-overlay" hidden>
     <div class="mat-box" role="dialog" aria-modal="true" aria-labelledby="mat-title">
       <div class="mat-head">
@@ -2441,6 +2446,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  {% endif %}
 
   <script>
     const chat = document.getElementById("chat");
@@ -5433,8 +5439,26 @@ def _participant_docs_ensure_table(conn):
 
 
 def participant_token() -> str:
-    """Identifies whose materials these are — stable for signed-in people."""
-    return _history_token()
+    """Identifies whose materials these are.
+
+    Deliberately NOT the chat history token: that one is cleared by New
+    Conversation and regenerated for anonymous visitors on each visit, which
+    would silently orphan someone's library. Signed in, this is derived from
+    the email so the library follows them across devices.
+    """
+    email = session.get("user_email", "")
+    if email:
+        import hashlib
+        digest = hashlib.sha256(
+            (app.secret_key + "|materials|" + email.lower()).encode("utf-8")
+        ).hexdigest()[:32]
+        return "m_" + digest
+    token = session.get("materials_token")
+    if not token:
+        token = "a_" + os.urandom(16).hex()
+        session["materials_token"] = token
+        session.permanent = True
+    return token
 
 
 def list_participant_docs(token=None):
@@ -5511,6 +5535,8 @@ def delete_participant_doc(doc_id: int) -> bool:
 
 def participant_materials_block(budget=24000) -> str:
     """The participant's own materials, for their prompt only."""
+    if not load_settings().get("allow_materials"):
+        return ""
     docs = []
     conn = _settings_db_conn()
     if not conn:
@@ -5820,6 +5846,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         INDEX_HTML,
         cfg=page_cfg,
         show_avatar=bool(load_settings().get("show_avatar")),
+        allow_materials=bool(load_settings().get("allow_materials")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
@@ -7212,11 +7239,17 @@ def advisor_placeholder_webm():
     return send_from_directory(".", "advisor_placeholder.webm")
 
 
+def materials_enabled() -> bool:
+    return bool(load_settings().get("allow_materials"))
+
+
 @app.route("/materials", methods=["GET"])
 @paywall.paywall_required
 @login_required
 def materials_list():
     """This participant's own library."""
+    if not materials_enabled():
+        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
     return jsonify({"ok": True, "docs": list_participant_docs(),
                     "limit": PARTICIPANT_DOC_LIMIT})
 
@@ -7226,6 +7259,8 @@ def materials_list():
 @login_required
 def materials_add_text():
     """Paste in writing — an article, notes, a bio, a draft."""
+    if not materials_enabled():
+        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
     data = request.get_json(silent=True) or {}
     title = (data.get("title") or "").strip() or "Untitled note"
     body = (data.get("content") or "").strip()
@@ -7244,6 +7279,8 @@ def materials_add_text():
 @login_required
 def materials_upload():
     """Upload documents — PDF, Word, PowerPoint, Excel, text."""
+    if not materials_enabled():
+        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
     files = request.files.getlist("files") or []
     if not files:
         return jsonify({"ok": False, "error": "Choose a file first."}), 400
@@ -7279,6 +7316,8 @@ def materials_upload():
 @paywall.paywall_required
 @login_required
 def materials_delete(doc_id):
+    if not materials_enabled():
+        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
     if delete_participant_doc(doc_id):
         return jsonify({"ok": True})
     return jsonify({"ok": False, "error": "Could not remove that item."}), 400
@@ -7738,7 +7777,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar" />
+             value="show_scheduling_button,show_avatar,allow_materials" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -7807,6 +7846,26 @@ input[type="file"], input[type="text"] {
       </form>
       {% endif %}
     </div>
+
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="allow_materials" value="1" form="settings-form"
+               {% if settings.allow_materials %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Let participants add their own documents &amp; writing</strong><br />
+          <span class="muted">
+            Adds a link under the chat box where participants can upload a CV,
+            a plan or an article, or paste their own writing. Their material is
+            private to them and never enters the shared knowledge base. When
+            off, the link disappears and existing material is left untouched
+            but unused.
+          </span>
+        </span>
+      </label>
 
       <button type="submit" class="btn" form="settings-form"
               style="margin-top: 1rem;">Save settings</button>
@@ -8814,6 +8873,7 @@ def admin_settings():
     labels = {
         "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
         "show_avatar": ("Advisor photo", "shown", "hidden"),
+        "allow_materials": ("Participant materials", "on", "off"),
         "auto_learning": ("Continuous learning", "on", "off"),
         "require_login": ("Sign-in", "required", "not required"),
     }
