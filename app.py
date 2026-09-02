@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-a"
-APP_BUILD_NOTES = "persistent animated avatar presence"
+APP_VERSION = "2026-09-02-b"
+APP_BUILD_NOTES = "animated looping portrait as the avatar idle state"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -89,6 +89,8 @@ CONFIG = {
     "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
     # Avatar shown beside advisor replies. Set ADVISOR_AVATAR_URL="" to hide it.
     "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", "/advisor_avatar.jpg"),
+    # Looping clip for the avatar's resting state. Empty string = still photo.
+    "avatar_loop_url": os.environ.get("ADVISOR_LOOP_URL", "/advisor_idle.mp4"),
     "talking_avatar": os.environ.get("TALKING_AVATAR", "off").lower(),
     "navy": os.environ.get("BRAND_NAVY", "#27334A"),
     "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
@@ -1853,6 +1855,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
       50%      { transform: scale(1.028); }
     }
     /* Thinking: ring travelling round the frame */
+    .presence-loop {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      border-radius: 50%; object-fit: cover; border: 2px solid var(--gold);
+      box-shadow: 0 6px 20px rgba(39,51,74,0.28);
+      display: block;
+    }
+    /* A generated talking-head video replaces the loop while it plays */
+    .presence.video .presence-loop { display: none; }
+    /* The looping portrait already moves, so drop the CSS breath */
+    .presence-loop ~ .presence-photo,
+    .presence:has(.presence-loop) .presence-photo { animation: none; }
+    .presence.speaking .presence-loop {
+      box-shadow: 0 0 0 3px rgba(210,188,141,0.5), 0 6px 20px rgba(39,51,74,0.28);
+      animation: presence-talk 0.62s ease-in-out infinite;
+    }
+    .presence.responding .presence-loop { animation: presence-talk 1.1s ease-in-out infinite; }
+    .presence.thinking .presence-loop { opacity: 0.9; }
+    /* When the loop can't play, the still photo breathes instead */
+    .presence.no-loop .presence-photo {
+      animation: presence-breathe 6s ease-in-out infinite !important;
+    }
+
     .presence-ring {
       position: absolute; inset: -5px; border-radius: 50%;
       border: 2px solid transparent; display: none; pointer-events: none;
@@ -2522,6 +2546,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
             aria-label="Read the latest reply aloud">
       <img class="presence-photo" src="{{ cfg.avatar_url }}" alt=""
            onerror="document.getElementById('presence').style.display='none'" />
+      {% if cfg.avatar_loop_url %}
+      <video class="presence-loop" id="presence-loop" muted loop playsinline
+             autoplay preload="auto" aria-hidden="true"
+             onerror="this.style.display='none'">
+        <source src="{{ cfg.avatar_loop_url|replace('.mp4', '.webm') }}" type="video/webm" />
+        <source src="{{ cfg.avatar_loop_url }}" type="video/mp4" />
+      </video>
+      {% endif %}
       <video class="presence-video" id="presence-video" playsinline></video>
       <span class="presence-ring"></span>
       <span class="presence-pulse"></span>
@@ -3865,6 +3897,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const Presence = (function () {
       const root = document.getElementById("presence");
       if (!root) return { set: function () {}, video: function () {} };
+
+      // If the looping portrait can't play, hide it so the still photo shows
+      // through rather than leaving an empty frame on top of it.
+      const loop = document.getElementById("presence-loop");
+      if (loop) {
+        const hideLoop = () => {
+          loop.style.display = "none";
+          // Hand the motion back to CSS so the portrait still looks alive
+          root.classList.add("no-loop");
+        };
+        loop.addEventListener("error", hideLoop);
+        Array.from(loop.querySelectorAll("source")).forEach(sc =>
+          sc.addEventListener("error", () => {
+            if (loop.networkState === 3 || !loop.videoWidth) {
+              setTimeout(() => { if (!loop.videoWidth) hideLoop(); }, 1200);
+            }
+          }));
+        setTimeout(() => { if (!loop.videoWidth) hideLoop(); }, 3500);
+      }
       const status = document.getElementById("presence-status");
       const frame = document.getElementById("presence-frame");
       const video = document.getElementById("presence-video");
@@ -7918,6 +7969,17 @@ def avatar_speak():
     except Exception as e:
         app.logger.error(f"[avatar] generation failed: {e}")
         return jsonify({"ok": False, "error": str(e)[:160]}), 502
+
+
+@app.route("/advisor_idle.mp4")
+def advisor_idle_mp4():
+    """Looping animated portrait used as the avatar's resting state."""
+    return send_from_directory(".", "advisor_idle.mp4")
+
+
+@app.route("/advisor_idle.webm")
+def advisor_idle_webm():
+    return send_from_directory(".", "advisor_idle.webm")
 
 
 @app.route("/advisor_placeholder.mp4")
