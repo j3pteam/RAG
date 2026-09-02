@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-01-c"
-APP_BUILD_NOTES = "end-of-session follow-up plan"
+APP_VERSION = "2026-09-02-a"
+APP_BUILD_NOTES = "persistent animated avatar presence"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1831,6 +1831,93 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
+    /* Persistent avatar presence — always on screen, always animating */
+    .presence {
+      position: fixed; right: 1.5rem; bottom: 8.5rem; z-index: 400;
+      width: 104px; text-align: center; user-select: none;
+    }
+    .presence-frame {
+      position: relative; width: 104px; height: 104px; cursor: pointer;
+      border: none; background: none; padding: 0; border-radius: 50%;
+    }
+    .presence-frame:focus-visible { outline: 2px solid var(--gold); outline-offset: 4px; }
+    .presence-photo {
+      width: 100%; height: 100%; border-radius: 50%; object-fit: cover;
+      border: 2px solid var(--gold);
+      box-shadow: 0 6px 20px rgba(39,51,74,0.28);
+      animation: presence-breathe 6s ease-in-out infinite;
+      display: block;
+    }
+    @keyframes presence-breathe {
+      0%, 100% { transform: scale(1); }
+      50%      { transform: scale(1.028); }
+    }
+    /* Thinking: ring travelling round the frame */
+    .presence-ring {
+      position: absolute; inset: -5px; border-radius: 50%;
+      border: 2px solid transparent; display: none; pointer-events: none;
+    }
+    .presence.thinking .presence-ring {
+      display: block;
+      border-top-color: var(--gold);
+      border-right-color: rgba(210,188,141,0.35);
+      animation: av-think 0.9s linear infinite;
+    }
+    .presence.thinking .presence-photo { animation: none; opacity: 0.9; }
+    /* Speaking: concentric pulses */
+    .presence-pulse {
+      position: absolute; inset: 0; border-radius: 50%;
+      border: 2px solid var(--gold); opacity: 0; pointer-events: none;
+    }
+    .presence.speaking .presence-pulse { animation: av-pulse 1.7s ease-out infinite; }
+    .presence.speaking .presence-pulse:nth-of-type(3) { animation-delay: 0.55s; }
+    .presence.speaking .presence-pulse:nth-of-type(4) { animation-delay: 1.1s; }
+    .presence.speaking .presence-photo {
+      animation: presence-talk 0.62s ease-in-out infinite;
+      box-shadow: 0 0 0 3px rgba(210,188,141,0.5), 0 6px 20px rgba(39,51,74,0.28);
+    }
+    @keyframes presence-talk {
+      0%, 100% { transform: scale(1) translateY(0); }
+      50%      { transform: scale(1.035) translateY(-1px); }
+    }
+    /* Responding: nod while the reply lands */
+    .presence.responding .presence-photo {
+      animation: presence-talk 1.1s ease-in-out infinite;
+    }
+    .presence-status {
+      margin-top: 0.45rem; font-size: 0.56rem; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--muted); min-height: 1em;
+    }
+    .presence.speaking .presence-status,
+    .presence.thinking .presence-status { color: var(--navy); }
+    /* A video takes over the frame when a talking head is generated */
+    .presence-video {
+      position: absolute; inset: 0; width: 100%; height: 100%;
+      border-radius: 50%; object-fit: cover; display: none;
+      border: 2px solid var(--gold);
+    }
+    .presence.video .presence-video { display: block; }
+    .presence.video .presence-photo { visibility: hidden; }
+
+    @media (max-width: 900px) {
+      /* Smaller, and above the composer — the send button owns the bottom
+         right at these widths. */
+      /* Clear of the composer row, which reaches ~13rem from the bottom here */
+      .presence { right: 0.7rem; bottom: 14rem; width: 60px; }
+      .presence-frame { width: 60px; height: 60px; }
+      .presence-status { display: none; }
+    }
+    @media (max-width: 640px) {
+      /* Hidden on phones: there isn't room without covering the conversation,
+         and every reply already carries its own avatar there. */
+      .presence { display: none; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
+      .presence.speaking .presence-ring,
+      .presence.thinking .presence-ring { display: block; border: 2px solid var(--gold); }
+    }
+
     /* End-of-session offer of a follow-up plan */
     .plan-offer {
       display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
@@ -2428,6 +2515,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="footer-ai-note">{{ cfg.footer_ai_note }}</span>
     </div>
   </div>
+
+  {% if show_avatar and cfg.avatar_url %}
+  <div class="presence" id="presence">
+    <button type="button" class="presence-frame" id="presence-frame"
+            aria-label="Read the latest reply aloud">
+      <img class="presence-photo" src="{{ cfg.avatar_url }}" alt=""
+           onerror="document.getElementById('presence').style.display='none'" />
+      <video class="presence-video" id="presence-video" playsinline></video>
+      <span class="presence-ring"></span>
+      <span class="presence-pulse"></span>
+      <span class="presence-pulse"></span>
+      <span class="presence-pulse"></span>
+    </button>
+    <div class="presence-status" id="presence-status">Listening</div>
+  </div>
+  {% endif %}
 
   {% if allow_materials %}
   <div class="mat-overlay" id="mat-overlay" hidden>
@@ -3754,6 +3857,100 @@ INDEX_HTML = r"""<!DOCTYPE html>
     })();
 
     // ---------------------------------------------------------------
+    // Persistent avatar presence
+    // ---------------------------------------------------------------
+    // One always-visible avatar that reflects what the advisor is doing:
+    // listening, thinking, responding, or speaking. Clicking it reads the
+    // latest reply aloud, or plays a talking-head video when that's enabled.
+    const Presence = (function () {
+      const root = document.getElementById("presence");
+      if (!root) return { set: function () {}, video: function () {} };
+      const status = document.getElementById("presence-status");
+      const frame = document.getElementById("presence-frame");
+      const video = document.getElementById("presence-video");
+      let respondTimer = null;
+
+      const LABELS = {
+        idle: "Listening",
+        thinking: "Thinking",
+        responding: "Responding",
+        speaking: "Speaking",
+      };
+
+      function set(state) {
+        root.classList.remove("thinking", "responding", "speaking");
+        if (state && state !== "idle") root.classList.add(state);
+        if (status) status.textContent = LABELS[state] || LABELS.idle;
+        if (frame) {
+          frame.setAttribute("aria-label", state === "speaking"
+            ? "Stop reading aloud" : "Read the latest reply aloud");
+        }
+      }
+
+      function respondBriefly(seconds) {
+        set("responding");
+        if (respondTimer) clearTimeout(respondTimer);
+        respondTimer = setTimeout(() => {
+          if (!root.classList.contains("speaking")) set("idle");
+        }, (seconds || 4) * 1000);
+      }
+
+      // Clicking the presence speaks the most recent reply
+      if (frame) {
+        frame.addEventListener("click", async () => {
+          const msgs = Array.from(document.querySelectorAll(".msg.assistant"))
+            .filter(m => !m.className.includes("typing"));
+          const last = msgs[msgs.length - 1];
+          if (!last) return;
+
+          if (TALKING_AVATAR_ON) {
+            if (root.classList.contains("video")) {
+              video.pause();
+              root.classList.remove("video");
+              set("idle");
+              return;
+            }
+            set("thinking");
+            if (status) status.textContent = "Preparing";
+            try {
+              const text = (last.querySelector(".msg-body") || last).innerText;
+              const r = await fetch("/avatar/speak", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ text: text }),
+              });
+              const d = await r.json();
+              if (!d.ok) throw new Error(d.error || "failed");
+              while (video.firstChild) video.removeChild(video.firstChild);
+              const webm = document.createElement("source");
+              webm.src = d.video_url.replace(/\.mp4$/, ".webm");
+              webm.type = "video/webm";
+              const mp4 = document.createElement("source");
+              mp4.src = d.video_url;
+              mp4.type = "video/mp4";
+              video.appendChild(webm);
+              video.appendChild(mp4);
+              video.load();
+              root.classList.add("video");
+              set("speaking");
+              video.play().catch(() => {});
+              video.onended = () => { root.classList.remove("video"); set("idle"); };
+              return;
+            } catch (e) {
+              root.classList.remove("video");
+              // fall through to browser speech
+            }
+          }
+
+          const speakBtn = last.querySelector(".speak-btn");
+          if (speakBtn) speakBtn.click();
+        });
+      }
+
+      return { set: set, respondBriefly: respondBriefly };
+    })();
+
+    // ---------------------------------------------------------------
     // Animated, interactive avatar
     // ---------------------------------------------------------------
     // Three states: idle breathes gently, thinking shows a travelling ring
@@ -3871,6 +4068,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     // While a reply is being generated, the newest avatar shows the thinking ring
     function setAvatarThinking(on) {
+      Presence.set(on ? "thinking" : "idle");
       const wraps = document.querySelectorAll(".avatar-wrap");
       const last = wraps[wraps.length - 1];
       if (!last) return;
@@ -3882,6 +4080,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // Plays for a few seconds as a reply appears, so the avatar is visibly
     // active while responding even when the reply isn't being read aloud.
     function setAvatarResponding(msgDiv, seconds = 4) {
+      if (Presence.respondBriefly) Presence.respondBriefly(seconds);
       const wrap = msgDiv && msgDiv.__avatarWrap ? msgDiv.__avatarWrap : null;
       if (!wrap) return;
       wrap.classList.add("is-responding");
@@ -4140,6 +4339,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           speakBtn.classList.remove("speaking", "paused");
           if (speakLabel) speakLabel.textContent = "Speak";
           setAvatarSpeaking(msgDiv, false);
+          Presence.set("idle");
         }
         function markSpeaking() {
           speakBtn.classList.add("speaking");
@@ -4148,6 +4348,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           if (speakLabel) speakLabel.textContent = J3PSpeech.canPause ? "Speaking" : "Stop";
           clearAllAvatarStates();
           setAvatarSpeaking(msgDiv, true);
+          Presence.set("speaking");
         }
 
         // On platforms without pause support, make the intent clear up front
