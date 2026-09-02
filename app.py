@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-c"
-APP_BUILD_NOTES = "avatar toggle relabelled to match what it controls"
+APP_VERSION = "2026-09-02-d"
+APP_BUILD_NOTES = "one avatar not many; autospeak off by default"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2454,18 +2454,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <div id="chat-wrap">
     <div id="chat">
-      {% if show_avatar and cfg.avatar_url %}
-      <div class="msg-row">
-        <span class="avatar-wrap" aria-hidden="true">
-          <img class="avatar" src="{{ cfg.avatar_url }}" alt=""
-               onerror="this.closest('.avatar-wrap').remove()" />
-          <span class="avatar-ring"></span>
-        </span>
-        <div class="msg assistant">{{ cfg.opening }}</div>
-      </div>
-      {% else %}
       <div class="msg assistant">{{ cfg.opening }}</div>
-      {% endif %}
     </div>
   </div>
 
@@ -3200,7 +3189,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const autoSpeakBtn = document.getElementById("autospeak-btn");
     let autoSpeakEnabled = false;
     try {
-      autoSpeakEnabled = localStorage.getItem("j3p_autospeak") === "1";
+      // Key deliberately versioned: speak-everything was on for anyone who
+      // had enabled it once, which is rarely what they want on return.
+      autoSpeakEnabled = localStorage.getItem("j3p_autospeak_v2") === "1";
     } catch (e) { /* localStorage may be blocked; fall back to session default */ }
     function refreshAutoSpeakUI() {
       if (!autoSpeakBtn) return;
@@ -3220,7 +3211,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     } else if (autoSpeakBtn) {
       autoSpeakBtn.addEventListener("click", () => {
         autoSpeakEnabled = !autoSpeakEnabled;
-        try { localStorage.setItem("j3p_autospeak", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
+        try { localStorage.setItem("j3p_autospeak_v2", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
         refreshAutoSpeakUI();
         // Turning OFF should stop anything currently speaking
         if (!autoSpeakEnabled) {
@@ -4008,6 +3999,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // while a reply is being generated, speaking radiates pulses while the
     // reply is read aloud. Clicking it starts or stops that reply's audio,
     // which is the same action as the SPEAK button beside the message.
+    // Removes a message and its avatar row together. Removing the message
+    // alone used to leave an orphaned row, which rendered as a second avatar.
+    function removeMessage(el) {
+      if (!el) return;
+      const row = el.parentElement;
+      el.remove();
+      if (row && row.classList.contains("msg-row") && !row.querySelector(".msg")) {
+        row.remove();
+      }
+    }
+
     function buildAvatar(msgDiv) {
       const wrap = document.createElement("button");
       wrap.type = "button";
@@ -4195,15 +4197,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Advisor replies are preceded by the avatar, when one is configured.
       // If the image fails to load it removes itself, so a missing file just
       // leaves the reply looking as it did before.
-      if (ADVISOR_AVATAR && role.startsWith("assistant")) {
-        const row = document.createElement("div");
-        row.className = "msg-row";
-        row.appendChild(buildAvatar(div));
-        row.appendChild(div);
-        chat.appendChild(row);
-      } else {
-        chat.appendChild(div);
-      }
+      // Per-reply avatars are deliberately not added: the persistent avatar
+      // beside the chat already shows who is speaking, and repeating it on
+      // every message was visually noisy.
+      chat.appendChild(div);
       chatWrap.scrollTop = chatWrap.scrollHeight;
       // If auto-speak is enabled and this is a fresh assistant reply (with feedback
       // row, meaning it was just received from the API), start reading it aloud.
@@ -4887,7 +4884,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         try {
           data = JSON.parse(raw);
         } catch (parseErr) {
-          thinking.remove();
+          removeMessage(thinking);
         setAvatarThinking(false);
           const detail = (raw || "").trim().slice(0, 120);
           const friendly = res.status === 502 || /upstream/i.test(detail)
@@ -4896,7 +4893,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           showRetry(friendly, text, paperclipFilesForRequest);
           return;
         }
-        thinking.remove();
+        removeMessage(thinking);
         setAvatarThinking(false);
         if (data.reply) {
           const msgDiv = addMessage(data.reply, "assistant", true,
@@ -4919,7 +4916,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
         else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
       } catch (err) {
-        thinking.remove();
+        removeMessage(thinking);
         setAvatarThinking(false);
         showRetry(
           "Couldn't reach the server. Check your connection and try again.",
