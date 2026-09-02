@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-01-a"
-APP_BUILD_NOTES = "admin toggle for participant materials"
+APP_VERSION = "2026-09-01-b"
+APP_BUILD_NOTES = "remembered participant profile: name, role, specialty"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1452,6 +1452,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .mat-box .btn:hover { background: var(--gold); color: var(--navy); }
     .mat-box .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .mat-profile {
+      display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+      background: var(--paper); border-left: 3px solid var(--gold);
+      padding: 0.6rem 0.8rem; margin-bottom: 1rem; font-size: 0.84rem;
+    }
+    .mat-profile[hidden] { display: none; }
+    .mat-profile-label {
+      font-size: 0.62rem; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--muted);
+    }
+    #mat-profile-text { flex: 1; min-width: 0; }
     .mat-msg { font-size: 0.82rem; margin: 0.6rem 0 0; }
     .mat-msg.ok { color: #2F6B4F; }
     .mat-msg.err { color: var(--rust); }
@@ -2405,6 +2416,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 aria-label="Close">&times;</button>
       </div>
       <div class="mat-body">
+        <div id="mat-profile" class="mat-profile" hidden>
+          <span class="mat-profile-label">The advisor remembers</span>
+          <span id="mat-profile-text"></span>
+          <button type="button" class="mat-remove" id="mat-profile-forget">Clear</button>
+        </div>
+
         <p class="mat-intro">
           Add your CV, a strategic plan, a talk, an article you've written —
           anything that helps the advisor understand your work and match your
@@ -3539,7 +3556,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
         } catch (e) { /* leave the list empty */ }
       }
 
-      function open() { overlay.hidden = false; say(""); refresh(); }
+      const profBox = document.getElementById("mat-profile");
+      const profText = document.getElementById("mat-profile-text");
+      const profForget = document.getElementById("mat-profile-forget");
+
+      async function refreshProfile() {
+        try {
+          const r = await fetch("/profile");
+          const d = await r.json();
+          const p = (d && d.profile) || {};
+          const bits = [];
+          if (p.first_name) bits.push(p.first_name);
+          if (p.role) bits.push(p.role);
+          if (p.specialty) bits.push(p.specialty);
+          if (!bits.length) { profBox.hidden = true; return; }
+          profText.textContent = bits.join(" · ");
+          profBox.hidden = false;
+        } catch (e) { profBox.hidden = true; }
+      }
+
+      if (profForget) {
+        profForget.addEventListener("click", async () => {
+          profForget.disabled = true;
+          try {
+            await fetch("/profile/forget", { method: "POST" });
+            say("Cleared. The advisor may ask again next time.", true);
+            refreshProfile();
+          } catch (e) { say("Could not clear it.", false); }
+          finally { profForget.disabled = false; }
+        });
+      }
+
+      function open() { overlay.hidden = false; say(""); refresh(); refreshProfile(); }
       function close() { overlay.hidden = true; }
 
       openBtn.addEventListener("click", open);
@@ -4861,6 +4909,8 @@ def clear_history():
     session["messages"] = []
     session.pop("specialty", None)
     session.pop("specialty_asked", None)
+    # The profile deliberately survives: New Conversation clears the
+    # transcript, not who the participant is.
     # advisor_slug and force_scheduling deliberately survive a reset: the
     # visitor is still on that advisor's link.
     conn = _settings_db_conn()
@@ -5583,6 +5633,226 @@ def participant_materials_block(budget=24000) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Participant profile
+# ---------------------------------------------------------------------------
+# A deliberately thin profile: first name, role, specialty. No institution, no
+# surname, no email beyond what sign-in already holds, nothing that would
+# identify the person or their organisation. Enough for the advisor to stop
+# being generic; not enough to be a personnel record.
+
+PROFILE_FIELDS = ("first_name", "role", "specialty")
+
+
+def _profile_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_profile (
+                token       TEXT PRIMARY KEY,
+                first_name  TEXT,
+                role        TEXT,
+                specialty   TEXT,
+                asked       TEXT,
+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def load_profile() -> dict:
+    conn = _settings_db_conn()
+    if not conn:
+        return dict(session.get("profile_fallback") or {})
+    try:
+        _profile_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""SELECT first_name, role, specialty, asked
+                           FROM participant_profile WHERE token = %s""",
+                        (participant_token(),))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        return {"first_name": row[0], "role": row[1], "specialty": row[2],
+                "asked": (row[3] or "")}
+    except Exception as e:
+        app.logger.error(f"[profile] read failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def save_profile(**fields) -> bool:
+    """Write only the fields given; leave the rest alone."""
+    fields = {k: v for k, v in fields.items()
+              if k in PROFILE_FIELDS + ("asked",) and v}
+    if not fields:
+        return True
+    conn = _settings_db_conn()
+    if not conn:
+        # No database — keep it for this session at least
+        cur = dict(session.get("profile_fallback") or {})
+        cur.update(fields)
+        session["profile_fallback"] = cur
+        return True
+    try:
+        _profile_ensure_table(conn)
+        cols = ", ".join(fields.keys())
+        marks = ", ".join(["%s"] * len(fields))
+        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO participant_profile (token, {cols})
+                VALUES (%s, {marks})
+                ON CONFLICT (token) DO UPDATE
+                SET {updates}, updated_at = NOW()
+            """, (participant_token(), *fields.values()))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[profile] save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def forget_profile() -> bool:
+    session.pop("profile_fallback", None)
+    conn = _settings_db_conn()
+    if not conn:
+        return True
+    try:
+        _profile_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM participant_profile WHERE token = %s",
+                        (participant_token(),))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[profile] forget failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+# Leadership roles worth recognising, longest first so "associate program
+# director" wins over "program director".
+_ROLE_PATTERNS = [
+    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
+    (r"\b(vice chair|associate chair)\b", "vice chair"),
+    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
+    (r"\b(section chief|section head)\b", "section chief"),
+    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
+    (r"\b(associate program director)\b", "associate program director"),
+    (r"\b(program director)\b", "program director"),
+    (r"\b(fellowship director)\b", "fellowship director"),
+    (r"\b(residency director)\b", "residency director"),
+    (r"\b(medical director)\b", "medical director"),
+    (r"\b(chief medical officer|\bCMO\b)", "chief medical officer"),
+    (r"\b(chief of staff)\b", "chief of staff"),
+    (r"\b(vice president|\bVP\b)", "vice president"),
+    (r"\b(dean|associate dean|vice dean)\b", "dean"),
+    (r"\b(clinical director)\b", "clinical director"),
+    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
+    (r"\b(attending|faculty member|staff physician)\b", "attending"),
+]
+
+
+def detect_role(text: str):
+    low = (text or "").lower()
+    for pattern, label in _ROLE_PATTERNS:
+        if re.search(pattern, low, re.IGNORECASE):
+            return label
+    return None
+
+
+def detect_first_name(text: str):
+    """Only from an explicit self-introduction — never inferred."""
+    if not text:
+        return None
+    patterns = [
+        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
+        r"\bi'?m ([A-Z][a-z]{1,18})\b",
+        r"\bthis is ([A-Z][a-z]{1,18})\b",
+        r"\bcall me ([A-Z][a-z]{1,18})\b",
+        r"^([A-Z][a-z]{1,18}) here\b",
+    ]
+    # Words that follow "I'm" but aren't names
+    stop = {"a", "an", "the", "not", "in", "on", "at", "trying", "looking",
+            "working", "going", "just", "still", "also", "happy", "glad",
+            "sorry", "new", "here", "chief", "chair", "director", "faculty",
+            "attending", "concerned", "worried", "curious", "hoping"}
+    for pattern in patterns:
+        # Case-insensitive so "My name is" matches as well as "my name is",
+        # but the captured word must still be capitalised in the original —
+        # that's what separates a name from "I'm trying".
+        m = re.search(pattern, text, re.IGNORECASE)
+        if m:
+            candidate = m.group(1).strip()
+            if not candidate[:1].isupper():
+                continue
+            if candidate.lower() in stop:
+                continue
+            return candidate
+    return None
+
+
+def update_profile_from_message(text: str) -> dict:
+    """Pick up anything the participant volunteers. Never asks, never guesses."""
+    found = {}
+    name = detect_first_name(text)
+    role = detect_role(text)
+    specialty = detect_specialty(text)
+    current = load_profile()
+    if name and not current.get("first_name"):
+        found["first_name"] = name
+    if role and not current.get("role"):
+        found["role"] = role
+    if specialty and not current.get("specialty"):
+        found["specialty"] = specialty
+    if found:
+        save_profile(**found)
+        app.logger.info(f"[profile] learned: {', '.join(found.keys())}")
+    return found
+
+
+def profile_guidance() -> str:
+    """Tell the model what it knows, and what it may ask for next."""
+    prof = load_profile()
+    known = [f"{k.replace('_', ' ')}: {prof[k]}"
+             for k in PROFILE_FIELDS if prof.get(k)]
+    asked = set((prof.get("asked") or "").split(","))
+    missing = [k for k in PROFILE_FIELDS if not prof.get(k) and k not in asked]
+
+    lines = ["\n\n---\nWHAT YOU KNOW ABOUT THIS PARTICIPANT"]
+    if known:
+        lines.append("  " + "; ".join(known))
+        lines.append("  Use this. Address them by first name occasionally — not "
+                     "every message. Write for their role and specialty "
+                     "specifically. Never ask again for anything listed here.")
+    else:
+        lines.append("  Nothing yet.")
+
+    if missing:
+        nice = {"first_name": "their first name", "role": "their leadership role",
+                "specialty": "their specialty"}
+        lines.append(
+            "  Not yet known: " + ", ".join(nice[m] for m in missing) + ". "
+            "You may ask for ONE of these, as a short closing question AFTER a "
+            "substantive answer — never as a gate, never before helping, and "
+            "never when they have asked for a document or a revision. At most "
+            "one such question per conversation."
+        )
+
+    lines.append(
+        "  NEVER ask for, and never record, their institution, hospital, "
+        "employer, city, surname, or anything else that would identify them or "
+        "their organisation. If they volunteer such detail, use it in the reply "
+        "if helpful but do not treat it as something to collect. Keep what you "
+        "hold to first name, role and specialty."
+    )
+    return "\n".join(lines) + "\n"
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -6182,12 +6452,12 @@ def chat():
 
     # Combine user text with any attached-document context. Images are added
     # separately as a content block when building the current-turn message below.
-    # Remember a specialty as soon as it's mentioned, so it's used from here on
-    # and they're never asked again.
-    found_specialty = detect_specialty(user_input)
-    if found_specialty and not session.get("specialty"):
-        session["specialty"] = found_specialty
-        app.logger.info(f"[specialty] noted: {found_specialty}")
+    # Pick up first name, role and specialty whenever they're volunteered.
+    # Stored durably, so a returning participant isn't asked twice.
+    try:
+        update_profile_from_message(user_input)
+    except Exception as e:
+        app.logger.error(f"[profile] update failed: {e}")
 
     full_user_content = user_input + attachment_context
 
@@ -6571,13 +6841,13 @@ def chat():
             + voice_guard
             + document_guard
             + contact_guard
-            + specialty_guidance()
+            + profile_guidance()
             + participant_materials_block()
         )
     else:
         composed_prompt = (
             base_prompt + lessons_block + scope_guard + voice_guard
-            + document_guard + contact_guard + specialty_guidance()
+            + document_guard + contact_guard + profile_guidance()
             + participant_materials_block()
         )
 
@@ -6825,11 +7095,26 @@ def chat():
     assistant_text = assistant_text.strip()
 
     messages.append({"role": "assistant", "content": assistant_text})
-    # Note when the advisor has asked about specialty, so it asks only once
-    if not session.get("specialty") and not session.get("specialty_asked"):
-        if re.search(r"(what|which)[^.?]{0,60}(specialty|speciality|field|"
-                     r"area of medicine|kind of medicine)", assistant_text, re.I):
-            session["specialty_asked"] = True
+    # Note which profile field the advisor just asked about, so it asks once
+    try:
+        prof_now = load_profile()
+        asked = set(x for x in (prof_now.get("asked") or "").split(",") if x)
+        probes = [
+            ("specialty", r"(what|which)[^.?]{0,60}(specialty|speciality|field|"
+                          r"area of medicine|kind of medicine)"),
+            ("role", r"(what|which)[^.?]{0,60}(role|title|position|"
+                     r"where do you sit|hat do you wear)"),
+            ("first_name", r"(what|may i ask)[^.?]{0,40}(your name|"
+                           r"should i call you|do you go by)"),
+        ]
+        for field, pattern in probes:
+            if field not in asked and not prof_now.get(field):
+                if re.search(pattern, assistant_text, re.I):
+                    asked.add(field)
+        if asked and ",".join(sorted(asked)) != (prof_now.get("asked") or ""):
+            save_profile(asked=",".join(sorted(asked)))
+    except Exception as e:
+        app.logger.error(f"[profile] ask tracking failed: {e}")
 
     append_history("assistant", assistant_text)
     session["messages"] = _fit_history(messages)   # cookie fallback only
@@ -7241,6 +7526,25 @@ def advisor_placeholder_webm():
 
 def materials_enabled() -> bool:
     return bool(load_settings().get("allow_materials"))
+
+
+@app.route("/profile", methods=["GET"])
+@paywall.paywall_required
+@login_required
+def profile_view():
+    """What the advisor remembers about this participant."""
+    prof = load_profile()
+    return jsonify({"ok": True, "profile": {
+        k: prof.get(k) for k in PROFILE_FIELDS if prof.get(k)}})
+
+
+@app.route("/profile/forget", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def profile_forget():
+    if forget_profile():
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Could not clear it."}), 400
 
 
 @app.route("/materials", methods=["GET"])
