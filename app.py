@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-d"
-APP_BUILD_NOTES = "one avatar not many; autospeak off by default"
+APP_VERSION = "2026-09-02-f"
+APP_BUILD_NOTES = "podcast RSS feed ingestion"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9392,6 +9392,28 @@ input[type="file"], input[type="text"] {
       <button type="submit" class="btn">Fetch & Embed</button>
     </form>
   </div>
+
+  <div class="section">
+    <h2>Add Knowledge from Text</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Paste content directly — a podcast transcript, show notes, an email, a
+      passage from a book. Use this when a page won't give up its text, which
+      is normal for podcast players, video sites and most social platforms.
+    </p>
+    <form method="POST" action="/admin/upload-text">
+      <input type="text" name="text_title" placeholder="Title (optional)"
+             style="width: 100%; padding: 0.5rem; margin-bottom: 0.6rem;
+                    border: 1px solid var(--line); border-radius: 2px;
+                    font-family: inherit;" />
+      <textarea name="text_body" required
+                placeholder="Paste the transcript or text here…"
+                style="width: 100%; min-height: 150px; padding: 0.6rem;
+                       border: 1px solid var(--line); border-radius: 2px;
+                       font-family: inherit; font-size: 0.9rem;
+                       line-height: 1.5; resize: vertical;"></textarea>
+      <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
+    </form>
+  </div>
   {% endif %}
 
 </div>
@@ -9901,6 +9923,174 @@ def admin_upload_folder():
     return redirect(url_for("admin_dashboard"))
 
 
+@app.route("/admin/upload-text", methods=["POST"])
+@admin_required
+def admin_upload_text():
+    """Paste content straight in — transcripts, show notes, anything a
+    JavaScript page won't hand over."""
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot add text: RAG not fully configured.")
+        return redirect(url_for("admin_dashboard"))
+
+    title = (request.form.get("text_title") or "").strip()
+    body = (request.form.get("text_body") or "").strip()
+    if len(body) < 100:
+        flash("Paste a bit more text than that — at least a paragraph.")
+        return redirect(url_for("admin_dashboard"))
+    if not title:
+        title = body.split("\n", 1)[0][:70].strip() or "Pasted text"
+
+    dup = db.find_duplicate_document(title=title)
+    if dup:
+        flash(f"⚠ '{title}' already exists in the knowledge base. Use a "
+              f"different title or delete the existing entry first.")
+        return redirect(url_for("admin_dashboard"))
+
+    try:
+        chunks = emb.chunk_text(body)
+        if not chunks:
+            flash("That text produced no chunks.")
+            return redirect(url_for("admin_dashboard"))
+        vectors = emb.embed_batch(chunks)
+        doc_id = db.insert_document(title, "pasted text", list(zip(chunks, vectors)))
+        flash(f"✓ Added '{title}' — {len(chunks)} chunks embedded (doc #{doc_id}).")
+    except Exception as e:
+        app.logger.error(f"[text] ingest failed: {e}")
+        flash(f"Could not add that text: {str(e)[:160]}")
+    return redirect(url_for("admin_dashboard"))
+
+
+def fetch_podcast_feed(url: str):
+    """Episodes from a podcast RSS feed.
+
+    A podcast's Spotify or Apple page is rendered in the browser and carries
+    almost no text, but the underlying RSS feed holds every episode's title and
+    full show notes as plain XML. That's the version worth embedding.
+    """
+    import urllib.request as _url
+    import html as _html
+    import xml.etree.ElementTree as ET
+
+    req = _url.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (compatible; J3PAdvisor/1.0)",
+        "Accept": "application/rss+xml, application/xml, text/xml, */*",
+    })
+    with _url.urlopen(req, timeout=25) as resp:
+        raw = resp.read(8_000_000)
+
+    root = ET.fromstring(raw)
+    channel = root.find("channel")
+    if channel is None:
+        return None, []
+
+    def text_of(parent, *names):
+        for name in names:
+            el = parent.find(name)
+            if el is not None and (el.text or "").strip():
+                return el.text.strip()
+            # namespaced (itunes:summary and friends)
+            for child in parent:
+                if child.tag.split("}")[-1] == name.split(":")[-1]:
+                    if (child.text or "").strip():
+                        return child.text.strip()
+        return ""
+
+    def clean(html_text: str) -> str:
+        no_tags = re.sub(r"<[^>]+>", " ", html_text or "")
+        return re.sub(r"\s+", " ", _html.unescape(no_tags)).strip()
+
+    show_title = text_of(channel, "title") or "Podcast"
+    show_desc = clean(text_of(channel, "description", "itunes:summary"))
+
+    episodes = []
+    for item in channel.findall("item"):
+        ep_title = text_of(item, "title") or "Untitled episode"
+        body = clean(text_of(item, "description", "itunes:summary", "content:encoded"))
+        when = text_of(item, "pubDate")[:16]
+        if len(body) < 40:
+            continue
+        episodes.append({"title": ep_title, "body": body, "when": when})
+
+    return {"title": show_title, "description": show_desc}, episodes
+
+
+def looks_like_feed(url: str, probe=True) -> bool:
+    """A feed either declares itself in the URL or answers as XML."""
+    low = url.lower()
+    if any(t in low for t in ("/rss", "rss.xml", "feed.xml", "/feed", ".rss",
+                              "feeds.", "podcast.xml", "?format=rss")):
+        return True
+    if not probe:
+        return False
+    try:
+        import urllib.request as _url
+        req = _url.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; J3PAdvisor/1.0)"})
+        with _url.urlopen(req, timeout=12) as resp:
+            ctype = (resp.headers.get("Content-Type") or "").lower()
+            head = resp.read(400).decode("utf-8", "ignore").lstrip()
+        return ("xml" in ctype) or head.startswith("<?xml") or "<rss" in head[:200]
+    except Exception:
+        return False
+
+
+def fetch_url_metadata(url: str):
+    """Title and description from a page's metadata.
+
+    Pages built in JavaScript — podcast players, most social sites — serve no
+    article text, so the main extractor finds nothing. Their metadata usually
+    does carry a real description, which is worth having.
+    """
+    import urllib.request as _url
+    import html as _html
+
+    req = _url.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (compatible; J3PAdvisor/1.0)",
+        "Accept": "text/html,application/xhtml+xml",
+    })
+    with _url.urlopen(req, timeout=20) as resp:
+        raw = resp.read(600000).decode("utf-8", "ignore")
+
+    def meta(*names):
+        for name in names:
+            for pattern in (
+                rf'<meta[^>]+property=["\']{name}["\'][^>]+content=["\']([^"\']+)',
+                rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']{name}["\']',
+                rf'<meta[^>]+name=["\']{name}["\'][^>]+content=["\']([^"\']+)',
+                rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+name=["\']{name}["\']',
+            ):
+                m = re.search(pattern, raw, re.IGNORECASE)
+                if m:
+                    return _html.unescape(m.group(1)).strip()
+        return ""
+
+    title = meta("og:title", "twitter:title") or ""
+    if not title:
+        m = re.search(r"<title[^>]*>(.*?)</title>", raw, re.IGNORECASE | re.DOTALL)
+        title = _html.unescape(re.sub(r"\s+", " ", m.group(1))).strip() if m else ""
+
+    desc = meta("og:description", "twitter:description", "description") or ""
+
+    # JSON-LD often carries a much fuller description on media pages
+    for m in re.finditer(
+            r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+            raw, re.IGNORECASE | re.DOTALL):
+        try:
+            import json as _j
+            data = _j.loads(m.group(1))
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                for key in ("description", "abstract", "articleBody"):
+                    val = item.get(key)
+                    if isinstance(val, str) and len(val) > len(desc):
+                        desc = val.strip()
+        except Exception:
+            continue
+
+    return title, desc
+
+
 @app.route("/admin/upload-url", methods=["POST"])
 @admin_required
 def admin_upload_url():
@@ -9927,6 +10117,37 @@ def admin_upload_url():
         )
         return redirect(url_for("admin_dashboard"))
 
+    # A podcast or blog feed carries the real text; handle it first.
+    if looks_like_feed(url):
+        try:
+            show, episodes = fetch_podcast_feed(url)
+        except Exception as e:
+            app.logger.error(f"[feed] parse failed: {e}")
+            show, episodes = None, []
+        if show and episodes:
+            added, skipped = 0, 0
+            for ep in episodes[:60]:
+                ep_title = f"{show['title']} — {ep['title']}"[:200]
+                if db.find_duplicate_document(title=ep_title):
+                    skipped += 1
+                    continue
+                try:
+                    body = f"{ep['title']}\n{ep.get('when','')}\n\n{ep['body']}"
+                    chunks = emb.chunk_text(body)
+                    if not chunks:
+                        continue
+                    vectors = emb.embed_batch(chunks)
+                    db.insert_document(ep_title, url, list(zip(chunks, vectors)))
+                    added += 1
+                except Exception as e:
+                    app.logger.error(f"[feed] episode failed: {e}")
+            note = f"✓ Ingested {added} episode{'s' if added != 1 else ''} from "
+            note += f"“{show['title']}”"
+            if skipped:
+                note += f"; {skipped} already in the knowledge base"
+            flash(note + ".")
+            return redirect(url_for("admin_dashboard"))
+
     try:
         extracted_title, text = emb.fetch_url_content(url)
         title = custom_title or extracted_title or url
@@ -9944,8 +10165,26 @@ def admin_upload_url():
             return redirect(url_for("admin_dashboard"))
 
         if not text.strip():
-            flash("No text could be extracted from this URL.")
-            return redirect(url_for("admin_dashboard"))
+            # The page is probably rendered in the browser rather than served
+            # as HTML. Its metadata may still hold a usable description.
+            meta_title, meta_desc = "", ""
+            try:
+                meta_title, meta_desc = fetch_url_metadata(url)
+            except Exception as e:
+                app.logger.error(f"[url] metadata fallback failed: {e}")
+
+            if len(meta_desc) >= 120:
+                text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
+                title = custom_title or meta_title or title
+                flash("Note: this page had no article text, so only its summary "
+                      "was captured. For a podcast or video, paste the "
+                      "transcript or show notes below for the full content.")
+            else:
+                flash("Couldn't get any text from that page. Pages built in "
+                      "JavaScript — podcast players, most social sites — don't "
+                      "serve readable text. Use \u201cAdd knowledge from text\u201d "
+                      "below and paste the transcript or show notes instead.")
+                return redirect(url_for("admin_dashboard"))
 
         chunks = emb.chunk_text(text)
         if not chunks:
