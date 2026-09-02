@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-01-b"
-APP_BUILD_NOTES = "remembered participant profile: name, role, specialty"
+APP_VERSION = "2026-09-01-c"
+APP_BUILD_NOTES = "end-of-session follow-up plan"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1831,6 +1831,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .share-menu a:hover, .share-menu button:hover { background: var(--paper); color: var(--navy); }
     .share-menu svg { width: 16px; height: 16px; flex-shrink: 0; color: var(--muted); }
 
+    /* End-of-session offer of a follow-up plan */
+    .plan-offer {
+      display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+      margin-top: 0.8rem; padding: 0.7rem 0.85rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-left: 3px solid var(--gold); border-radius: 3px;
+      font-size: 0.85rem; color: var(--navy);
+      animation: nudge-in 0.35s ease;
+    }
+    .plan-offer span { flex: 1 1 240px; }
+    .plan-offer button {
+      background: var(--navy); color: var(--gold); border: 1px solid var(--navy);
+      border-radius: 2px; padding: 0.45rem 0.8rem; cursor: pointer;
+      font-family: inherit; font-size: 0.66rem; letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+    .plan-offer button.secondary {
+      background: transparent; color: var(--muted); border-color: var(--line);
+    }
+    .plan-offer button:hover { background: var(--gold); color: var(--navy); }
+    .plan-offer button:disabled { opacity: 0.55; cursor: not-allowed; }
+
     /* Gentle nudge to rate the last reply when a session looks finished */
     .rate-nudge {
       display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap;
@@ -3286,6 +3308,64 @@ INDEX_HTML = r"""<!DOCTYPE html>
       chatWrap.scrollTop = chatWrap.scrollHeight;
     }
 
+    // ---------------------------------------------------------------
+    // End-of-session follow-up plan
+    // ---------------------------------------------------------------
+    // Offered on the same signals as the rating nudge: the conversation has
+    // gone quiet, they've signed off, or they're starting fresh. Offered once.
+    let planOffered = false;
+
+    function showPlanOffer() {
+      if (planOffered) return;
+      const msgs = Array.from(document.querySelectorAll(".msg.assistant"));
+      const last = msgs[msgs.length - 1];
+      if (!last || last.querySelector(".plan-offer")) return;
+      if (last.querySelector(".safety-reply")) return;   // never after a crisis reply
+      // Needs enough of a conversation to be worth planning from
+      if (document.querySelectorAll(".msg.user").length < 2) return;
+      planOffered = true;
+
+      const bar = document.createElement("div");
+      bar.className = "plan-offer";
+      const text = document.createElement("span");
+      text.textContent = "Before you go — want a follow-up plan? "
+                       + "What you said you'd do, by when.";
+      bar.appendChild(text);
+
+      const yes = document.createElement("button");
+      yes.type = "button";
+      yes.textContent = "Build my plan";
+      bar.appendChild(yes);
+
+      const no = document.createElement("button");
+      no.type = "button";
+      no.className = "secondary";
+      no.textContent = "No thanks";
+      no.addEventListener("click", () => bar.remove());
+      bar.appendChild(no);
+
+      yes.addEventListener("click", async () => {
+        yes.disabled = true;
+        no.disabled = true;
+        text.textContent = "Building your plan\u2026";
+        try {
+          const resp = await fetch("/plan/create", { method: "POST" });
+          const data = await resp.json();
+          if (!data.ok) throw new Error(data.error || "Could not build it");
+          bar.remove();
+          // Render as a normal reply so SAVE, COPY, SHARE and SPEAK all work
+          addMessage(data.plan, "assistant", true, null, null);
+        } catch (err) {
+          text.textContent = String(err.message || err);
+          no.disabled = false;
+          no.textContent = "Close";
+        }
+      });
+
+      last.appendChild(bar);
+      chatWrap.scrollTop = chatWrap.scrollHeight;
+    }
+
     function clearRatingNudge() {
       document.querySelectorAll(".rate-nudge").forEach(n => n.remove());
       document.querySelectorAll(".feedback.nudged").forEach(f => f.classList.remove("nudged"));
@@ -3293,7 +3373,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     function armIdleNudge() {
       if (idleNudgeTimer) clearTimeout(idleNudgeTimer);
-      idleNudgeTimer = setTimeout(() => showRatingNudge("idle"), IDLE_NUDGE_MS);
+      idleNudgeTimer = setTimeout(() => {
+        showPlanOffer();
+        showRatingNudge("idle");
+      }, IDLE_NUDGE_MS);
     }
 
     // "thanks, that's all" and similar — a session ending politely
@@ -4570,7 +4653,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // deliverable, offer a download and let the user decide.
           setAvatarResponding(msgDiv);
           clearRatingNudge();
-          if (wasFarewell) setTimeout(() => showRatingNudge("farewell"), 900);
+          if (wasFarewell) setTimeout(() => {
+            showPlanOffer();
+            showRatingNudge("farewell");
+          }, 900);
           else armIdleNudge();
           const docs = data.documents || [];
           if (docs.length > 1 && data.separate_files) {
@@ -4598,6 +4684,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Showing the nudge and then clearing the chat would be pointless, so the
       // first click surfaces it and the second proceeds.
       if (!resetArmed && lastUnratedReply()) {
+        showPlanOffer();
         showRatingNudge("farewell");
         resetArmed = true;
         setTimeout(() => { resetArmed = false; }, 12000);
@@ -5853,6 +5940,123 @@ def profile_guidance() -> str:
     return "\n".join(lines) + "\n"
 
 
+# ---------------------------------------------------------------------------
+# Follow-up plans
+# ---------------------------------------------------------------------------
+# At the end of a session the participant can ask for an accountability plan:
+# what they said they'd do, by when, and what to watch for. It's built from
+# the conversation, saved against their profile, and surfaced at the start of
+# the next session so the advisor can follow up rather than start cold.
+
+PLAN_PROMPT = (
+    "Build a short accountability plan from this conversation.\n\n"
+    "Rules:\n"
+    "- Only include commitments THEY made or clearly accepted. Do not invent "
+    "actions they never agreed to, and do not pad the list.\n"
+    "- If they committed to nothing concrete, say so plainly in one line and "
+    "suggest at most two things they could commit to. Do not fabricate a plan.\n"
+    "- Use their own words for what they're doing where you can.\n"
+    "- Give each item a realistic timeframe. If they named one, use theirs; "
+    "otherwise suggest one and mark it as a suggestion.\n"
+    "- End with one line on the single thing most likely to derail this, drawn "
+    "from what they actually told you.\n\n"
+    "Format as markdown with a '# Follow-up Plan' heading, then a short "
+    "'## What you're doing' list, then '## Watch for'. Keep the whole thing "
+    "under 350 words. No preamble, no closing pleasantries."
+)
+
+
+def _plans_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_plans (
+                id          BIGSERIAL PRIMARY KEY,
+                token       TEXT NOT NULL,
+                content     TEXT NOT NULL,
+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""CREATE INDEX IF NOT EXISTS participant_plans_token
+                       ON participant_plans (token)""")
+    conn.commit()
+
+
+def save_plan(content: str) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _plans_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO participant_plans (token, content)
+                           VALUES (%s, %s)""",
+                        (participant_token(), content[:20000]))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[plans] save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def list_plans(limit=10):
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _plans_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""SELECT id, content, created_at FROM participant_plans
+                           WHERE token = %s ORDER BY id DESC LIMIT %s""",
+                        (participant_token(), limit))
+            for row in cur.fetchall():
+                out.append({"id": row[0], "content": row[1],
+                            "when": _fmt_ts(row[2])})
+    except Exception as e:
+        app.logger.error(f"[plans] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def delete_plan(plan_id: int) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _plans_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""DELETE FROM participant_plans
+                           WHERE id = %s AND token = %s""",
+                        (plan_id, participant_token()))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[plans] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def open_commitments_block() -> str:
+    """The most recent plan, so the advisor can follow up next session."""
+    plans = list_plans(limit=1)
+    if not plans:
+        return ""
+    plan = plans[0]
+    return (
+        "\n\n---\n"
+        f"COMMITMENTS FROM THEIR LAST SESSION ({plan['when']}) — they asked for "
+        "this plan themselves. Early in this conversation, ask how one of these "
+        "went, naming it specifically. Ask once, briefly, and then get on with "
+        "whatever they've come with; do not work through the list or nag. If "
+        "they say it slipped, treat that as information, not failure.\n\n"
+        + plan["content"][:4000] + "\n"
+    )
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -6842,13 +7046,14 @@ def chat():
             + document_guard
             + contact_guard
             + profile_guidance()
+            + open_commitments_block()
             + participant_materials_block()
         )
     else:
         composed_prompt = (
             base_prompt + lessons_block + scope_guard + voice_guard
             + document_guard + contact_guard + profile_guidance()
-            + participant_materials_block()
+            + open_commitments_block() + participant_materials_block()
         )
 
     try:
@@ -7526,6 +7731,84 @@ def advisor_placeholder_webm():
 
 def materials_enabled() -> bool:
     return bool(load_settings().get("allow_materials"))
+
+
+def scrub_internal_emails(text: str) -> str:
+    """Point any internal address at client services.
+
+    The full paragraph-level scrubber lives inside chat(); a plan is generated
+    from an already-scrubbed transcript, so this only has to catch an address
+    the model might reconstruct.
+    """
+    if not text:
+        return text
+    internal = ("j3p.health", "j3phealth.com")
+    contact = CONFIG["contact_email"]
+
+    def _swap(m):
+        addr = m.group(0)
+        if addr.lower() == contact.lower():
+            return addr
+        domain = addr.split("@")[-1].lower()
+        return contact if domain in internal else addr
+
+    return re.sub(r"[\w.+-]+@[\w.-]+\.\w+", _swap, text)
+
+
+@app.route("/plan/create", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def plan_create():
+    """Build an accountability plan from this conversation."""
+    history = load_history()
+    if len(history) < 2:
+        return jsonify({"ok": False,
+                        "error": "There's not enough of a conversation yet to "
+                                 "build a plan from."}), 400
+
+    transcript = []
+    for turn in history[-24:]:
+        who = "Them" if turn.get("role") == "user" else "You"
+        transcript.append(f"{who}: {(turn.get('content') or '')[:2000]}")
+
+    try:
+        resp = client.messages.create(
+            model=CONFIG["model"],
+            max_tokens=1200,
+            system=[{"type": "text", "text": PLAN_PROMPT}],
+            messages=[{"role": "user",
+                       "content": "Conversation:\n\n" + "\n\n".join(transcript)}],
+        )
+        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+        plan = "\n".join(parts).strip()
+    except Exception as e:
+        app.logger.error(f"[plans] generation failed: {e}")
+        return jsonify({"ok": False,
+                        "error": "Couldn't build the plan just now. Try again "
+                                 "in a moment."}), 502
+
+    if not plan:
+        return jsonify({"ok": False, "error": "The plan came back empty."}), 502
+
+    plan = scrub_internal_emails(plan)
+    saved = save_plan(plan)
+    return jsonify({"ok": True, "plan": plan, "saved": saved})
+
+
+@app.route("/plan/list", methods=["GET"])
+@paywall.paywall_required
+@login_required
+def plan_list():
+    return jsonify({"ok": True, "plans": list_plans()})
+
+
+@app.route("/plan/delete/<int:plan_id>", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def plan_delete(plan_id):
+    if delete_plan(plan_id):
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "Could not remove that plan."}), 400
 
 
 @app.route("/profile", methods=["GET"])
