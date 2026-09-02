@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-b"
-APP_BUILD_NOTES = "animated looping portrait as the avatar idle state"
+APP_VERSION = "2026-09-02-c"
+APP_BUILD_NOTES = "avatar toggle relabelled to match what it controls"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -8652,10 +8652,12 @@ input[type="file"], input[type="text"] {
                style="margin-top: 0.2rem; width: 17px; height: 17px;
                       accent-color: var(--navy); cursor: pointer;" />
         <span>
-          <strong>Show the advisor photo beside replies</strong><br />
+          <strong>Show the advisor avatar</strong><br />
           <span class="muted">
-            When off, replies appear without the photo. Turn it off if you'd
-            rather participants not read the advisor as a specific person.
+            Controls the whole avatar: the animated portrait that sits beside
+            the chat and the small photo on each reply. When off, participants
+            see the advisor with no photo at all — useful if you'd rather they
+            didn't read it as a specific person.
           </span>
         </span>
       </label>
@@ -9722,7 +9724,7 @@ def admin_settings():
 
     labels = {
         "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
-        "show_avatar": ("Advisor photo", "shown", "hidden"),
+        "show_avatar": ("Advisor avatar", "shown", "hidden"),
         "allow_materials": ("Participant materials", "on", "off"),
         "auto_learning": ("Continuous learning", "on", "off"),
         "require_login": ("Sign-in", "required", "not required"),
