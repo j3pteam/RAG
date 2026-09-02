@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-f"
-APP_BUILD_NOTES = "podcast RSS feed ingestion"
+APP_VERSION = "2026-09-02-g"
+APP_BUILD_NOTES = "pre-call briefing when a participant books time"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2393,6 +2393,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <h2 id="sched-title">{{ release_heading|safe }}</h2>
         <div id="sched-body" class="ack-text">
           {{ release_body|safe }}
+          <p style="margin: 0.9rem 0 0;">
+            <strong>So your time is well spent:</strong> when you continue, a
+            short summary of this conversation is shared with the advisor you
+            are booking, so they can prepare and you needn't start over.
+          </p>
         </div>
         <label class="ack-check" for="sched-checkbox">
           <input type="checkbox" id="sched-checkbox" />
@@ -3286,6 +3291,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
       continueBtn.addEventListener("click", () => {
         if (!checkbox.checked || !pendingUrl) return;
         const url = pendingUrl;
+        // Brief the advisor on what this person has been working through.
+        // Fire-and-forget: the calendar must open regardless.
+        try {
+          fetch("/briefing/schedule", { method: "POST", keepalive: true })
+            .catch(() => {});
+        } catch (e) { /* never block the booking */ }
         closeGate();
         // A synthetic anchor click is the reliable way to open a new tab here:
         // window.open() returns null whenever "noopener" is set — even on
@@ -6306,6 +6317,143 @@ def open_commitments_block() -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# Pre-session briefings
+# ---------------------------------------------------------------------------
+# When a participant books time, the advisor gets a short brief on what the
+# participant has been working through — so the call starts where the
+# conversation left off rather than from scratch.
+#
+# The brief is always stored in the admin panel. It is emailed as well when a
+# mail transport is configured; without one the panel is the delivery route.
+
+BRIEFING_PROMPT = (
+    "Write a pre-call brief for an advisor about to meet this person. The "
+    "advisor has not seen this conversation.\n\n"
+    "Rules:\n"
+    "- Lead with the single thing they most want help with, in one sentence.\n"
+    "- Then the specifics that matter: what they've tried, who else is "
+    "involved (by role, not name), any dates or constraints they mentioned.\n"
+    "- Note anything they seemed hesitant or guarded about — useful for the "
+    "advisor to handle carefully.\n"
+    "- End with two or three questions the advisor could open with.\n"
+    "- Only what they actually said. No speculation about motives, no "
+    "diagnosis, no advice to the advisor about what to recommend.\n"
+    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
+)
+
+
+def _briefings_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS session_briefings (
+                id            BIGSERIAL PRIMARY KEY,
+                advisor_slug  TEXT,
+                advisor_name  TEXT,
+                participant   TEXT,
+                summary       TEXT NOT NULL,
+                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _briefings_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO session_briefings
+                    (advisor_slug, advisor_name, participant, summary, emailed)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (advisor_slug, advisor_name, participant, summary[:12000], emailed))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[briefing] save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def list_briefings(limit=25):
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _briefings_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, advisor_name, participant, summary, emailed, created_at
+                FROM session_briefings ORDER BY id DESC LIMIT %s
+            """, (limit,))
+            for row in cur.fetchall():
+                out.append({"id": row[0], "advisor": row[1] or "—",
+                            "participant": row[2] or "—", "summary": row[3],
+                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
+    except Exception as e:
+        app.logger.error(f"[briefing] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def participant_label() -> str:
+    """How the participant appears on the brief — no more than they've given."""
+    prof = load_profile()
+    bits = [prof.get(k) for k in ("first_name", "role", "specialty") if prof.get(k)]
+    email = session.get("user_email", "")
+    if email:
+        bits.append(email)
+    return " · ".join(bits) if bits else "Anonymous participant"
+
+
+def build_briefing() -> str:
+    """Summarise the conversation for the advisor. Empty string if too thin."""
+    history = load_history()
+    if len(history) < 2:
+        return ""
+    lines = []
+    for turn in history[-30:]:
+        who = "Participant" if turn.get("role") == "user" else "Advisor (AI)"
+        lines.append(f"{who}: {(turn.get('content') or '')[:1800]}")
+    try:
+        resp = client.messages.create(
+            model=CONFIG["model"],
+            max_tokens=900,
+            system=[{"type": "text", "text": BRIEFING_PROMPT}],
+            messages=[{"role": "user",
+                       "content": "Conversation:\n\n" + "\n\n".join(lines)}],
+        )
+        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+        return scrub_internal_emails("\n".join(parts).strip())
+    except Exception as e:
+        app.logger.error(f"[briefing] generation failed: {e}")
+        return ""
+
+
+def email_briefing(advisor_name, participant, summary) -> bool:
+    if not mail_transport_configured():
+        return False
+    to_addr = os.environ.get("BRIEFING_EMAIL") or os.environ.get(
+        "SAFETY_ALERT_EMAIL") or CONFIG["contact_email"]
+    subject = f"Pre-call brief — {participant}"
+    body = (f"A participant has just booked time"
+            f"{' with ' + advisor_name if advisor_name and advisor_name != '—' else ''}.\n\n"
+            f"Participant: {participant}\n\n{summary}\n\n"
+            f"— Generated automatically from their session with the J3P Advisor.")
+    try:
+        return bool(send_email(to_addr, subject, body))
+    except Exception as e:
+        app.logger.error(f"[briefing] email failed: {e}")
+        return False
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -8015,6 +8163,27 @@ def scrub_internal_emails(text: str) -> str:
     return re.sub(r"[\w.+-]+@[\w.-]+\.\w+", _swap, text)
 
 
+@app.route("/briefing/schedule", methods=["POST"])
+@paywall.paywall_required
+@login_required
+def briefing_schedule():
+    """Called when a participant books time — brief the advisor."""
+    summary = build_briefing()
+    if not summary:
+        # Nothing worth sending; not an error the participant should see
+        return jsonify({"ok": True, "sent": False, "reason": "conversation too short"})
+
+    advisor = get_advisor(session.get("advisor_slug"))
+    advisor_name = advisor["name"] if advisor else ""
+    who = participant_label()
+
+    emailed = email_briefing(advisor_name, who, summary)
+    save_briefing(session.get("advisor_slug"), advisor_name, who, summary, emailed)
+    app.logger.info(f"[briefing] prepared for {advisor_name or 'the team'} "
+                    f"(emailed={emailed})")
+    return jsonify({"ok": True, "sent": True, "emailed": emailed})
+
+
 @app.route("/plan/create", methods=["POST"])
 @paywall.paywall_required
 @login_required
@@ -8958,6 +9127,53 @@ input[type="file"], input[type="text"] {
     </div>
   </div>
 
+  <h2 class="group-heading">Pre-Call Briefings</h2>
+
+  <div class="section">
+    <h2>Briefings</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      When a participant books time, a short brief on what they've been working
+      through is prepared for the advisor.
+      {% if mail_ready %}
+      It's emailed as well as listed here.
+      {% else %}
+      <strong>No email is configured</strong>, so briefs appear here only — set
+      <code>POSTMARK_SERVER_TOKEN</code> or <code>SMTP_HOST</code> to have them
+      sent automatically.
+      {% endif %}
+    </p>
+    {% if briefings %}
+    <table style="font-size: 0.85rem;">
+      <tr>
+        <th style="width: 15%;">When</th><th style="width: 18%;">Advisor</th>
+        <th style="width: 27%;">Participant</th><th>Brief</th>
+        <th style="width: 9%;">Emailed</th>
+      </tr>
+      {% for b in briefings %}
+      <tr>
+        <td class="muted" style="white-space: nowrap;">{{ b.when }}</td>
+        <td>{{ b.advisor }}</td>
+        <td class="muted">{{ b.participant }}</td>
+        <td>
+          <details>
+            <summary style="cursor: pointer; color: var(--muted);
+                            font-size: 0.78rem;">Read</summary>
+            <pre style="white-space: pre-wrap; font-size: 0.76rem;
+                        background: var(--paper); padding: 0.7rem;
+                        border-radius: 3px; margin: 0.5rem 0 0;
+                        font-family: inherit;">{{ b.summary }}</pre>
+          </details>
+        </td>
+        <td class="muted">{{ '✓' if b.emailed else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No briefings yet. One is prepared each time a participant
+      continues to scheduling.</p>
+    {% endif %}
+  </div>
+
   <h2 class="group-heading">Logs</h2>
 
   <div class="section">
@@ -9620,6 +9836,7 @@ def admin_dashboard():
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
+        briefings=list_briefings(),
         archived_runs=archived_run_count(),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
