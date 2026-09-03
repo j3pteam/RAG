@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-f"
-APP_BUILD_NOTES = "30-second idle prompt offering next steps or wrap-up"
+APP_VERSION = "2026-09-03-g"
+APP_BUILD_NOTES = "idle prompt at 50 seconds"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2001,7 +2001,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .presence.thinking .presence-ring { display: block; border: 2px solid var(--gold); }
     }
 
-    /* 30-second idle prompt: offers a next step or a clean finish */
+    /* 50-second idle prompt: offers a next step or a clean finish */
     .idle-prompt {
       margin-top: 0.8rem; padding: 0.75rem 0.9rem;
       background: var(--paper); border: 1px solid var(--line);
@@ -3531,12 +3531,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     // ---------------------------------------------------------------
-    // 30-second idle prompt
+    // 50-second idle prompt
     // ---------------------------------------------------------------
-    // Half a minute of silence usually means one of two things: they're not
+    // Fifty seconds of silence usually means one of two things: they're not
     // sure what to ask next, or they're finished. This offers both rather
     // than leaving them looking at an empty box.
-    const IDLE_PROMPT_MS = 30000;
+    const IDLE_PROMPT_MS = 50000;
     let idlePromptTimer = null;
     let idlePromptShown = false;
 
@@ -5169,7 +5169,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             }, 900);
           } else {
             armIdleNudge();       // 75s: ask for a rating
-            armIdlePrompt();      // 30s: offer a next step or a wrap-up
+            armIdlePrompt();      // 50s: offer a next step or a wrap-up
           }
           const docs = data.documents || [];
           if (docs.length > 1 && data.separate_files) {
