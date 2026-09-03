@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-i"
-APP_BUILD_NOTES = "copyable advisor links; tolerant of stray text"
+APP_VERSION = "2026-09-03-j"
+APP_BUILD_NOTES = "copy and share buttons on every advisor link"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9082,6 +9082,26 @@ input[type="file"], input[type="text"] {
   text-transform: uppercase; padding: 0.2rem 0.4rem;
 }
 .copy-link:hover { color: var(--navy); border-color: var(--gold); }
+.share-link {
+  flex: 0 0 auto; background: transparent; border: 1px solid var(--line);
+  border-radius: 2px; color: var(--muted); cursor: pointer;
+  font-family: inherit; font-size: 0.62rem; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 0.2rem 0.4rem;
+}
+.share-link:hover { color: var(--navy); border-color: var(--gold); }
+/* Small menu shown when the OS has no share sheet */
+.share-menu {
+  position: absolute; z-index: 600; background: #fff;
+  border: 1px solid var(--line); border-radius: 3px;
+  box-shadow: 0 8px 24px rgba(39,51,74,0.18); padding: 0.25rem;
+  min-width: 150px;
+}
+.share-menu button {
+  display: block; width: 100%; text-align: left; background: none;
+  border: none; cursor: pointer; font-family: inherit; font-size: 0.78rem;
+  color: var(--navy); padding: 0.45rem 0.6rem; border-radius: 2px;
+}
+.share-menu button:hover { background: var(--paper); }
 
 /* Knowledge Base table — keeps long source URLs from stretching the row */
 .kb-table { table-layout: fixed; width: 100%; }
@@ -9370,6 +9390,9 @@ input[type="file"], input[type="text"] {
                  class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
               <button type="button" class="copy-link"
                       data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
+              <button type="button" class="share-link"
+                      data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
+                      data-advisor="{{ adv.name }}">Share</button>
             </div>
           </div>
           {% endfor %}
@@ -10175,7 +10198,66 @@ input[type="file"], input[type="text"] {
           }
         });
 
-        // Copy an advisor link exactly, without the label beside it
+        // Share an advisor link. Uses the OS share sheet where there is one
+      // (phones, Safari); elsewhere offers email and text, which is what
+      // these links actually get sent by.
+      function closeShareMenus() {
+        document.querySelectorAll(".share-menu").forEach(m => m.remove());
+      }
+
+      document.addEventListener("click", async e => {
+        const btn = e.target.closest && e.target.closest(".share-link");
+        if (!btn) {
+          if (!(e.target.closest && e.target.closest(".share-menu"))) closeShareMenus();
+          return;
+        }
+        e.preventDefault();
+        closeShareMenus();
+
+        const url = btn.dataset.url || "";
+        const who = btn.dataset.advisor || "the J3P Advisor";
+        const subject = `Your session with ${who}`;
+        const body = `Here is your private link to a session with ${who}:\n\n${url}\n\n`
+                   + `It opens in a browser — nothing to install.`;
+
+        if (navigator.share) {
+          try {
+            await navigator.share({ title: subject, text: body, url: url });
+            return;
+          } catch (err) {
+            if (err && err.name === "AbortError") return;   // they cancelled
+          }
+        }
+
+        const menu = document.createElement("div");
+        menu.className = "share-menu";
+        const rect = btn.getBoundingClientRect();
+        menu.style.top = (window.scrollY + rect.bottom + 4) + "px";
+        menu.style.left = (window.scrollX + rect.left) + "px";
+
+        const options = [
+          ["Email", () => {
+            window.location.href = "mailto:?subject=" + encodeURIComponent(subject)
+                                 + "&body=" + encodeURIComponent(body);
+          }],
+          ["Text message", () => {
+            window.location.href = "sms:?&body=" + encodeURIComponent(body);
+          }],
+          ["Copy link", async () => {
+            try { await navigator.clipboard.writeText(url); } catch (e2) {}
+          }],
+        ];
+        options.forEach(([label, action]) => {
+          const item = document.createElement("button");
+          item.type = "button";
+          item.textContent = label;
+          item.addEventListener("click", () => { action(); closeShareMenus(); });
+          menu.appendChild(item);
+        });
+        document.body.appendChild(menu);
+      });
+
+      // Copy an advisor link exactly, without the label beside it
       document.addEventListener("click", async e => {
         const btn = e.target.closest && e.target.closest(".copy-link");
         if (!btn) return;
