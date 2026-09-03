@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-g"
-APP_BUILD_NOTES = "idle prompt at 50 seconds"
+APP_VERSION = "2026-09-03-h"
+APP_BUILD_NOTES = "name field sits with the avatar toggle"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9214,6 +9214,28 @@ input[type="file"], input[type="text"] {
         </span>
       </div>
 
+      <div style="margin-top: 1rem; padding-left: 1.6rem;">
+        <label for="avatar_name"
+               style="display: block; font-size: 0.85rem; margin-bottom: 0.35rem;">
+          <strong>Name shown with this photo</strong>
+        </label>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.8rem;">
+          Appears beneath the avatar on the main link. Leave blank to use
+          “{{ cfg.persona_name }}”. Advisors with their own profile always show
+          their own name. Start typing to pick an existing advisor.
+        </p>
+        <input type="text" id="avatar_name" name="avatar_name"
+               form="settings-form" list="advisor-name-options"
+               value="{{ settings.avatar_name or '' }}"
+               placeholder="e.g. Alan Friedman"
+               style="max-width: 340px; padding: 0.5rem;
+                      border: 1px solid var(--line); border-radius: 2px;
+                      font-family: inherit;" />
+        <datalist id="advisor-name-options">
+          {% for adv in advisors %}<option value="{{ adv.name }}"></option>{% endfor %}
+        </datalist>
+      </div>
+
     </form>
 
     <div style="margin-top: 1.4rem; padding-top: 1.1rem;
@@ -9240,27 +9262,7 @@ input[type="file"], input[type="text"] {
       {% endif %}
     </div>
 
-      <div style="margin-top: 1rem;">
-        <label for="avatar_name"
-               style="display: block; font-size: 0.85rem; margin-bottom: 0.35rem;">
-          <strong>Name shown with this photo</strong>
-        </label>
-        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.8rem;">
-          Appears beneath the avatar on the main link. Leave blank to use
-          “{{ cfg.persona_name }}”. Advisors with their own profile always show
-          their own name. Start typing to pick an existing advisor.
-        </p>
-        <input type="text" id="avatar_name" name="avatar_name"
-               form="settings-form" list="advisor-name-options"
-               value="{{ settings.avatar_name or '' }}"
-               placeholder="e.g. Alan Friedman"
-               style="max-width: 340px; padding: 0.5rem;
-                      border: 1px solid var(--line); border-radius: 2px;
-                      font-family: inherit;" />
-        <datalist id="advisor-name-options">
-          {% for adv in advisors %}<option value="{{ adv.name }}"></option>{% endfor %}
-        </datalist>
-      </div>
+
 
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
