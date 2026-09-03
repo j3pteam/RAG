@@ -32,7 +32,6 @@ import database as db
 import embeddings as emb
 import paywall
 import exports
-import exports
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
