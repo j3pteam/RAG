@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-j"
-APP_BUILD_NOTES = "copy and share buttons on every advisor link"
+APP_VERSION = "2026-09-03-l"
+APP_BUILD_NOTES = "photo, name, links and briefings grouped per advisor"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5949,6 +5949,16 @@ def slugify_advisor(name: str) -> str:
     return base[:40] or "advisor"
 
 
+def advisors_with_detail():
+    """Advisor profiles plus their own briefings, for the admin panel."""
+    out = []
+    for adv in list_advisors():
+        adv = dict(adv)
+        adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
+        out.append(adv)
+    return out
+
+
 def list_advisors():
     """All advisor profiles, alphabetical, without the photo bytes."""
     conn = _settings_db_conn()
@@ -6635,7 +6645,8 @@ def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
         conn.close()
 
 
-def list_briefings(limit=25):
+def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
+    """Briefings, optionally just one advisor's — or just the unassigned ones."""
     conn = _settings_db_conn()
     if not conn:
         return []
@@ -6643,10 +6654,24 @@ def list_briefings(limit=25):
     try:
         _briefings_ensure_table(conn)
         with conn.cursor() as cur:
-            cur.execute("""
-                SELECT id, advisor_name, participant, summary, emailed, created_at
-                FROM session_briefings ORDER BY id DESC LIMIT %s
-            """, (limit,))
+            if advisor_slug:
+                cur.execute("""
+                    SELECT id, advisor_name, participant, summary, emailed, created_at
+                    FROM session_briefings WHERE advisor_slug = %s
+                    ORDER BY id DESC LIMIT %s
+                """, (advisor_slug, limit))
+            elif unassigned_only:
+                cur.execute("""
+                    SELECT id, advisor_name, participant, summary, emailed, created_at
+                    FROM session_briefings
+                    WHERE advisor_slug IS NULL OR advisor_slug = ''
+                    ORDER BY id DESC LIMIT %s
+                """, (limit,))
+            else:
+                cur.execute("""
+                    SELECT id, advisor_name, participant, summary, emailed, created_at
+                    FROM session_briefings ORDER BY id DESC LIMIT %s
+                """, (limit,))
             for row in cur.fetchall():
                 out.append({"id": row[0], "advisor": row[1] or "—",
                             "participant": row[2] or "—", "summary": row[3],
@@ -9069,6 +9094,25 @@ input[type="file"], input[type="text"] {
 .flash { padding: 0.7rem 1rem; background: var(--gold); color: var(--navy); border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 .muted { color: #6B7280; font-size: 0.8rem; }
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
+.advisor-block {
+  border: 1px solid var(--line); border-radius: 4px;
+  padding: 1rem 1.1rem; margin-bottom: 1.1rem;
+}
+.advisor-head {
+  display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap;
+  padding-bottom: 0.85rem; border-bottom: 1px solid var(--line);
+}
+.advisor-links { padding-top: 0.85rem; }
+.advisor-links h3 {
+  margin: 0 0 0.7rem; font-size: 0.68rem; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+}
+.advisor-link-row { margin-bottom: 0.6rem; }
+.advisor-link-row:last-child { margin-bottom: 0; }
+.advisor-link-label {
+  font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+  margin-bottom: 0.15rem;
+}
 .adv-link {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   color: var(--navy); text-decoration: none;
@@ -9260,93 +9304,8 @@ input[type="file"], input[type="text"] {
         </span>
       </label>
 
-      <div style="margin-top: 0.9rem; padding-left: 1.6rem; display: flex;
-                  align-items: center; gap: 0.9rem; flex-wrap: wrap;">
-        <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt="Current advisor photo"
-             onerror="this.style.display='none'"
-             style="width: 54px; height: 54px; border-radius: 50%;
-                    object-fit: cover; border: 1.5px solid var(--gold);" />
-        <span class="muted" style="font-size: 0.8rem;">
-          {% if avatar_custom %}Uploaded photo{% else %}Bundled photo{% endif %}
-        </span>
-      </div>
-
-      <div style="margin-top: 1rem; padding-left: 1.6rem;">
-        <label for="avatar_name"
-               style="display: block; font-size: 0.85rem; margin-bottom: 0.35rem;">
-          <strong>Name shown with this photo</strong>
-        </label>
-        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.8rem;">
-          Appears beneath the avatar on the main link. Leave blank to use
-          “{{ cfg.persona_name }}”. Advisors with their own profile always show
-          their own name. Start typing to pick an existing advisor.
-        </p>
-        <input type="text" id="avatar_name" name="avatar_name"
-               form="settings-form" list="advisor-name-options"
-               value="{{ settings.avatar_name or '' }}"
-               placeholder="e.g. Alan Friedman"
-               style="max-width: 340px; padding: 0.5rem;
-                      border: 1px solid var(--line); border-radius: 2px;
-                      font-family: inherit;" />
-        <datalist id="advisor-name-options">
-          {% for adv in advisors %}<option value="{{ adv.name }}"></option>{% endfor %}
-        </datalist>
-      </div>
 
     </form>
-
-    <div style="margin-top: 1.4rem; padding-top: 1.1rem;
-                border-top: 1px dashed var(--line);">
-      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
-        <strong>Replace the advisor photo</strong>
-      </p>
-      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem; line-height: 1.55;">
-        JPG, PNG, WEBP or GIF, up to {{ avatar_max_mb }} MB. It's cropped to a
-        centred square and resized automatically, and stored in the database so
-        it survives redeploys.
-      </p>
-      <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
-            style="display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap;">
-        <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required />
-        <button type="submit" class="btn">Upload photo</button>
-      </form>
-      {% if avatar_custom %}
-      <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.7rem;">
-        <button type="submit" class="btn"
-                style="background: transparent; color: var(--rust);
-                       border-color: var(--rust);">Revert to bundled photo</button>
-      </form>
-      {% endif %}
-    </div>
-
-
-
-      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
-                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                    margin-top: 1.1rem; padding-top: 1.1rem;
-                    border-top: 1px dashed var(--line);">
-        <input type="checkbox" name="allow_materials" value="1" form="settings-form"
-               {% if settings.allow_materials %}checked{% endif %}
-               style="margin-top: 0.2rem; width: 17px; height: 17px;
-                      accent-color: var(--navy); cursor: pointer;" />
-        <span>
-          <strong>Let participants add their own documents &amp; writing</strong><br />
-          <span class="muted">
-            Adds a link under the chat box where participants can upload a CV,
-            a plan or an article, or paste their own writing. Their material is
-            private to them and never enters the shared knowledge base. When
-            off, the link disappears and existing material is left untouched
-            but unused.
-          </span>
-        </span>
-      </label>
-
-      <button type="submit" class="btn" form="settings-form"
-              style="margin-top: 1rem;">Save settings</button>
-
-
-
-
 
   </div>
 
@@ -9360,52 +9319,159 @@ input[type="file"], input[type="text"] {
       across all of them.
     </p>
 
+    <div class="advisor-block">
+      <div class="advisor-head">
+        <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
+             onerror="this.style.display='none'"
+             style="width: 48px; height: 48px; border-radius: 50%;
+                    object-fit: cover; border: 1.5px solid var(--gold);" />
+        <div style="flex: 1 1 auto; min-width: 0;">
+          <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
+          <span class="muted" style="font-size: 0.76rem;">
+            Default — used on the main link{% if avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
+          </span>
+        </div>
+      </div>
+
+      <div class="advisor-links">
+        <h3>Photo &amp; Name</h3>
+        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <input type="text" id="avatar_name" name="avatar_name" form="settings-form"
+                 value="{{ settings.avatar_name or '' }}"
+                 placeholder="{{ cfg.persona_name }}"
+                 style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+          <span class="muted" style="font-size: 0.74rem;">saves with Display Settings</span>
+        </div>
+        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
+              style="display: flex; gap: 0.5rem; align-items: center;
+                     flex-wrap: wrap; margin-top: 0.5rem;">
+          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required
+                 style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          <button type="submit" class="btn" style="font-size: 0.66rem;">Upload photo</button>
+        </form>
+        {% if avatar_custom %}
+        <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
+          <button type="submit" class="btn"
+                  style="background: transparent; color: var(--rust);
+                         border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
+        </form>
+        {% endif %}
+      </div>
+
+      <div class="advisor-links">
+        <h3>Scheduling Links</h3>
+        {% for path, label in [
+            ('/scheduling', 'Booking button always shown'),
+            ('/no-scheduling', 'Booking button always hidden'),
+            ('/', 'Follows the Display Settings toggle')] %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">{{ label }}</div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ path }}" target="_blank" class="adv-link">{{ base_url }}{{ path }}</a>
+            <button type="button" class="copy-link" data-url="{{ base_url }}{{ path }}">Copy</button>
+            <button type="button" class="share-link" data-url="{{ base_url }}{{ path }}"
+                    data-advisor="{{ settings.avatar_name or cfg.persona_name }}">Share</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
     {% if advisors %}
-    <table style="margin-bottom: 1.5rem;">
-      <tr><th style="width: 58px;"></th><th>Advisor</th><th>Links</th><th></th></tr>
-      {% for adv in advisors %}
-      <tr>
-        <td>
-          <img src="/a/{{ adv.slug }}/photo.jpg" alt=""
-               onerror="this.style.display='none'"
-               style="width: 44px; height: 44px; border-radius: 50%;
-                      object-fit: cover; border: 1.5px solid var(--gold);" />
-        </td>
-        <td>
-          <strong>{{ adv.name }}</strong><br />
+    {% for adv in advisors %}
+    <div class="advisor-block">
+      <div class="advisor-head">
+        <img src="/a/{{ adv.slug }}/photo.jpg" alt=""
+             onerror="this.style.display='none'"
+             style="width: 48px; height: 48px; border-radius: 50%;
+                    object-fit: cover; border: 1.5px solid var(--gold);" />
+        <div style="flex: 1 1 auto; min-width: 0;">
+          <strong style="font-size: 0.98rem;">{{ adv.name }}</strong><br />
           <span class="muted" style="font-size: 0.76rem;">
             {{ adv.slug }}{% if not adv.has_photo %} · no photo, using the default{% endif %}
           </span>
-        </td>
-        <td style="font-size: 0.78rem;">
-          {% for path, label in [
-              ('/scheduling', 'With booking button'),
-              ('/no-scheduling', 'Without booking button'),
-              ('', 'Follows the Display Settings default')] %}
-          <div style="margin-bottom: 0.5rem;">
-            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.06em;
-                                      text-transform: uppercase;">{{ label }}</div>
-            <div style="display: flex; align-items: center; gap: 0.4rem;">
-              <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
-                 class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
-              <button type="button" class="copy-link"
-                      data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
-              <button type="button" class="share-link"
-                      data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
-                      data-advisor="{{ adv.name }}">Share</button>
-            </div>
+        </div>
+        <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
+              style="display:inline;" data-doc-title="{{ adv.name }}">
+          <button type="submit" class="btn btn-danger">Delete</button>
+        </form>
+      </div>
+
+      <div class="advisor-links">
+        <h3>Photo &amp; Name</h3>
+        <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <input type="hidden" name="slug" value="{{ adv.slug }}" />
+          <input type="text" name="name" value="{{ adv.name }}" required
+                 style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
+                 style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
+        </form>
+        <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
+          The name appears beneath the photo in their sessions. Leave the file
+          blank to keep the current photo.
+        </p>
+      </div>
+
+      <div class="advisor-links">
+        <h3>Scheduling Links</h3>
+        {% for path, label in [
+            ('/scheduling', 'Booking button always shown'),
+            ('/no-scheduling', 'Booking button always hidden'),
+            ('', 'Follows the Display Settings toggle')] %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">{{ label }}</div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
+               class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
+            <button type="button" class="copy-link"
+                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
+            <button type="button" class="share-link"
+                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
+                    data-advisor="{{ adv.name }}">Share</button>
           </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="advisor-links">
+        <h3>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</h3>
+        {% if adv.briefings %}
+        <table style="font-size: 0.8rem;">
+          <tr><th style="width: 22%;">When</th><th>Participant</th>
+              <th style="width: 16%;">Brief</th><th style="width: 12%;">Emailed</th></tr>
+          {% for b in adv.briefings %}
+          <tr>
+            <td class="muted" style="white-space: nowrap;">{{ b.when }}</td>
+            <td class="muted">{{ b.participant }}</td>
+            <td>
+              <details>
+                <summary style="cursor: pointer; color: var(--muted);
+                                font-size: 0.76rem;">Read</summary>
+                <pre style="white-space: pre-wrap; font-size: 0.74rem;
+                            background: var(--paper); padding: 0.6rem;
+                            border-radius: 3px; margin: 0.4rem 0 0;
+                            font-family: inherit;">{{ b.summary }}</pre>
+              </details>
+            </td>
+            <td class="muted">{{ '✓' if b.emailed else '—' }}</td>
+          </tr>
           {% endfor %}
-        </td>
-        <td style="text-align: right;">
-          <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
-                style="display:inline;" data-doc-title="{{ adv.name }}">
-            <button type="submit" class="btn btn-danger">Delete</button>
-          </form>
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
+        </table>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          None yet. One is prepared whenever someone books time through
+          {{ adv.name }}'s links.
+        </p>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
     {% else %}
     <p class="muted">
       No advisor profiles yet. The links above still work and use the default
@@ -9465,35 +9531,6 @@ input[type="file"], input[type="text"] {
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
-  </div>
-
-  <h2 class="group-heading">Scheduling</h2>
-
-  <div class="section">
-    <h2>Scheduling Links</h2>
-    <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
-      The scheduling toggle in Display Settings is the default for
-      <code>{{ base_url }}/</code>. To run both experiences at once, share these
-      fixed links instead — each ignores the default and always behaves the same
-      way, whoever opens it.
-    </p>
-    <table style="font-size: 0.85rem;">
-      <tr>
-        <th style="width: 45%;">Link</th><th>Scheduling button</th>
-      </tr>
-      <tr>
-        <td><code>{{ base_url }}/scheduling</code></td>
-        <td>Always shown</td>
-      </tr>
-      <tr>
-        <td><code>{{ base_url }}/no-scheduling</code></td>
-        <td>Always hidden</td>
-      </tr>
-      <tr>
-        <td><code>{{ base_url }}/</code></td>
-        <td class="muted">Follows the Display Settings toggle</td>
-      </tr>
-    </table>
   </div>
 
   <h2 class="group-heading">Feedback</h2>
@@ -9598,7 +9635,7 @@ input[type="file"], input[type="text"] {
   <h2 class="group-heading">Pre-Call Briefings</h2>
 
   <div class="section">
-    <h2>Briefings</h2>
+    <h2>Briefings — Main Link</h2>
     <p class="muted" style="margin: 0 0 1rem 0;">
       When a participant books time, a short brief on what they've been working
       through is prepared for the advisor.
@@ -10408,13 +10445,13 @@ def admin_dashboard():
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
-        advisors=list_advisors(),
+        advisors=advisors_with_detail(),
         owners=document_owners(),
         advisor_names={a["slug"]: a["name"] for a in list_advisors()},
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
-        briefings=list_briefings(),
+        briefings=list_briefings(unassigned_only=True),
         archived_runs=archived_run_count(),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
