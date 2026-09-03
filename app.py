@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-e"
-APP_BUILD_NOTES = "fix healthcheck: boot no longer waits on psycopg/voyageai"
+APP_VERSION = "2026-09-03-f"
+APP_BUILD_NOTES = "30-second idle prompt offering next steps or wrap-up"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2001,6 +2001,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .presence.thinking .presence-ring { display: block; border: 2px solid var(--gold); }
     }
 
+    /* 30-second idle prompt: offers a next step or a clean finish */
+    .idle-prompt {
+      margin-top: 0.8rem; padding: 0.75rem 0.9rem;
+      background: var(--paper); border: 1px solid var(--line);
+      border-left: 3px solid var(--gold); border-radius: 3px;
+      font-size: 0.85rem; color: var(--navy);
+      animation: nudge-in 0.35s ease;
+    }
+    .idle-prompt p { margin: 0 0 0.6rem; }
+    .idle-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
+    .idle-actions button {
+      background: var(--navy); color: var(--gold); border: 1px solid var(--navy);
+      border-radius: 2px; padding: 0.45rem 0.75rem; cursor: pointer;
+      font-family: inherit; font-size: 0.66rem; letter-spacing: 0.09em;
+      text-transform: uppercase;
+    }
+    .idle-actions button.secondary {
+      background: transparent; color: var(--muted); border-color: var(--line);
+    }
+    .idle-actions button:hover { background: var(--gold); color: var(--navy); }
+    .idle-actions button:disabled { opacity: 0.5; cursor: not-allowed; }
+
     /* End-of-session offer of a follow-up plan */
     .plan-offer {
       display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
@@ -3509,6 +3531,88 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     // ---------------------------------------------------------------
+    // 30-second idle prompt
+    // ---------------------------------------------------------------
+    // Half a minute of silence usually means one of two things: they're not
+    // sure what to ask next, or they're finished. This offers both rather
+    // than leaving them looking at an empty box.
+    const IDLE_PROMPT_MS = 30000;
+    let idlePromptTimer = null;
+    let idlePromptShown = false;
+
+    function armIdlePrompt() {
+      if (idlePromptTimer) clearTimeout(idlePromptTimer);
+      if (idlePromptShown) return;
+      idlePromptTimer = setTimeout(showIdlePrompt, IDLE_PROMPT_MS);
+    }
+
+    function cancelIdlePrompt() {
+      if (idlePromptTimer) clearTimeout(idlePromptTimer);
+      document.querySelectorAll(".idle-prompt").forEach(el => el.remove());
+    }
+
+    function showIdlePrompt() {
+      if (idlePromptShown || awaitingReply) return;
+      const msgs = Array.from(document.querySelectorAll(".msg.assistant"))
+        .filter(m => !m.className.includes("typing"));
+      const last = msgs[msgs.length - 1];
+      if (!last) return;
+      if (last.querySelector(".safety-reply")) return;   // never after a crisis reply
+      if (last.querySelector(".idle-prompt")) return;
+      if (!document.querySelectorAll(".msg.user").length) return;  // nothing said yet
+      idlePromptShown = true;
+
+      const bar = document.createElement("div");
+      bar.className = "idle-prompt";
+      const text = document.createElement("p");
+      text.textContent = "Still with me? I can suggest where to take this next, "
+                       + "or we can wrap up here.";
+      bar.appendChild(text);
+
+      const actions = document.createElement("div");
+      actions.className = "idle-actions";
+
+      const next = document.createElement("button");
+      next.type = "button";
+      next.textContent = "Suggest next steps";
+      next.addEventListener("click", () => {
+        bar.remove();
+        input.value = "Given where we've got to, what would you suggest as my "
+                    + "next steps?";
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.dispatchEvent(new Event("submit", { cancelable: true }));
+      });
+      actions.appendChild(next);
+
+      const finish = document.createElement("button");
+      finish.type = "button";
+      finish.textContent = "Wrap up";
+      finish.addEventListener("click", () => {
+        bar.remove();
+        // Reuse the end-of-session path: offer the plan, then ask for a rating
+        planOffered = false;
+        showPlanOffer();
+        showRatingNudge("farewell");
+      });
+      actions.appendChild(finish);
+
+      const stay = document.createElement("button");
+      stay.type = "button";
+      stay.className = "secondary";
+      stay.textContent = "Still thinking";
+      stay.addEventListener("click", () => {
+        bar.remove();
+        idlePromptShown = false;      // may offer again after more silence
+        armIdlePrompt();
+      });
+      actions.appendChild(stay);
+
+      bar.appendChild(actions);
+      last.appendChild(bar);
+      chatWrap.scrollTop = chatWrap.scrollHeight;
+    }
+
+    // ---------------------------------------------------------------
     // End-of-session follow-up plan
     // ---------------------------------------------------------------
     // Offered on the same signals as the rating nudge: the conversation has
@@ -3778,6 +3882,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // reply is held and dispatched the moment the current one completes.
     let awaitingReply = false;
     let queuedMessages = [];
+
+    // Typing is activity: push the idle prompt back rather than interrupting
+    // someone mid-sentence.
+    document.addEventListener("DOMContentLoaded", () => {
+      const box = document.getElementById("message");
+      if (box) box.addEventListener("input", () => {
+        if (typeof cancelIdlePrompt === "function") cancelIdlePrompt();
+        if (typeof armIdlePrompt === "function") armIdlePrompt();
+      });
+    });
 
     function updateQueueHint() {
       const hint = document.getElementById("queue-hint");
@@ -4943,6 +5057,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     form.addEventListener("submit", async (e) => {
       e.preventDefault();
+      cancelIdlePrompt();
       const text = input.value.trim();
       const wasFarewell = looksLikeFarewell(text);
       const paperclipFiles = attachedFiles.slice();
@@ -5047,11 +5162,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // deliverable, offer a download and let the user decide.
           setAvatarResponding(msgDiv);
           clearRatingNudge();
-          if (wasFarewell) setTimeout(() => {
-            showPlanOffer();
-            showRatingNudge("farewell");
-          }, 900);
-          else armIdleNudge();
+          if (wasFarewell) {
+            setTimeout(() => {
+              showPlanOffer();
+              showRatingNudge("farewell");
+            }, 900);
+          } else {
+            armIdleNudge();       // 75s: ask for a rating
+            armIdlePrompt();      // 30s: offer a next step or a wrap-up
+          }
           const docs = data.documents || [];
           if (docs.length > 1 && data.separate_files) {
             offerExport(msgDiv, data.reply, data.export_format, docs);
