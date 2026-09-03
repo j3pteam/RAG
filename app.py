@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-02-g"
-APP_BUILD_NOTES = "pre-call briefing when a participant books time"
+APP_VERSION = "2026-09-03-a"
+APP_BUILD_NOTES = "send while the advisor works; ratings changeable"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2522,6 +2522,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
     {% endif %}
     {% if allow_materials %}
+    <div id="queue-hint" hidden
+         style="text-align: center; margin-top: 0.4rem; font-size: 0.72rem;
+                color: var(--muted); letter-spacing: 0.04em;"></div>
     <div style="text-align: center; margin-top: 0.55rem;">
       <button type="button" class="materials-link" id="materials-open">
         Add your documents &amp; writing
@@ -3709,6 +3712,45 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
 
     // ---------------------------------------------------------------
+    // Sending while the advisor is still working
+    // ---------------------------------------------------------------
+    // Rather than locking the composer during generation, a message sent mid
+    // reply is held and dispatched the moment the current one completes.
+    let awaitingReply = false;
+    let queuedMessages = [];
+
+    function updateQueueHint() {
+      const hint = document.getElementById("queue-hint");
+      if (!hint) return;
+      if (queuedMessages.length) {
+        hint.textContent = queuedMessages.length === 1
+          ? "1 message queued — it'll send when the reply lands"
+          : queuedMessages.length + " messages queued";
+        hint.hidden = false;
+      } else {
+        hint.hidden = true;
+      }
+    }
+
+    let sendingQueued = false;
+
+    function flushQueue() {
+      if (awaitingReply || !queuedMessages.length) return;
+      const next = queuedMessages.shift();
+      sendingQueued = true;      // its bubble is already on screen
+      updateQueueHint();
+      // Put it back in the composer and send it through the normal path, so
+      // attachments, history and every guard behave identically.
+      input.value = next.text;
+      setTimeout(() => {
+        // Go through the form's own submit path so every guard, attachment
+        // and history rule behaves exactly as for a typed message.
+        if (typeof form.requestSubmit === "function") form.requestSubmit();
+        else form.dispatchEvent(new Event("submit", { cancelable: true }));
+      }, 60);
+    }
+
+    // ---------------------------------------------------------------
     // Participant materials
     // ---------------------------------------------------------------
     (function () {
@@ -4319,19 +4361,33 @@ INDEX_HTML = r"""<!DOCTYPE html>
             ? wrap.parentElement.querySelector(".rate-nudge") : null;
           if (ownNudge) ownNudge.remove();
 
+          // A rating can always be changed — people mis-tap, and a wrong
+          // rating is worse than none because it teaches the wrong lesson.
+          // Clear any previous selection and its UI before applying this one.
+          buttons.forEach(b => {
+            b.classList.remove("selected-up", "selected-down");
+            b.disabled = false;
+          });
+          const oldThanks = wrap.querySelector(".feedback-thanks");
+          if (oldThanks) oldThanks.remove();
+          const oldComment = wrap.querySelector(".feedback-comment");
+          if (oldComment) oldComment.remove();
+
           if (rating === "up") {
             // Thumbs up: simple submit, no comment needed
-            buttons.forEach(b => { b.disabled = true; });
             btn.classList.add("selected-up");
             await sendFeedback("up", "");
             const thanks = document.createElement("span");
             thanks.className = "feedback-thanks";
-            thanks.textContent = "Thanks for the feedback";
+            thanks.textContent = "Thanks for the feedback \u2014 tap either thumb to change it";
             wrap.appendChild(thanks);
           } else {
-            // Thumbs down: show comment field, don't submit yet
-            buttons.forEach(b => { b.disabled = true; });
+            // Thumbs down: record it straight away, then invite a comment.
+            // Waiting for the comment meant a participant who switched from
+            // up to down and didn't type anything left "up" on the server —
+            // the opposite of what they meant.
             btn.classList.add("selected-down");
+            await sendFeedback("down", "");
 
             const commentBox = document.createElement("div");
             commentBox.className = "feedback-comment";
@@ -4356,7 +4412,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
               skipBtn.disabled = true;
               textarea.disabled = true;
               await sendFeedback("down", commentText);
-              commentBox.innerHTML = '<span class="feedback-thanks">Thanks for the feedback</span>';
+              commentBox.innerHTML = '<span class="feedback-thanks">Thanks for the feedback \u2014 tap either thumb to change it</span>';
             }
 
             submitBtn.addEventListener("click", () => finalize(textarea.value.trim()));
@@ -4835,6 +4891,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Require at least one of: text, single/multi file(s), or folder
       if (!text && paperclipFiles.length === 0 && folderFiles.length === 0) return;
 
+      // Already waiting on a reply? Hold this one rather than running two
+      // requests at once, and show it in the transcript so the participant
+      // can see it was received.
+      if (awaitingReply) {
+        addMessage(text, "user");
+        queuedMessages.push({ text: text });
+        input.value = "";
+        clearAttachment();
+        updateQueueHint();
+        input.focus();
+        return;
+      }
+
       // Build the message shown in chat
       let displayText;
       if (folderFiles.length > 0) {
@@ -4848,14 +4917,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       } else {
         displayText = text;
       }
-      addMessage(displayText, "user");
+      if (sendingQueued) sendingQueued = false;   // already shown when queued
+      else addMessage(displayText, "user");
 
       input.value = "";
       const paperclipFilesForRequest = paperclipFiles.slice();
       const folderFilesForRequest = folderFiles;
       const folderNameForRequest = folderName;
       clearAttachment();
-      sendBtn.disabled = true;
+      // The send button stays live: a follow-up typed while the advisor is
+      // still working is queued and sent as soon as the reply lands, so the
+      // participant never has to wait to add a thought.
+      awaitingReply = true;
+      updateQueueHint();
       const thinking = addMessage("Thinking…", "assistant typing");
       setAvatarThinking(true);
 
@@ -4933,8 +5007,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
           "Couldn't reach the server. Check your connection and try again.",
           text, paperclipFilesForRequest);
       } finally {
-        sendBtn.disabled = false;
+        awaitingReply = false;
+        updateQueueHint();
         input.focus();
+        flushQueue();
       }
     });
 
@@ -6454,6 +6530,90 @@ def email_briefing(advisor_name, participant, summary) -> bool:
         return False
 
 
+# ---------------------------------------------------------------------------
+# Per-advisor knowledge
+# ---------------------------------------------------------------------------
+# Two tiers. The shared J3P base is the framework every advisor draws on. On
+# top of that, a document can be assigned to one advisor, and then only that
+# advisor's sessions retrieve it.
+#
+# Ownership is tracked here rather than in the documents table, so database.py
+# is untouched: documents keep unique titles (the duplicate check enforces it),
+# and a title-to-advisor map is enough to filter retrieval.
+
+def _doc_owner_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS document_owner (
+                title        TEXT PRIMARY KEY,
+                advisor_slug TEXT NOT NULL,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def set_document_owner(title: str, advisor_slug: str) -> bool:
+    """Assign a document to one advisor. Empty slug means the shared base."""
+    if not title:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _doc_owner_ensure_table(conn)
+        with conn.cursor() as cur:
+            if advisor_slug:
+                cur.execute("""
+                    INSERT INTO document_owner (title, advisor_slug)
+                    VALUES (%s, %s)
+                    ON CONFLICT (title) DO UPDATE SET advisor_slug = EXCLUDED.advisor_slug
+                """, (title[:200], advisor_slug))
+            else:
+                cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[kb] owner write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def document_owners() -> dict:
+    """{title: advisor_slug} for every assigned document."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _doc_owner_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT title, advisor_slug FROM document_owner")
+            return {row[0]: row[1] for row in cur.fetchall()}
+    except Exception as e:
+        app.logger.error(f"[kb] owner read failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def filter_chunks_for_advisor(results, advisor_slug):
+    """Shared documents plus this advisor's own. Others are dropped.
+
+    An unassigned document belongs to the shared J3P base and is always
+    available; an assigned one is reachable only in that advisor's sessions.
+    """
+    owners = document_owners()
+    if not owners:
+        return results
+    keep = []
+    for r in results:
+        owner = owners.get(r.get("title"))
+        if not owner or owner == advisor_slug:
+            keep.append(r)
+    return keep
+
+
 def detect_deliverable_request(text: str) -> bool:
     """True when the user is asking for a written document of some kind."""
     import re as _r
@@ -6657,8 +6817,13 @@ def retrieve_context_and_lessons(query: str) -> tuple:
     # --- Knowledge base ---
     context = ""
     try:
-        results = db.search_chunks(query_embedding, limit=CONFIG["rag_top_k"])
-        relevant = [r for r in results if r["similarity"] >= CONFIG["rag_min_similarity"]]
+        # Over-fetch, then drop other advisors' material before trimming to
+        # the configured top-k, so filtering can't leave us short.
+        top_k = CONFIG["rag_top_k"]
+        results = db.search_chunks(query_embedding, limit=top_k * 4)
+        results = filter_chunks_for_advisor(results, session.get("advisor_slug"))
+        relevant = [r for r in results
+                    if r["similarity"] >= CONFIG["rag_min_similarity"]][:top_k]
         if relevant:
             sections = [f"[Source: {r['title']}]\n{r['content']}" for r in relevant]
             context = "\n\n---\n\n".join(sections)
@@ -8657,13 +8822,20 @@ form.upload {
   gap: 0.6rem; align-items: center;
 }
 @media (min-width: 860px) {
-  form.upload { grid-template-columns: 320px minmax(0, 1fr) 210px; }
+  /* four columns now: file, title, which base, submit */
+  form.upload { grid-template-columns: 280px minmax(0, 1fr) 200px 200px; }
 }
 form.upload > * { min-width: 0; }
 form.upload .btn { width: 100%; justify-content: center; text-align: center; }
 @media (max-width: 820px) {
   form.upload { grid-template-columns: 1fr; }
   form.upload .btn { width: auto; justify-self: start; }
+}
+.upload-stacked select[name="owner"] { max-width: 320px; margin-top: 0.6rem; }
+form.upload select, select[name="owner"] {
+  padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px;
+  font-family: inherit; font-size: 0.85rem; background: #fff;
+  color: var(--navy); width: 100%;
 }
 input[type="file"], input[type="text"] {
   padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px;
@@ -8674,11 +8846,12 @@ input[type="file"], input[type="text"] {
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 /* Knowledge Base table — keeps long source URLs from stretching the row */
 .kb-table { table-layout: fixed; width: 100%; }
-.kb-table th:nth-child(1), .kb-table td:nth-child(1) { width: 34%; }
-.kb-table th:nth-child(2), .kb-table td:nth-child(2) { width: 34%; }
-.kb-table th:nth-child(3), .kb-table td:nth-child(3) { width: 8%; }
-.kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 14%; }
-.kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 10%; }
+.kb-table th:nth-child(1), .kb-table td:nth-child(1) { width: 28%; }
+.kb-table th:nth-child(2), .kb-table td:nth-child(2) { width: 13%; }
+.kb-table th:nth-child(3), .kb-table td:nth-child(3) { width: 25%; }
+.kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 8%; }
+.kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 14%; }
+.kb-table th:nth-child(6), .kb-table td:nth-child(6) { width: 10%; }
 .kb-title { font-weight: 500; word-break: break-word; }
 .kb-source {
   font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
@@ -9505,13 +9678,16 @@ input[type="file"], input[type="text"] {
     {% if docs %}
     <table class="kb-table">
       <tr>
-        <th>Title</th><th>Source</th>
+        <th>Title</th><th>Base</th><th>Source</th>
         <th style="text-align: right;">Chunks</th>
         <th>Uploaded</th><th></th>
       </tr>
       {% for d in docs %}
       <tr>
         <td class="kb-title">{{ d.title }}</td>
+        <td class="muted" style="font-size: 0.76rem;">
+          {% if owners.get(d.title) %}{{ advisor_names.get(owners[d.title], owners[d.title]) }}{% else %}Shared{% endif %}
+        </td>
         <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
         <td style="text-align: right;">{{ d.chunk_count }}</td>
         <td class="muted kb-date">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
@@ -9537,6 +9713,12 @@ input[type="file"], input[type="text"] {
     <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
       <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
       <input type="text" name="title" placeholder="Document title (optional)" />
+            <select name="owner" title="Which knowledge base this belongs to">
+        <option value="">Shared J3P base — all advisors</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
+        {% endfor %}
+      </select>
       <button type="submit" class="btn">Upload & Embed</button>
     </form>
   </div>
@@ -9550,6 +9732,12 @@ input[type="file"], input[type="text"] {
     <form method="POST" action="/admin/upload-folder" enctype="multipart/form-data" class="upload" id="folder-upload-form">
       <input type="file" name="files" id="folder-input" webkitdirectory directory multiple required />
       <input type="text" name="folder_title" placeholder="Folder title (optional)" />
+            <select name="owner" title="Which knowledge base this belongs to">
+        <option value="">Shared J3P base — all advisors</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
+        {% endfor %}
+      </select>
       <button type="submit" class="btn" id="folder-upload-btn">Upload Folder</button>
     </form>
     <p id="folder-preview" class="muted" style="margin: 0.75rem 0 0 0; font-size: 0.85rem; display: none;"></p>
@@ -9605,6 +9793,12 @@ input[type="file"], input[type="text"] {
     <form method="POST" action="/admin/upload-url" class="upload">
       <input type="url" name="url" placeholder="https://example.com/article" required style="flex: 1.5; min-width: 280px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit;" />
       <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
+            <select name="owner" title="Which knowledge base this belongs to">
+        <option value="">Shared J3P base — all advisors</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
+        {% endfor %}
+      </select>
       <button type="submit" class="btn">Fetch & Embed</button>
     </form>
   </div>
@@ -9616,7 +9810,7 @@ input[type="file"], input[type="text"] {
       passage from a book. Use this when a page won't give up its text, which
       is normal for podcast players, video sites and most social platforms.
     </p>
-    <form method="POST" action="/admin/upload-text">
+    <form method="POST" action="/admin/upload-text" class="upload-stacked">
       <input type="text" name="text_title" placeholder="Title (optional)"
              style="width: 100%; padding: 0.5rem; margin-bottom: 0.6rem;
                     border: 1px solid var(--line); border-radius: 2px;
@@ -9627,6 +9821,12 @@ input[type="file"], input[type="text"] {
                        border: 1px solid var(--line); border-radius: 2px;
                        font-family: inherit; font-size: 0.9rem;
                        line-height: 1.5; resize: vertical;"></textarea>
+            <select name="owner" title="Which knowledge base this belongs to">
+        <option value="">Shared J3P base — all advisors</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
+        {% endfor %}
+      </select>
       <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
     </form>
   </div>
@@ -9833,6 +10033,8 @@ def admin_dashboard():
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
         advisors=list_advisors(),
+        owners=document_owners(),
+        advisor_names={a["slug"]: a["name"] for a in list_advisors()},
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
@@ -10029,6 +10231,7 @@ def admin_upload():
         vectors = emb.embed_batch(chunks)
         pairs = list(zip(chunks, vectors))
         doc_id = db.insert_document(title, file.filename, pairs)
+        set_document_owner(title, (request.form.get("owner") or "").strip())
 
         flash(f"✓ Uploaded '{title}' — {len(chunks)} chunks embedded (doc #{doc_id}).")
     except Exception as e:
@@ -10072,6 +10275,7 @@ def admin_upload_folder():
 
     # Optional label so a batch is recognisable in the knowledge base
     folder_title = (request.form.get("folder_title") or "").strip()[:80]
+    folder_owner = (request.form.get("owner") or "").strip()
 
     uploaded = []       # list of (title, chunk_count, doc_id)
     duplicates = []     # list of (filename, existing_title)
@@ -10114,6 +10318,7 @@ def admin_upload_folder():
             # Title carries the folder label when given; source stays the
             # filename so duplicate detection keeps working on re-upload.
             doc_id = db.insert_document(display_title, basename, pairs)
+            set_document_owner(display_title, folder_owner)
             uploaded.append((display_title, len(chunks), doc_id))
             app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
 
@@ -10170,6 +10375,7 @@ def admin_upload_text():
             return redirect(url_for("admin_dashboard"))
         vectors = emb.embed_batch(chunks)
         doc_id = db.insert_document(title, "pasted text", list(zip(chunks, vectors)))
+        set_document_owner(title, (request.form.get("owner") or "").strip())
         flash(f"✓ Added '{title}' — {len(chunks)} chunks embedded (doc #{doc_id}).")
     except Exception as e:
         app.logger.error(f"[text] ingest failed: {e}")
@@ -10335,6 +10541,7 @@ def admin_upload_url():
         return redirect(url_for("admin_dashboard"))
 
     # A podcast or blog feed carries the real text; handle it first.
+    feed_owner = (request.form.get("owner") or "").strip()
     if looks_like_feed(url):
         try:
             show, episodes = fetch_podcast_feed(url)
@@ -10355,6 +10562,7 @@ def admin_upload_url():
                         continue
                     vectors = emb.embed_batch(chunks)
                     db.insert_document(ep_title, url, list(zip(chunks, vectors)))
+                    set_document_owner(ep_title, feed_owner)
                     added += 1
                 except Exception as e:
                     app.logger.error(f"[feed] episode failed: {e}")
@@ -10411,6 +10619,7 @@ def admin_upload_url():
         vectors = emb.embed_batch(chunks)
         pairs = list(zip(chunks, vectors))
         doc_id = db.insert_document(title, url, pairs)
+        set_document_owner(title, (request.form.get("owner") or "").strip())
 
         flash(f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id}).")
     except Exception as e:
