@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-a"
-APP_BUILD_NOTES = "send while the advisor works; ratings changeable"
+APP_VERSION = "2026-09-03-b"
+APP_BUILD_NOTES = "advisor name shown with the avatar"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1908,8 +1908,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .presence.responding .presence-photo {
       animation: presence-talk 1.1s ease-in-out infinite;
     }
+    .presence-name {
+      margin-top: 0.5rem; font-size: 0.72rem; font-weight: 500;
+      line-height: 1.25; color: var(--navy);
+    }
     .presence-status {
-      margin-top: 0.45rem; font-size: 0.56rem; letter-spacing: 0.12em;
+      margin-top: 0.15rem; font-size: 0.56rem; letter-spacing: 0.12em;
       text-transform: uppercase; color: var(--muted); min-height: 1em;
     }
     .presence.speaking .presence-status,
@@ -1927,8 +1931,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       /* Smaller, and above the composer — the send button owns the bottom
          right at these widths. */
       /* Clear of the composer row, which reaches ~13rem from the bottom here */
-      .presence { right: 0.7rem; bottom: 14rem; width: 60px; }
-      .presence-frame { width: 60px; height: 60px; }
+      .presence { right: 0.7rem; bottom: 14rem; width: 76px; }
+      .presence-frame { width: 60px; height: 60px; margin: 0 auto; }
+      .presence-name { font-size: 0.62rem; }
       .presence-status { display: none; }
     }
     @media (max-width: 640px) {
@@ -2557,6 +2562,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
       <span class="presence-pulse"></span>
     </button>
+    <div class="presence-name">{{ cfg.persona_name }}</div>
     <div class="presence-status" id="presence-status">Listening</div>
   </div>
   {% endif %}
@@ -6877,6 +6883,16 @@ def _render_chat(force_scheduling=None, advisor=None):
     if active:
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
+        # The greeting names the advisor too, so the header, the avatar and
+        # the opening line don't disagree about who the participant is with.
+        opening = CONFIG.get("opening") or ""
+        if CONFIG["persona_name"] in opening:
+            # Drop the article as well: "with the J3P Advisor" reads correctly,
+            # "with the Alan Friedman" does not.
+            page_cfg["opening"] = re.sub(
+                r"\bthe\s+" + re.escape(CONFIG["persona_name"]),
+                active["name"], opening).replace(
+                CONFIG["persona_name"], active["name"])
 
     return render_template_string(
         INDEX_HTML,
