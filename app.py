@@ -28,8 +28,32 @@ from flask import (
 )
 import anthropic
 
-import database as db
-import embeddings as emb
+# database and embeddings pull in psycopg, voyageai, trafilatura, tokenizers
+# and numpy. On a cold Railway container that import graph can run past the
+# 30-second healthcheck window, so the worker is still importing when the
+# window closes and the deploy is marked unhealthy.
+#
+# These proxies defer the real import until something actually touches them —
+# the first chat, upload or admin page — so booting is pure Python and /health
+# answers immediately. Both are only ever used via attribute access (checked:
+# never in an except clause, never at module level), so a proxy is safe.
+class _LazyModule:
+    def __init__(self, name):
+        self._name = name
+        self._mod = None
+
+    def _load(self):
+        if self._mod is None:
+            import importlib
+            self._mod = importlib.import_module(self._name)
+        return self._mod
+
+    def __getattr__(self, attr):
+        return getattr(self._load(), attr)
+
+
+db = _LazyModule("database")
+emb = _LazyModule("embeddings")
 import paywall
 import exports
 
@@ -64,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-d"
-APP_BUILD_NOTES = "admin field for the name shown with the photo"
+APP_VERSION = "2026-09-03-e"
+APP_BUILD_NOTES = "fix healthcheck: boot no longer waits on psycopg/voyageai"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -140,15 +164,28 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = int(MAX_UPLOAD_BYTES * 3.5)
 client = anthropic.Anthropic()
 
-# Initialize DB schema once at startup (idempotent)
-try:
-    if db.is_enabled():
-        db.init_schema()
-        app.logger.info("Database schema initialized")
-    else:
-        app.logger.warning("Database not configured — RAG and feedback persistence disabled")
-except Exception as e:
-    app.logger.error(f"DB init failed: {e}")
+# Schema initialisation is idempotent, but it used to run here at import —
+# which imported psycopg and opened a connection before the app could serve
+# anything. On a cold container that pushed the first response past Railway's
+# healthcheck window. It now runs on the first request instead; see
+# _boot_background_once at the bottom of this file.
+_schema_ready = False
+
+
+def ensure_schema_once():
+    global _schema_ready
+    if _schema_ready:
+        return
+    _schema_ready = True
+    try:
+        if db.is_enabled():
+            db.init_schema()
+            app.logger.info("Database schema initialized")
+        else:
+            app.logger.warning("Database not configured — RAG and feedback "
+                               "persistence disabled")
+    except Exception as e:
+        app.logger.error(f"DB init failed: {e}")
 
 
 # ---------------------------------------------------------------------------
@@ -8106,13 +8143,16 @@ def health():
         "status": "ok",
         "version": APP_VERSION,
         "build": APP_BUILD_NOTES,
-        "admin_section_order": [
-            "Feedback Overview", "Display Settings", "Conversation Log",
-            "Knowledge Base", "Upload Document", "Upload Folder",
-            "Add Knowledge from URL",
+        "admin_sections": [
+            "Display", "Advisors", "Access", "Scheduling", "Feedback",
+            "Pre-Call Briefings", "Logs", "Knowledge Base", "Knowledge Upload",
         ],
         "persona": CONFIG["persona_name"],
-        "rag_enabled": db.is_enabled() and emb.is_enabled(),
+        # Deliberately env-only: calling db.is_enabled() here imported psycopg
+        # and voyageai on the very first request, which is the healthcheck —
+        # the reason deploys were failing. /debug reports the live state.
+        "database_configured": bool(os.environ.get("DATABASE_URL")),
+        "embeddings_configured": bool(os.environ.get("VOYAGE_API_KEY")),
     })
 
 
@@ -11217,11 +11257,22 @@ _background_started = False
 
 @app.before_request
 def _boot_background_once():
+    """Do the heavy first-run work on the first real request.
+
+    /health and /debug are exempt: the healthcheck is usually the very first
+    request to arrive, and making it wait for psycopg, voyageai and schema
+    setup is exactly what caused the deploy to be marked unhealthy. They
+    report status without touching the database, so they stay instant.
+    """
     global _background_started
-    if not _background_started:
-        _background_started = True
-        print("[boot] first request received, starting background work", flush=True)
-        _start_background_work()
+    if _background_started:
+        return
+    if request.path in ("/health", "/debug"):
+        return
+    _background_started = True
+    print("[boot] first request received, starting background work", flush=True)
+    ensure_schema_once()
+    _start_background_work()
 
 
 print("[boot] routes registered, ready to serve", flush=True)
