@@ -65,8 +65,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-b"
-APP_BUILD_NOTES = "advisor name shown with the avatar"
+APP_VERSION = "2026-09-03-c"
+APP_BUILD_NOTES = "admin field for the name shown with the photo"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -175,6 +175,8 @@ _SETTINGS_DEFAULTS = {
     "show_avatar": True,
     # Let participants add their own documents and writing
     "allow_materials": True,
+    # Name shown with the default advisor photo. Blank uses the app name.
+    "avatar_name": "",
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -219,8 +221,15 @@ def load_settings(force: bool = False) -> dict:
             with conn.cursor() as cur:
                 cur.execute("SELECT key, value FROM app_settings")
                 for key, raw in cur.fetchall():
-                    if key in values:
-                        values[key] = raw == "true"
+                    if key not in values:
+                        continue
+                    # Booleans were the only setting type originally; text
+                    # values (like the name shown with the photo) need to
+                    # survive the round trip intact.
+                    if isinstance(values[key], bool):
+                        values[key] = (raw == "true")
+                    else:
+                        values[key] = raw or ""
         except Exception as e:
             app.logger.error(f"[settings] read failed: {e}")
         finally:
@@ -231,8 +240,12 @@ def load_settings(force: bool = False) -> dict:
                 with open(_SETTINGS_FILE, encoding="utf-8") as fh:
                     stored = _json.load(fh)
                 for key in values:
-                    if key in stored:
+                    if key not in stored:
+                        continue
+                    if isinstance(values[key], bool):
                         values[key] = bool(stored[key])
+                    else:
+                        values[key] = stored[key] or ""
         except Exception as e:
             app.logger.error(f"[settings] file read failed: {e}")
 
@@ -240,8 +253,8 @@ def load_settings(force: bool = False) -> dict:
     return values
 
 
-def save_setting(key: str, value: bool) -> bool:
-    """Persist one setting. Returns True when it was written."""
+def save_setting(key, value) -> bool:
+    """Persist one setting — boolean or text. Returns True when written."""
     global _settings_cache
     if key not in _SETTINGS_DEFAULTS:
         return False
@@ -257,7 +270,8 @@ def save_setting(key: str, value: bool) -> bool:
                     VALUES (%s, %s, NOW())
                     ON CONFLICT (key)
                     DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()
-                """, (key, "true" if value else "false"))
+                """, (key, ("true" if value else "false")
+                        if isinstance(value, bool) else str(value)))
             conn.commit()
             written = True
         except Exception as e:
@@ -267,7 +281,11 @@ def save_setting(key: str, value: bool) -> bool:
     else:
         try:
             current = load_settings(force=True)
-            current[key] = bool(value)
+            # Text settings must keep their text: bool() turned a name like
+            # "Alan Friedman" into True on any deployment without Postgres.
+            current[key] = (bool(value)
+                            if isinstance(_SETTINGS_DEFAULTS[key], bool)
+                            else str(value))
             with open(_SETTINGS_FILE, "w", encoding="utf-8") as fh:
                 _json.dump(current, fh)
             written = True
@@ -2562,7 +2580,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
       <span class="presence-pulse"></span>
     </button>
-    <div class="presence-name">{{ cfg.persona_name }}</div>
+    <div class="presence-name">{{ cfg.avatar_name or cfg.persona_name }}</div>
     <div class="presence-status" id="presence-status">Listening</div>
   </div>
   {% endif %}
@@ -6880,19 +6898,29 @@ def _render_chat(force_scheduling=None, advisor=None):
     active = advisor or get_advisor(session.get("advisor_slug"))
 
     page_cfg = dict(CONFIG)
+    # A name for the default photo, so the general link can read "Alan
+    # Friedman" rather than the app's own name.
+    def name_the_advisor(cfg_out, person_name):
+        """Put a person's name in the greeting in place of the app's name.
+
+        Dropping the article matters: "with the J3P Advisor" reads correctly,
+        "with the Alan Friedman" does not.
+        """
+        cfg_out["avatar_name"] = person_name
+        opening = CONFIG.get("opening") or ""
+        if CONFIG["persona_name"] in opening:
+            cfg_out["opening"] = re.sub(
+                r"\bthe\s+" + re.escape(CONFIG["persona_name"]),
+                person_name, opening).replace(
+                CONFIG["persona_name"], person_name)
+
+    default_name = (load_settings().get("avatar_name") or "").strip()
+    if default_name and not active:
+        name_the_advisor(page_cfg, default_name)
     if active:
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
-        # The greeting names the advisor too, so the header, the avatar and
-        # the opening line don't disagree about who the participant is with.
-        opening = CONFIG.get("opening") or ""
-        if CONFIG["persona_name"] in opening:
-            # Drop the article as well: "with the J3P Advisor" reads correctly,
-            # "with the Alan Friedman" does not.
-            page_cfg["opening"] = re.sub(
-                r"\bthe\s+" + re.escape(CONFIG["persona_name"]),
-                active["name"], opening).replace(
-                CONFIG["persona_name"], active["name"])
+        name_the_advisor(page_cfg, active["name"])
 
     return render_template_string(
         INDEX_HTML,
@@ -8982,7 +9010,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials" />
+             value="show_scheduling_button,show_avatar,allow_materials,avatar_name" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -9053,6 +9081,28 @@ input[type="file"], input[type="text"] {
       </form>
       {% endif %}
     </div>
+
+      <div style="margin-top: 1rem;">
+        <label for="avatar_name"
+               style="display: block; font-size: 0.85rem; margin-bottom: 0.35rem;">
+          <strong>Name shown with this photo</strong>
+        </label>
+        <p class="muted" style="margin: 0 0 0.5rem 0; font-size: 0.8rem;">
+          Appears beneath the avatar on the main link. Leave blank to use
+          “{{ cfg.persona_name }}”. Advisors with their own profile always show
+          their own name. Start typing to pick an existing advisor.
+        </p>
+        <input type="text" id="avatar_name" name="avatar_name"
+               form="settings-form" list="advisor-name-options"
+               value="{{ settings.avatar_name or '' }}"
+               placeholder="e.g. Alan Friedman"
+               style="max-width: 340px; padding: 0.5rem;
+                      border: 1px solid var(--line); border-radius: 2px;
+                      font-family: inherit;" />
+        <datalist id="advisor-name-options">
+          {% for adv in advisors %}<option value="{{ adv.name }}"></option>{% endfor %}
+        </datalist>
+      </div>
 
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
@@ -10185,8 +10235,19 @@ def admin_settings():
     }
     messages = []
 
+    # Text settings are saved separately; the loop below handles booleans.
+    if "avatar_name" in managed:
+        nm = (request.form.get("avatar_name") or "").strip()[:60]
+        if save_setting("avatar_name", nm):
+            messages.append(f"Photo name set to \u201c{nm}\u201d" if nm
+                            else "Photo name cleared")
+        else:
+            messages.append("Could not save the photo name")
+
     for key in managed:
         if key not in _SETTINGS_DEFAULTS:
+            continue
+        if not isinstance(_SETTINGS_DEFAULTS[key], bool):
             continue
         value = bool(request.form.get(key))
         name, on_word, off_word = labels.get(key, (key, "on", "off"))
