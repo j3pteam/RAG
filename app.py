@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-h"
-APP_BUILD_NOTES = "name field sits with the avatar toggle"
+APP_VERSION = "2026-09-03-i"
+APP_BUILD_NOTES = "copyable advisor links; tolerant of stray text"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7138,6 +7138,29 @@ def advisor_index_without_scheduling(slug):
     return _render_chat(force_scheduling=False, advisor=advisor)
 
 
+@app.route("/a/<slug>/<path:rest>")
+@paywall.paywall_required
+@login_required
+def advisor_index_tolerant(slug, rest):
+    """Catch a link that arrived with stray text attached.
+
+    Copying a link out of the admin panel could pick up the descriptive label
+    beside it, producing /a/slug/no-scheduling%20—%20without and a bare 404.
+    The intent is unambiguous, so honour it rather than failing.
+    """
+    advisor = get_advisor(slug)
+    if not advisor:
+        return _advisor_not_found(slug)
+
+    first = (rest or "").split("/")[0].strip().lower()
+    if first.startswith("no-scheduling") or first.startswith("no%20scheduling"):
+        return _render_chat(force_scheduling=False, advisor=advisor)
+    if first.startswith("scheduling"):
+        return _render_chat(force_scheduling=True, advisor=advisor)
+    # Anything else: send them to the advisor's default link
+    return redirect(url_for("advisor_index", slug=slug))
+
+
 @app.route("/a/<slug>/photo.jpg")
 def advisor_photo(slug):
     """A named advisor's photo, falling back to the default one."""
@@ -9046,6 +9069,20 @@ input[type="file"], input[type="text"] {
 .flash { padding: 0.7rem 1rem; background: var(--gold); color: var(--navy); border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
 .muted { color: #6B7280; font-size: 0.8rem; }
 .warn { background: #fef3c7; border: 1px solid #f59e0b; padding: 0.7rem 1rem; border-radius: 2px; margin-bottom: 1rem; font-size: 0.85rem; }
+.adv-link {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--navy); text-decoration: none;
+  border-bottom: 1px solid var(--line); word-break: break-all;
+}
+.adv-link:hover { border-bottom-color: var(--gold); }
+.copy-link {
+  flex: 0 0 auto; background: transparent; border: 1px solid var(--line);
+  border-radius: 2px; color: var(--muted); cursor: pointer;
+  font-family: inherit; font-size: 0.62rem; letter-spacing: 0.08em;
+  text-transform: uppercase; padding: 0.2rem 0.4rem;
+}
+.copy-link:hover { color: var(--navy); border-color: var(--gold); }
+
 /* Knowledge Base table — keeps long source URLs from stretching the row */
 .kb-table { table-layout: fixed; width: 100%; }
 .kb-table th:nth-child(1), .kb-table td:nth-child(1) { width: 28%; }
@@ -9320,13 +9357,22 @@ input[type="file"], input[type="text"] {
             {{ adv.slug }}{% if not adv.has_photo %} · no photo, using the default{% endif %}
           </span>
         </td>
-        <td style="font-size: 0.78rem; line-height: 1.9;">
-          <code>{{ base_url }}/a/{{ adv.slug }}/scheduling</code>
-          <span class="muted">— with booking</span><br />
-          <code>{{ base_url }}/a/{{ adv.slug }}/no-scheduling</code>
-          <span class="muted">— without</span><br />
-          <code>{{ base_url }}/a/{{ adv.slug }}</code>
-          <span class="muted">— follows the default</span>
+        <td style="font-size: 0.78rem;">
+          {% for path, label in [
+              ('/scheduling', 'With booking button'),
+              ('/no-scheduling', 'Without booking button'),
+              ('', 'Follows the Display Settings default')] %}
+          <div style="margin-bottom: 0.5rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.06em;
+                                      text-transform: uppercase;">{{ label }}</div>
+            <div style="display: flex; align-items: center; gap: 0.4rem;">
+              <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
+                 class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
+              <button type="button" class="copy-link"
+                      data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
+            </div>
+          </div>
+          {% endfor %}
         </td>
         <td style="text-align: right;">
           <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
@@ -10129,7 +10175,29 @@ input[type="file"], input[type="text"] {
           }
         });
 
-        // Delegated so it covers forms that appear later in the document
+        // Copy an advisor link exactly, without the label beside it
+      document.addEventListener("click", async e => {
+        const btn = e.target.closest && e.target.closest(".copy-link");
+        if (!btn) return;
+        e.preventDefault();
+        const url = btn.dataset.url || "";
+        try {
+          await navigator.clipboard.writeText(url);
+        } catch (err) {
+          // Older browsers and non-secure contexts
+          const tmp = document.createElement("textarea");
+          tmp.value = url;
+          document.body.appendChild(tmp);
+          tmp.select();
+          try { document.execCommand("copy"); } catch (e2) {}
+          tmp.remove();
+        }
+        const was = btn.textContent;
+        btn.textContent = "Copied";
+        setTimeout(() => { btn.textContent = was; }, 1400);
+      });
+
+      // Delegated so it covers forms that appear later in the document
         // than this script — the clear-all form does, and per-form listeners
         // silently missed it.
         document.addEventListener("submit", e => {
