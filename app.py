@@ -64,7 +64,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-c"
+APP_VERSION = "2026-09-03-d"
 APP_BUILD_NOTES = "admin field for the name shown with the photo"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -11193,7 +11193,38 @@ def email_webhook():
     }), 200
 
 
-start_learning_scheduler()
+# Boot markers. The Railway logs showed workers booting and then silence, with
+# no traceback, which can't be told apart from a hang during import without
+# these. Anything missing from the log tells you where it stopped.
+print(f"[boot] app module imported, version {APP_VERSION}", flush=True)
+
+
+def _start_background_work():
+    """Start the scheduler on first request, not at import.
+
+    Threads started at import are inherited oddly by gunicorn's forking
+    workers, and a thread that touches the database at boot can hold up the
+    healthcheck. Doing it lazily keeps import to pure Python.
+    """
+    try:
+        start_learning_scheduler()
+    except Exception as e:
+        app.logger.error(f"[boot] scheduler failed to start: {e}")
+
+
+_background_started = False
+
+
+@app.before_request
+def _boot_background_once():
+    global _background_started
+    if not _background_started:
+        _background_started = True
+        print("[boot] first request received, starting background work", flush=True)
+        _start_background_work()
+
+
+print("[boot] routes registered, ready to serve", flush=True)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8080))
