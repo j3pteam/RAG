@@ -9565,8 +9565,26 @@ input[type="file"], input[type="text"] {
           </span>
         </span>
       </label>
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="allow_materials" value="1"
+               {% if settings.allow_materials %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Let participants add their own materials</strong><br />
+          <span class="muted">
+            A participant can upload a CV, a strategic plan, or their own
+            writing so the advisor can draw on it in their session. When off,
+            that option is hidden and nothing already uploaded is shared with
+            the advisor.
+          </span>
+        </span>
+      </label>
 
-
+      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
 
   </div>
@@ -9605,7 +9623,6 @@ input[type="file"], input[type="text"] {
                  placeholder="{{ cfg.persona_name }}"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-          <span class="muted" style="font-size: 0.74rem;">saves with Display Settings</span>
         </div>
         <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center;
@@ -9630,6 +9647,8 @@ input[type="file"], input[type="text"] {
                  style="width: 15px; height: 15px; accent-color: var(--navy);" />
           <span class="muted">No photo — show their initials instead</span>
         </label>
+        <button type="submit" form="settings-form" class="btn"
+                style="font-size: 0.66rem; margin-top: 0.7rem;">Save</button>
       </div>
 
       <div class="advisor-links">
