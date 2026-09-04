@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-04-a"
-APP_BUILD_NOTES = "advisors can run with initials instead of a photo"
+APP_VERSION = "2026-09-04-b"
+APP_BUILD_NOTES = "each advisor card lists their own knowledge"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5993,6 +5993,8 @@ def advisors_with_detail():
     for adv in list_advisors():
         adv = dict(adv)
         adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
+        adv["documents"] = [t for t, slug in document_owners().items()
+                            if slug == adv["slug"]]
         out.append(adv)
     return out
 
@@ -9504,6 +9506,25 @@ input[type="file"], input[type="text"] {
           </div>
         </div>
         {% endfor %}
+      </div>
+
+      <div class="advisor-links">
+        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
+        {% if adv.documents %}
+        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
+          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
+        </ul>
+        <p class="muted" style="margin: 0.45rem 0 0; font-size: 0.76rem;">
+          Only {{ adv.name }}'s sessions retrieve these. The shared J3P base is
+          available to them as well.
+        </p>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          Nothing specific to {{ adv.name }} — their sessions draw on the shared
+          J3P base. To add something just for them, pick
+          &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
+        </p>
+        {% endif %}
       </div>
 
       <div class="advisor-links">
