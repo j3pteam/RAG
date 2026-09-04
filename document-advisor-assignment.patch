@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..78a35a4 100644
+index 4b5a702..0d1fc51 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
@@ -619,7 +619,36 @@ index 4b5a702..78a35a4 100644
      )
  
  
-@@ -7918,12 +8306,14 @@ def chat():
+@@ -7173,6 +7561,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+ @login_required
+ def index():
+     """Default entry point — follows the admin panel's Display Settings."""
++    # A previous visit to a named advisor's own link (/a/<slug>) leaves that
++    # advisor's slug sticky in the session so a reload keeps their photo.
++    # The plain link must never inherit that — otherwise it can silently
++    # show someone else's name and, more importantly, restrict retrieval to
++    # that advisor's knowledge base instead of the shared default.
++    session.pop("advisor_slug", None)
+     return _render_chat()
+ 
+ 
+@@ -7182,6 +7576,7 @@ def index():
+ def index_with_scheduling():
+     """Share this link when you want the booking button shown."""
+     session.pop("force_scheduling", None)
++    session.pop("advisor_slug", None)
+     return _render_chat(force_scheduling=True)
+ 
+ 
+@@ -7275,6 +7670,7 @@ def _advisor_not_found(slug):
+ def index_without_scheduling():
+     """Share this link when you want the advisor with no booking prompt."""
+     session.pop("force_scheduling", None)
++    session.pop("advisor_slug", None)
+     return _render_chat(force_scheduling=False)
+ 
+ 
+@@ -7918,12 +8314,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -634,7 +663,7 @@ index 4b5a702..78a35a4 100644
          )
  
      try:
-@@ -8277,6 +8667,22 @@ def acknowledge_release():
+@@ -8277,6 +8675,22 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -657,7 +686,7 @@ index 4b5a702..78a35a4 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8820,8 +9226,17 @@ def advisor_avatar():
+@@ -8820,8 +9234,17 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -676,7 +705,7 @@ index 4b5a702..78a35a4 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -9095,9 +9510,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9518,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -706,7 +735,7 @@ index 4b5a702..78a35a4 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9556,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9564,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -717,7 +746,7 @@ index 4b5a702..78a35a4 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9568,13 @@ form.upload {
+@@ -9133,8 +9576,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -733,7 +762,7 @@ index 4b5a702..78a35a4 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9666,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9674,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -757,7 +786,7 @@ index 4b5a702..78a35a4 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9781,102 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9789,102 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -861,7 +890,7 @@ index 4b5a702..78a35a4 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +9910,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +9918,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -895,7 +924,7 @@ index 4b5a702..78a35a4 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,7 +9955,7 @@ input[type="file"], input[type="text"] {
+@@ -9389,7 +9963,7 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -904,7 +933,7 @@ index 4b5a702..78a35a4 100644
            </span>
          </div>
        </div>
-@@ -9402,7 +9968,6 @@ input[type="file"], input[type="text"] {
+@@ -9402,7 +9976,6 @@ input[type="file"], input[type="text"] {
                   placeholder="{{ cfg.persona_name }}"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
@@ -912,7 +941,7 @@ index 4b5a702..78a35a4 100644
          </div>
          <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
                style="display: flex; gap: 0.5rem; align-items: center;
-@@ -9419,6 +9984,16 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +9992,16 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -929,7 +958,7 @@ index 4b5a702..78a35a4 100644
        </div>
  
        <div class="advisor-links">
-@@ -9469,6 +10044,7 @@ input[type="file"], input[type="text"] {
+@@ -9469,6 +10052,7 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -937,7 +966,7 @@ index 4b5a702..78a35a4 100644
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
            <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -9509,14 +10085,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10093,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -967,7 +996,7 @@ index 4b5a702..78a35a4 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9583,7 +10168,9 @@ input[type="file"], input[type="text"] {
+@@ -9583,7 +10176,9 @@ input[type="file"], input[type="text"] {
        </form>
      </div>
    </div>
@@ -977,7 +1006,7 @@ index 4b5a702..78a35a4 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10207,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10215,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -987,7 +1016,7 @@ index 4b5a702..78a35a4 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10673,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10681,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -997,7 +1026,7 @@ index 4b5a702..78a35a4 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +10694,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10702,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1020,7 +1049,7 @@ index 4b5a702..78a35a4 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +10827,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +10835,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1031,7 +1060,7 @@ index 4b5a702..78a35a4 100644
  
  </div>
  
-@@ -10488,6 +11068,34 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11076,34 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1066,7 +1095,7 @@ index 4b5a702..78a35a4 100644
  </body></html>"""
  
  
-@@ -10528,6 +11136,12 @@ def admin_dashboard():
+@@ -10528,6 +11144,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1079,7 +1108,7 @@ index 4b5a702..78a35a4 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11149,10 @@ def admin_dashboard():
+@@ -10535,7 +11157,10 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1091,7 +1120,7 @@ index 4b5a702..78a35a4 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,13 +11248,16 @@ def admin_save_advisor():
+@@ -10631,13 +11256,16 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1112,7 +1141,7 @@ index 4b5a702..78a35a4 100644
  
      if save_advisor(slug, name, photo, mime, no_photo=no_photo):
          flash(f"✓ {name} saved — links are listed below.")
-@@ -10672,6 +11292,7 @@ def admin_settings():
+@@ -10672,6 +11300,7 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1120,7 +1149,7 @@ index 4b5a702..78a35a4 100644
          "allow_materials": ("Participant materials", "on", "off"),
          "auto_learning": ("Continuous learning", "on", "off"),
          "require_login": ("Sign-in", "required", "not required"),
-@@ -11160,6 +11781,30 @@ def admin_delete(doc_id):
+@@ -11160,6 +11789,30 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

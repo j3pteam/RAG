@@ -7561,6 +7561,12 @@ def _render_chat(force_scheduling=None, advisor=None):
 @login_required
 def index():
     """Default entry point — follows the admin panel's Display Settings."""
+    # A previous visit to a named advisor's own link (/a/<slug>) leaves that
+    # advisor's slug sticky in the session so a reload keeps their photo.
+    # The plain link must never inherit that — otherwise it can silently
+    # show someone else's name and, more importantly, restrict retrieval to
+    # that advisor's knowledge base instead of the shared default.
+    session.pop("advisor_slug", None)
     return _render_chat()
 
 
@@ -7570,6 +7576,7 @@ def index():
 def index_with_scheduling():
     """Share this link when you want the booking button shown."""
     session.pop("force_scheduling", None)
+    session.pop("advisor_slug", None)
     return _render_chat(force_scheduling=True)
 
 
@@ -7663,6 +7670,7 @@ def _advisor_not_found(slug):
 def index_without_scheduling():
     """Share this link when you want the advisor with no booking prompt."""
     session.pop("force_scheduling", None)
+    session.pop("advisor_slug", None)
     return _render_chat(force_scheduling=False)
 
 
