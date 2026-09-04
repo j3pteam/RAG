@@ -9527,6 +9527,15 @@ header a:hover { color: var(--gold); }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 .tab-pane .group-heading:first-child { margin-top: 0; }
+
+/* Links from an advisor's Knowledge list to its row in the Documents table */
+.doc-jump-link { color: var(--navy); text-decoration: underline; text-decoration-color: var(--line); }
+.doc-jump-link:hover { text-decoration-color: var(--rust); color: var(--rust); }
+@keyframes docRowFlash {
+  0%   { background: rgba(210, 188, 141, 0.55); }
+  100% { background: transparent; }
+}
+.doc-row-flash { animation: docRowFlash 1.6s ease-out; }
 .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
 .stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
 .stat { flex: 1; min-width: 90px; }
@@ -10047,7 +10056,16 @@ input[type="file"], input[type="text"] {
         <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
         {% if adv.documents %}
         <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
-          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
+          {% for t in adv.documents %}
+          {% set did = doc_id_by_title.get(t) %}
+          <li>
+            {% if did %}
+            <a href="#doc-row-{{ did }}" class="doc-jump-link" data-doc-id="{{ did }}">{{ t }}</a>
+            {% else %}
+            {{ t }} <span class="muted" style="font-size: 0.72rem;">(no longer in the knowledge base)</span>
+            {% endif %}
+          </li>
+          {% endfor %}
         </ul>
         <p class="muted" style="margin: 0.45rem 0 0; font-size: 0.76rem;">
           Only {{ adv.name }}'s sessions retrieve these. The shared J3P base is
@@ -10644,7 +10662,7 @@ input[type="file"], input[type="text"] {
         <th>Uploaded</th><th></th>
       </tr>
       {% for d in docs %}
-      <tr>
+      <tr id="doc-row-{{ d.id }}">
         <td class="kb-title">{{ d.title }}</td>
         <td class="muted kb-owner-cell" style="font-size: 0.76rem;">
           {% if advisors %}
@@ -11080,6 +11098,22 @@ input[type="file"], input[type="text"] {
         let saved = null;
         try { saved = localStorage.getItem(KEY); } catch (e) {}
         if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
+
+        // Links from an advisor's Knowledge list jump to that document's row
+        // in the Documents table — switch to the Knowledge tab, scroll to
+        // the row, and flash it so it's easy to spot.
+        document.querySelectorAll(".doc-jump-link").forEach(link => {
+          link.addEventListener("click", (e) => {
+            e.preventDefault();
+            activate("knowledge");
+            try { localStorage.setItem(KEY, "knowledge"); } catch (e) {}
+            const row = document.getElementById("doc-row-" + link.dataset.docId);
+            if (!row) return;
+            row.scrollIntoView({ behavior: "smooth", block: "center" });
+            row.classList.add("doc-row-flash");
+            setTimeout(() => row.classList.remove("doc-row-flash"), 1600);
+          });
+        });
       })();
     </script>
 </body></html>"""
@@ -11124,6 +11158,7 @@ def admin_dashboard():
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _advisor_map = document_advisor_map()
     _advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
+    _doc_id_by_title = {d["title"]: d["id"] for d in docs}
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
@@ -11134,6 +11169,7 @@ def admin_dashboard():
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
+        doc_id_by_title=_doc_id_by_title,
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
