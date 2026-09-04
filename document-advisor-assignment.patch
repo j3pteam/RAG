@@ -1,8 +1,17 @@
 diff --git a/app.py b/app.py
-index 4b5a702..c0c879b 100644
+index 4b5a702..e073355 100644
 --- a/app.py
 +++ b/app.py
-@@ -5823,7 +5823,7 @@ def _did_request(text: str):
+@@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
+     "auto_learning": False,
+     # Show the advisor photo beside replies
+     "show_avatar": True,
++    # Show initials instead of the default advisor's photo
++    "avatar_no_photo": False,
+     # Let participants add their own documents and writing
+     "allow_materials": True,
+     # Name shown with the default advisor photo. Blank uses the app name.
+@@ -5823,7 +5825,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -11,7 +20,7 @@ index 4b5a702..c0c879b 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5993,8 +5993,8 @@ def advisors_with_detail():
+@@ -5993,8 +5995,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -22,7 +31,7 @@ index 4b5a702..c0c879b 100644
          out.append(adv)
      return out
  
-@@ -6789,12 +6789,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +6791,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -44,7 +53,7 @@ index 4b5a702..c0c879b 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +6858,113 @@ def document_owners() -> dict:
+@@ -6852,19 +6860,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -165,7 +174,26 @@ index 4b5a702..c0c879b 100644
              keep.append(r)
      return keep
  
-@@ -9123,7 +9223,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -8820,8 +8922,17 @@ def advisor_avatar():
+     """The photo shown beside advisor replies.
+ 
+     An uploaded photo lives in Postgres so it survives redeploys; the bundled
+-    file is the fallback when nothing has been uploaded.
++    file is the fallback when nothing has been uploaded. "No photo — show
++    initials instead" (a setting, since the default advisor isn't a row in
++    the advisors table) takes priority over both.
+     """
++    if load_settings().get("avatar_no_photo"):
++        name = load_settings().get("avatar_name") or CONFIG["persona_name"]
++        resp = app.response_class(placeholder_avatar_svg(name),
++                                  mimetype="image/svg+xml")
++        resp.headers["Cache-Control"] = "no-cache"
++        return resp
++
+     stored = load_avatar()
+     if stored:
+         data, mime, updated = stored
+@@ -9123,7 +9234,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -176,7 +204,7 @@ index 4b5a702..c0c879b 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9235,13 @@ form.upload {
+@@ -9133,8 +9246,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -192,7 +220,7 @@ index 4b5a702..c0c879b 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9333,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9344,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -216,7 +244,40 @@ index 4b5a702..c0c879b 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9469,6 +9593,7 @@ input[type="file"], input[type="text"] {
+@@ -9330,7 +9465,7 @@ input[type="file"], input[type="text"] {
+     <h2>Display Settings</h2>
+     <form method="POST" action="/admin/settings" id="settings-form">
+       <input type="hidden" name="_fields"
+-             value="show_scheduling_button,show_avatar,allow_materials,avatar_name" />
++             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo" />
+       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+         <input type="checkbox" name="show_scheduling_button" value="1"
+@@ -9389,7 +9524,7 @@ input[type="file"], input[type="text"] {
+         <div style="flex: 1 1 auto; min-width: 0;">
+           <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
+           <span class="muted" style="font-size: 0.76rem;">
+-            Default — used on the main link{% if avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
++            Default — used on the main link{% if settings.avatar_no_photo %} · initials, no photo{% elif avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
+           </span>
+         </div>
+       </div>
+@@ -9419,6 +9554,14 @@ input[type="file"], input[type="text"] {
+                          border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
+         </form>
+         {% endif %}
++        <label style="display: flex; align-items: center; gap: 0.4rem;
++                      font-size: 0.78rem; cursor: pointer; margin-top: 0.5rem;">
++          <input type="checkbox" name="avatar_no_photo" value="1"
++                 form="settings-form"
++                 {% if settings.avatar_no_photo %}checked{% endif %}
++                 style="width: 15px; height: 15px; accent-color: var(--navy);" />
++          <span class="muted">No photo — show their initials instead</span>
++        </label>
+       </div>
+ 
+       <div class="advisor-links">
+@@ -9469,6 +9612,7 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -224,7 +285,7 @@ index 4b5a702..c0c879b 100644
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
            <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -10105,8 +10230,30 @@ input[type="file"], input[type="text"] {
+@@ -10105,8 +10249,30 @@ input[type="file"], input[type="text"] {
        {% for d in docs %}
        <tr>
          <td class="kb-title">{{ d.title }}</td>
@@ -257,7 +318,7 @@ index 4b5a702..c0c879b 100644
          </td>
          <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
          <td style="text-align: right;">{{ d.chunk_count }}</td>
-@@ -10528,6 +10675,8 @@ def admin_dashboard():
+@@ -10528,6 +10694,8 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -266,7 +327,7 @@ index 4b5a702..c0c879b 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +10684,9 @@ def admin_dashboard():
+@@ -10535,7 +10703,9 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -277,7 +338,7 @@ index 4b5a702..c0c879b 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,13 +10782,16 @@ def admin_save_advisor():
+@@ -10631,13 +10801,16 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -298,7 +359,15 @@ index 4b5a702..c0c879b 100644
  
      if save_advisor(slug, name, photo, mime, no_photo=no_photo):
          flash(f"✓ {name} saved — links are listed below.")
-@@ -11160,6 +11314,30 @@ def admin_delete(doc_id):
+@@ -10672,6 +10845,7 @@ def admin_settings():
+     labels = {
+         "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
+         "show_avatar": ("Advisor avatar", "shown", "hidden"),
++        "avatar_no_photo": ("Default photo", "showing initials instead", "showing the photo"),
+         "allow_materials": ("Participant materials", "on", "off"),
+         "auto_learning": ("Continuous learning", "on", "off"),
+         "require_login": ("Sign-in", "required", "not required"),
+@@ -11160,6 +11334,30 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

@@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
     "auto_learning": False,
     # Show the advisor photo beside replies
     "show_avatar": True,
+    # Show initials instead of the default advisor's photo
+    "avatar_no_photo": False,
     # Let participants add their own documents and writing
     "allow_materials": True,
     # Name shown with the default advisor photo. Blank uses the app name.
@@ -8920,8 +8922,17 @@ def advisor_avatar():
     """The photo shown beside advisor replies.
 
     An uploaded photo lives in Postgres so it survives redeploys; the bundled
-    file is the fallback when nothing has been uploaded.
+    file is the fallback when nothing has been uploaded. "No photo — show
+    initials instead" (a setting, since the default advisor isn't a row in
+    the advisors table) takes priority over both.
     """
+    if load_settings().get("avatar_no_photo"):
+        name = load_settings().get("avatar_name") or CONFIG["persona_name"]
+        resp = app.response_class(placeholder_avatar_svg(name),
+                                  mimetype="image/svg+xml")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
     stored = load_avatar()
     if stored:
         data, mime, updated = stored
@@ -9454,7 +9465,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials,avatar_name" />
+             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -9513,7 +9524,7 @@ input[type="file"], input[type="text"] {
         <div style="flex: 1 1 auto; min-width: 0;">
           <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
           <span class="muted" style="font-size: 0.76rem;">
-            Default — used on the main link{% if avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
+            Default — used on the main link{% if settings.avatar_no_photo %} · initials, no photo{% elif avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
           </span>
         </div>
       </div>
@@ -9543,6 +9554,14 @@ input[type="file"], input[type="text"] {
                          border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
         </form>
         {% endif %}
+        <label style="display: flex; align-items: center; gap: 0.4rem;
+                      font-size: 0.78rem; cursor: pointer; margin-top: 0.5rem;">
+          <input type="checkbox" name="avatar_no_photo" value="1"
+                 form="settings-form"
+                 {% if settings.avatar_no_photo %}checked{% endif %}
+                 style="width: 15px; height: 15px; accent-color: var(--navy);" />
+          <span class="muted">No photo — show their initials instead</span>
+        </label>
       </div>
 
       <div class="advisor-links">
@@ -10826,6 +10845,7 @@ def admin_settings():
     labels = {
         "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
         "show_avatar": ("Advisor avatar", "shown", "hidden"),
+        "avatar_no_photo": ("Default photo", "showing initials instead", "showing the photo"),
         "allow_materials": ("Participant materials", "on", "off"),
         "auto_learning": ("Continuous learning", "on", "off"),
         "require_login": ("Sign-in", "required", "not required"),
