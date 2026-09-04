@@ -1718,7 +1718,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       margin: 0.18rem 0 0 0; width: 17px; height: 17px;
       accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
     }
-    #ack-continue, #sched-continue {
+    #ack-continue, #sched-continue, #personality-continue {
       width: 100%; padding: 0.85rem 1rem;
       background: var(--navy); color: var(--gold);
       border: 1px solid var(--navy); border-radius: 2px;
@@ -1726,8 +1726,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       letter-spacing: 0.18em; text-transform: uppercase;
       cursor: pointer; transition: all 0.2s ease;
     }
-    #ack-continue:hover:not(:disabled), #sched-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
-    #ack-continue:disabled, #sched-continue:disabled { opacity: 0.4; cursor: not-allowed; }
+    #ack-continue:hover:not(:disabled), #sched-continue:hover:not(:disabled), #personality-continue:hover:not(:disabled) { background: var(--gold); color: var(--navy); }
+    #ack-continue:disabled, #sched-continue:disabled, #personality-continue:disabled { opacity: 0.4; cursor: not-allowed; }
     .ack-secondary {
       width: 100%; margin-top: 0.55rem;
       padding: 0.7rem 1rem;
@@ -1738,6 +1738,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer; transition: all 0.18s ease;
     }
     .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
+
+    /* Five-question personality gate */
+    .pq-row {
+      margin: 0 0 1.15rem 0; padding: 0 0 1.15rem 0;
+      border-bottom: 1px dashed var(--line);
+    }
+    .pq-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .pq-statement { margin: 0 0 0.6rem 0; font-size: 0.9rem; line-height: 1.5; }
+    .pq-scale { display: flex; gap: 0.4rem; }
+    .pq-opt {
+      flex: 1; padding: 0.55rem 0; background: var(--paper);
+      border: 1px solid var(--line); border-radius: 2px;
+      font-family: inherit; font-size: 0.85rem; color: var(--navy);
+      cursor: pointer; transition: all 0.15s ease;
+    }
+    .pq-opt:hover { border-color: var(--gold); }
+    .pq-opt.selected { background: var(--navy); color: var(--gold); border-color: var(--navy); }
+    .pq-labels {
+      display: flex; justify-content: space-between; margin-top: 0.3rem;
+      font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
+      color: var(--muted);
+    }
 
     .ack-foot {
       margin: 1.1rem 0 0 0; text-align: center;
@@ -2492,6 +2514,45 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  <div id="personality-overlay" class="ack-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="personality-title" aria-describedby="personality-body" hidden>
+    <div class="ack-box">
+      <div class="ack-head">
+        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="ack-logo" />
+        <span class="ack-divider"></span>
+        <span class="ack-tag">Quick personalization</span>
+      </div>
+      <div class="ack-content">
+        <h2 id="personality-title">Help me tailor my responses</h2>
+        <div id="personality-body" class="ack-text">
+          <p>
+            In order to customize my responses to best match your personality,
+            please answer a few quick questions. This isn't a clinical
+            assessment — just five short statements to help shape tone, not
+            content. 1 is &ldquo;strongly disagree,&rdquo; 5 is &ldquo;strongly
+            agree.&rdquo;
+          </p>
+        </div>
+        <div id="personality-questions">
+          {% for q in personality_questions %}
+          <div class="pq-row" data-trait="{{ q.trait }}">
+            <p class="pq-statement">{{ q.text }}</p>
+            <div class="pq-scale" role="radiogroup" aria-label="{{ q.text }}">
+              {% for v in range(1, 6) %}
+              <button type="button" class="pq-opt" data-value="{{ v }}"
+                      aria-label="{{ v }}">{{ v }}</button>
+              {% endfor %}
+            </div>
+            <div class="pq-labels"><span>Disagree</span><span>Agree</span></div>
+          </div>
+          {% endfor %}
+        </div>
+        <button type="button" id="personality-continue" disabled>Continue</button>
+        <button type="button" id="personality-skip" class="ack-secondary">Skip for now</button>
+      </div>
+    </div>
+  </div>
+
   <header>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
@@ -2707,18 +2768,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chat = document.getElementById("chat");
 
     // -------------------------------------------------------------
-    // Acknowledgment gate — required at the start of every session
+    // Acknowledgment gate — required at the start of every session —
+    // followed by an optional, skippable personality gate.
     // -------------------------------------------------------------
-    // sessionStorage (not localStorage) is deliberate: acknowledgment is scoped
-    // to the browsing session, so closing the tab and returning requires it
-    // again. A reload mid-session won't re-prompt. Bump the key if the
-    // disclaimer wording changes.
+    // sessionStorage (not localStorage) is deliberate: both gates are scoped
+    // to the browsing session, so closing the tab and returning requires
+    // them again. A reload mid-session won't re-prompt. Bump a key if its
+    // wording changes.
     const ACK_KEY = "j3p_ack_v2";
-    (function initAckGate() {
-      const overlay = document.getElementById("ack-overlay");
-      const checkbox = document.getElementById("ack-checkbox");
-      const continueBtn = document.getElementById("ack-continue");
-      if (!overlay) return;
+    const PERSONALITY_KEY = "j3p_personality_v1";
+    (function initGates() {
+      const ackOverlay = document.getElementById("ack-overlay");
+      const ackCheckbox = document.getElementById("ack-checkbox");
+      const ackContinueBtn = document.getElementById("ack-continue");
+      const personalityOverlay = document.getElementById("personality-overlay");
+      const personalityContinueBtn = document.getElementById("personality-continue");
+      const personalitySkipBtn = document.getElementById("personality-skip");
+      const composer = document.querySelector(".composer-wrap");
+
+      function setComposerBlocked(blocked) {
+        if (!composer) return;
+        if (blocked) composer.setAttribute("aria-hidden", "true");
+        else composer.removeAttribute("aria-hidden");
+      }
+      function focusMessageBox() {
+        const input = document.getElementById("message");
+        if (input) input.focus();
+      }
+
+      // Not a liability disclaimer like the acknowledgment gate, so a
+      // storage glitch should fail toward skipping it, not blocking entry.
+      let personalityDone = true;
+      try {
+        personalityDone = !!sessionStorage.getItem(PERSONALITY_KEY);
+      } catch (e) {
+        personalityDone = true;
+      }
+
+      function openPersonalityGate() {
+        if (!personalityOverlay || personalityDone) {
+          setComposerBlocked(false);
+          focusMessageBox();
+          return;
+        }
+        setComposerBlocked(true);
+        personalityOverlay.hidden = false;
+      }
+
+      if (personalityOverlay && personalityContinueBtn) {
+        const rows = Array.from(personalityOverlay.querySelectorAll(".pq-row"));
+        const answers = {};
+        rows.forEach(row => {
+          const trait = row.dataset.trait;
+          const opts = Array.from(row.querySelectorAll(".pq-opt"));
+          opts.forEach(opt => {
+            opt.addEventListener("click", () => {
+              opts.forEach(o => o.classList.remove("selected"));
+              opt.classList.add("selected");
+              answers[trait] = opt.dataset.value;
+              personalityContinueBtn.disabled = Object.keys(answers).length < rows.length;
+            });
+          });
+        });
+
+        personalityContinueBtn.addEventListener("click", () => {
+          if (personalityContinueBtn.disabled) return;
+          try { sessionStorage.setItem(PERSONALITY_KEY, "1"); } catch (e) {}
+          try {
+            fetch("/personality", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ answers }),
+              keepalive: true,
+            }).catch(() => {});
+          } catch (e) { /* non-blocking — never hold up entry */ }
+          personalityOverlay.hidden = true;
+          setComposerBlocked(false);
+          focusMessageBox();
+        });
+
+        if (personalitySkipBtn) {
+          personalitySkipBtn.addEventListener("click", () => {
+            try { sessionStorage.setItem(PERSONALITY_KEY, "skipped"); } catch (e) {}
+            personalityOverlay.hidden = true;
+            setComposerBlocked(false);
+            focusMessageBox();
+          });
+        }
+      }
+
+      if (!ackOverlay) { openPersonalityGate(); return; }
 
       let alreadyAcked = false;
       try {
@@ -2728,21 +2867,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
         // rather than silently skipping it.
         alreadyAcked = false;
       }
-      if (alreadyAcked) return;
+      if (alreadyAcked) { openPersonalityGate(); return; }
 
-      // Block the composer while the gate is up
-      const composer = document.querySelector(".composer-wrap");
-      if (composer) composer.setAttribute("aria-hidden", "true");
+      setComposerBlocked(true);
+      ackOverlay.hidden = false;
+      setTimeout(() => ackCheckbox.focus(), 120);
 
-      overlay.hidden = false;
-      setTimeout(() => checkbox.focus(), 120);
-
-      checkbox.addEventListener("change", () => {
-        continueBtn.disabled = !checkbox.checked;
+      ackCheckbox.addEventListener("change", () => {
+        ackContinueBtn.disabled = !ackCheckbox.checked;
       });
 
-      continueBtn.addEventListener("click", () => {
-        if (!checkbox.checked) return;
+      ackContinueBtn.addEventListener("click", () => {
+        if (!ackCheckbox.checked) return;
         try {
           sessionStorage.setItem(ACK_KEY, new Date().toISOString());
         } catch (e) { /* not persistable — gate will show again */ }
@@ -2755,15 +2891,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
             keepalive: true,
           }).catch(() => {});
         } catch (e) { /* non-blocking — never hold up entry */ }
-        overlay.hidden = true;
-        if (composer) composer.removeAttribute("aria-hidden");
-        const input = document.getElementById("message");
-        if (input) input.focus();
+        ackOverlay.hidden = true;
+        openPersonalityGate();
       });
 
       // Enter on the checkbox accepts; Esc must not dismiss the gate
-      overlay.addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && checkbox.checked) continueBtn.click();
+      ackOverlay.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && ackCheckbox.checked) ackContinueBtn.click();
         if (e.key === "Escape") e.preventDefault();
       });
     })();
@@ -6299,6 +6433,149 @@ def participant_materials_block(budget=24000) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Personality snapshot
+# ---------------------------------------------------------------------------
+# A short, optional, skippable five-question self-report — one item per Big
+# Five trait, worded in the spirit of the public-domain IPIP item pool — that
+# a participant can answer once per session so replies lean toward their
+# preferred communication style. This is a light personalization touch, not
+# a validated or clinical assessment, and the scores are never surfaced back
+# to the participant as a label, a type, or a number.
+
+PERSONALITY_QUESTIONS = [
+    {"trait": "openness",
+     "text": "I enjoy exploring new ideas and unfamiliar approaches."},
+    {"trait": "conscientiousness",
+     "text": "I like to plan ahead and follow through on the details."},
+    {"trait": "extraversion",
+     "text": "I feel energized by talking things through out loud with others."},
+    {"trait": "agreeableness",
+     "text": "I tend to consider others' feelings before pushing my own view."},
+    {"trait": "stability",
+     "text": "I stay steady and calm even when things get stressful."},
+]
+_PERSONALITY_TRAITS = [q["trait"] for q in PERSONALITY_QUESTIONS]
+
+
+def _personality_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_personality (
+                token             TEXT PRIMARY KEY,
+                openness          SMALLINT,
+                conscientiousness SMALLINT,
+                extraversion      SMALLINT,
+                agreeableness     SMALLINT,
+                stability         SMALLINT,
+                updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_personality_scores(answers: dict) -> bool:
+    """answers: {trait: 1-5} for some or all of the five traits above.
+    Falls back to the session (this browser only) if Postgres is unavailable.
+    """
+    clean = {}
+    for trait in _PERSONALITY_TRAITS:
+        if trait not in answers:
+            continue
+        try:
+            v = int(answers[trait])
+        except (TypeError, ValueError):
+            continue
+        if 1 <= v <= 5:
+            clean[trait] = v
+    if not clean:
+        return False
+
+    conn = _settings_db_conn()
+    if not conn:
+        session["personality"] = clean
+        session.permanent = True
+        return True
+    try:
+        _personality_ensure_table(conn)
+        token = participant_token()
+        cols = ", ".join(clean.keys())
+        placeholders = ", ".join(["%s"] * len(clean))
+        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO participant_personality (token, {cols}, updated_at)
+                VALUES (%s, {placeholders}, NOW())
+                ON CONFLICT (token) DO UPDATE SET {updates}, updated_at = NOW()
+            """, (token, *clean.values()))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[personality] save failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_personality_scores() -> dict:
+    conn = _settings_db_conn()
+    if not conn:
+        return session.get("personality") or {}
+    try:
+        _personality_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT openness, conscientiousness, extraversion,
+                       agreeableness, stability
+                FROM participant_personality WHERE token = %s
+            """, (participant_token(),))
+            row = cur.fetchone()
+            if not row:
+                return session.get("personality") or {}
+            return {k: v for k, v in zip(_PERSONALITY_TRAITS, row) if v is not None}
+    except Exception as e:
+        app.logger.error(f"[personality] read failed: {e}")
+        return session.get("personality") or {}
+    finally:
+        conn.close()
+
+
+def personality_style_block() -> str:
+    """Turns a few self-report scores into brief, private tone guidance.
+    Never surfaced to the participant as a score, a label, or a type."""
+    scores = get_personality_scores()
+    if not scores:
+        return ""
+    notes = []
+    if scores.get("openness", 3) >= 4:
+        notes.append("leans curious and exploratory — open, unconventional framing lands well")
+    elif scores.get("openness", 3) <= 2:
+        notes.append("prefers concrete, practical framing over abstract theorizing")
+    if scores.get("conscientiousness", 3) >= 4:
+        notes.append("appreciates structure — clear next steps, checklists, follow-through")
+    elif scores.get("conscientiousness", 3) <= 2:
+        notes.append("keep structure light — don't over-schedule or over-organize the reply")
+    if scores.get("extraversion", 3) >= 4:
+        notes.append("comfortable with an energetic, talk-it-out tone")
+    elif scores.get("extraversion", 3) <= 2:
+        notes.append("prefers a calmer, more reflective pace — don't overdo enthusiasm")
+    if scores.get("agreeableness", 3) >= 4:
+        notes.append("values warmth and consensus-building language")
+    elif scores.get("agreeableness", 3) <= 2:
+        notes.append("fine with direct, blunt feedback — no need to over-soften it")
+    if scores.get("stability", 3) >= 4:
+        notes.append("can handle pressure and setbacks discussed matter-of-factly")
+    elif scores.get("stability", 3) <= 2:
+        notes.append("extra gentleness around stress or setbacks — avoid alarming language")
+    if not notes:
+        return ""
+    return (
+        "\n\n---\nCOMMUNICATION STYLE (from a short opt-in self-report; treat "
+        "as a soft steer on tone only — never mention it, never call it a "
+        "personality type or a score):\n- " + "\n- ".join(notes) + "\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Participant profile
 # ---------------------------------------------------------------------------
 # A deliberately thin profile: first name, role, specialty. No institution, no
@@ -7267,6 +7544,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
+        personality_questions=PERSONALITY_QUESTIONS,
     )
 
 
@@ -8020,12 +8298,14 @@ def chat():
             + profile_guidance()
             + open_commitments_block()
             + participant_materials_block()
+            + personality_style_block()
         )
     else:
         composed_prompt = (
             base_prompt + lessons_block + scope_guard + voice_guard
             + document_guard + contact_guard + profile_guidance()
             + open_commitments_block() + participant_materials_block()
+            + personality_style_block()
         )
 
     try:
@@ -8377,6 +8657,22 @@ def acknowledge_release():
     session["release_ack_version"] = str(data.get("version") or "")[:40]
     app.logger.info("[ack] release acknowledged")
     return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
+
+
+@app.route("/personality", methods=["POST"])
+@paywall.paywall_required
+def save_personality():
+    """Records the optional five-question style self-report for this
+    participant. Skipping it is a normal, silent outcome — this endpoint is
+    only hit when someone actually answers."""
+    data = request.get_json(silent=True) or {}
+    answers = data.get("answers") or {}
+    if not isinstance(answers, dict):
+        return jsonify({"ok": False}), 400
+    if save_personality_scores(answers):
+        app.logger.info("[personality] self-report saved")
+        return jsonify({"ok": True})
+    return jsonify({"ok": False}), 400
 
 
 @app.route("/reset", methods=["POST"])
