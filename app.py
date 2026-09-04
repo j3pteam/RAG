@@ -5993,8 +5993,8 @@ def advisors_with_detail():
     for adv in list_advisors():
         adv = dict(adv)
         adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
-        adv["documents"] = [t for t, slug in document_owners().items()
-                            if slug == adv["slug"]]
+        adv["documents"] = [t for t, slugs in document_advisor_map().items()
+                            if adv["slug"] in slugs]
         out.append(adv)
     return out
 
@@ -6789,12 +6789,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
 # Per-advisor knowledge
 # ---------------------------------------------------------------------------
 # Two tiers. The shared J3P base is the framework every advisor draws on. On
-# top of that, a document can be assigned to one advisor, and then only that
-# advisor's sessions retrieve it.
+# top of that, a document can be assigned to one or more advisors, and then
+# only those advisors' sessions retrieve it.
 #
 # Ownership is tracked here rather than in the documents table, so database.py
 # is untouched: documents keep unique titles (the duplicate check enforces it),
-# and a title-to-advisor map is enough to filter retrieval.
+# and a title-to-advisor(s) map is enough to filter retrieval.
+#
+# document_owner (legacy, single advisor per title) is kept for backward
+# compatibility with existing rows and the upload-time "owner" selects.
+# document_advisors (title, advisor_slug) is the current many-to-many table —
+# it's what the admin "Base" column reads and writes, and it lets a document
+# be shared with several advisors at once rather than exactly one.
 
 def _doc_owner_ensure_table(conn):
     with conn.cursor() as cur:
@@ -6852,19 +6858,113 @@ def document_owners() -> dict:
         conn.close()
 
 
-def filter_chunks_for_advisor(results, advisor_slug):
-    """Shared documents plus this advisor's own. Others are dropped.
+def _doc_advisors_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS document_advisors (
+                title        TEXT NOT NULL,
+                advisor_slug TEXT NOT NULL,
+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (title, advisor_slug)
+            )
+        """)
+    conn.commit()
 
-    An unassigned document belongs to the shared J3P base and is always
-    available; an assigned one is reachable only in that advisor's sessions.
+
+def set_document_advisors(title: str, advisor_slugs) -> bool:
+    """Assign a document to zero or more advisors.
+
+    An empty list clears any restriction — the document returns to the
+    shared J3P base, available to every advisor. A non-empty list restricts
+    retrieval to just those advisors (one, several, or — by checking every
+    advisor — effectively all of them).
     """
-    owners = document_owners()
-    if not owners:
+    if not title:
+        return False
+    slugs = sorted({(s or "").strip() for s in (advisor_slugs or []) if (s or "").strip()})
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _doc_advisors_ensure_table(conn)
+        _doc_owner_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM document_advisors WHERE title = %s", (title[:200],))
+            for slug in slugs:
+                cur.execute("""
+                    INSERT INTO document_advisors (title, advisor_slug)
+                    VALUES (%s, %s)
+                    ON CONFLICT (title, advisor_slug) DO NOTHING
+                """, (title[:200], slug))
+            # Clear the legacy single-owner row too, so it can't reappear as
+            # a fallback in document_advisor_map() after an explicit edit.
+            cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[kb] advisor assignment write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def document_advisor_map() -> dict:
+    """{title: [advisor_slug, ...]} for every document with a restricted
+    audience. A title absent from this dict belongs to the shared J3P base.
+
+    Merges the current many-to-many table with any legacy single-owner rows
+    that predate it and haven't been touched since (a title present in the
+    new table always wins over its legacy row).
+    """
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _doc_advisors_ensure_table(conn)
+        _doc_owner_ensure_table(conn)
+        out = {}
+        with conn.cursor() as cur:
+            cur.execute("SELECT title, advisor_slug FROM document_advisors ORDER BY advisor_slug")
+            for title, slug in cur.fetchall():
+                out.setdefault(title, []).append(slug)
+        with conn.cursor() as cur:
+            cur.execute("SELECT title, advisor_slug FROM document_owner")
+            for title, slug in cur.fetchall():
+                if title not in out and slug:
+                    out[title] = [slug]
+        return out
+    except Exception as e:
+        app.logger.error(f"[kb] advisor map read failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def document_advisor_labels(advisor_map: dict, advisor_names: dict) -> dict:
+    """{title: display label} for the admin 'Base' column, e.g. 'Shared' or
+    'Dr. Kim, Dr. Patel'."""
+    out = {}
+    for title, slugs in advisor_map.items():
+        names = [advisor_names.get(s, s) for s in slugs]
+        out[title] = ", ".join(names) if names else "Shared"
+    return out
+
+
+def filter_chunks_for_advisor(results, advisor_slug):
+    """Shared documents plus every advisor this doc is assigned to. Others
+    are dropped.
+
+    A document with no assignments belongs to the shared J3P base and is
+    always available; an assigned one is reachable only to the advisor(s)
+    it's been given to.
+    """
+    advisor_map = document_advisor_map()
+    if not advisor_map:
         return results
     keep = []
     for r in results:
-        owner = owners.get(r.get("title"))
-        if not owner or owner == advisor_slug:
+        slugs = advisor_map.get(r.get("title"))
+        if not slugs or advisor_slug in slugs:
             keep.append(r)
     return keep
 
@@ -9226,6 +9326,23 @@ input[type="file"], input[type="text"] {
   .kb-table { table-layout: auto; }
   .kb-source { white-space: normal; max-width: none; word-break: break-all; }
 }
+
+/* Per-document advisor assignment — click the "Base" label to reassign */
+.btn-small { padding: 0.25rem 0.6rem; font-size: 0.68rem; margin-top: 0.5rem; }
+.kb-owner-cell { position: relative; }
+.kb-owner summary {
+  cursor: pointer; color: var(--navy); list-style: none;
+  border-bottom: 1px dotted var(--muted);
+}
+.kb-owner summary::-webkit-details-marker { display: none; }
+.kb-owner-panel {
+  position: absolute; z-index: 5; top: 100%; left: 0; margin-top: 0.3rem;
+  background: var(--paper); border: 1px solid var(--line); border-radius: 3px;
+  padding: 0.6rem 0.7rem; box-shadow: var(--shadow); width: 220px;
+}
+.kb-owner-option {
+  display: block; font-size: 0.78rem; padding: 0.15rem 0; cursor: pointer;
+}
 .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .expand-btn {
       background: transparent;
@@ -10105,8 +10222,30 @@ input[type="file"], input[type="text"] {
       {% for d in docs %}
       <tr>
         <td class="kb-title">{{ d.title }}</td>
-        <td class="muted" style="font-size: 0.76rem;">
-          {% if owners.get(d.title) %}{{ advisor_names.get(owners[d.title], owners[d.title]) }}{% else %}Shared{% endif %}
+        <td class="muted kb-owner-cell" style="font-size: 0.76rem;">
+          {% if advisors %}
+          <details class="kb-owner">
+            <summary>{{ doc_owner_labels.get(d.title, 'Shared') }}</summary>
+            <form method="POST" action="/admin/document-advisors" class="kb-owner-panel">
+              <input type="hidden" name="title" value="{{ d.title }}" />
+              <p class="muted" style="margin: 0 0 0.4rem 0; font-size: 0.72rem;">
+                Leave everything unchecked for the shared J3P base. Check one
+                advisor, or several, to limit this document to just them.
+              </p>
+              {% set assigned = advisor_map.get(d.title) or [] %}
+              {% for adv in advisors %}
+              <label class="kb-owner-option">
+                <input type="checkbox" name="advisors" value="{{ adv.slug }}"
+                       {% if adv.slug in assigned %}checked{% endif %} />
+                {{ adv.name }}
+              </label>
+              {% endfor %}
+              <button type="submit" class="btn btn-small">Save</button>
+            </form>
+          </details>
+          {% else %}
+          {{ doc_owner_labels.get(d.title, 'Shared') }}
+          {% endif %}
         </td>
         <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
         <td style="text-align: right;">{{ d.chunk_count }}</td>
@@ -10528,6 +10667,8 @@ def admin_dashboard():
         rating=(None if log_filter == "all" else log_filter),
     ) if db_ok else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
+    _advisor_map = document_advisor_map()
+    _advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
     return render_template_string(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
@@ -10535,7 +10676,9 @@ def admin_dashboard():
         avatar_custom=bool(load_avatar()),
         advisors=advisors_with_detail(),
         owners=document_owners(),
-        advisor_names={a["slug"]: a["name"] for a in list_advisors()},
+        advisor_map=_advisor_map,
+        doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
+        advisor_names=_advisor_names,
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
@@ -11157,6 +11300,30 @@ def admin_delete(doc_id):
         flash(f"Deleted document #{doc_id}.")
     except Exception as e:
         flash(f"Delete failed: {str(e)[:200]}")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/document-advisors", methods=["POST"])
+@admin_required
+def admin_set_document_advisors():
+    """Reassign an already-uploaded document to zero or more advisors from
+    the Knowledge Base table — the shared J3P base, one advisor, or several."""
+    title = (request.form.get("title") or "").strip()
+    slugs = [s for s in request.form.getlist("advisors") if s]
+    if not title:
+        flash("Missing document title — could not update its assignment.")
+        return redirect(url_for("admin_dashboard"))
+
+    ok = set_document_advisors(title, slugs)
+    if not ok:
+        flash(f"Could not update the knowledge-base assignment for '{title}'.")
+        return redirect(url_for("admin_dashboard"))
+
+    if slugs:
+        names = [a["name"] for a in list_advisors() if a["slug"] in slugs]
+        flash(f"✓ '{title}' assigned to {', '.join(names) if names else ', '.join(slugs)}.")
+    else:
+        flash(f"✓ '{title}' moved to the shared J3P base — available to every advisor.")
     return redirect(url_for("admin_dashboard"))
 
 
