@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..e073355 100644
+index 4b5a702..a124d5d 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
@@ -193,7 +193,36 @@ index 4b5a702..e073355 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -9123,7 +9234,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9095,9 +9206,26 @@ header a:hover { color: var(--gold); }
+   margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
+   border-bottom: 2px solid var(--gold);
+ }
++
++/* Top-level tabs — five groups instead of eight stacked sections */
++.tabs {
++  display: flex; gap: 0.3rem; border-bottom: 2px solid var(--line);
++  margin-bottom: 1.6rem; flex-wrap: wrap;
++}
++.tab-btn {
++  background: transparent; border: none; cursor: pointer; font-family: inherit;
++  padding: 0.7rem 1.1rem; font-size: 0.78rem; letter-spacing: 0.08em;
++  text-transform: uppercase; color: var(--muted);
++  border-bottom: 2px solid transparent; margin-bottom: -2px;
++}
++.tab-btn.active { color: var(--navy); border-bottom-color: var(--rust); font-weight: 500; }
++.tab-btn:hover:not(.active) { color: var(--navy); }
++.tab-pane { display: none; }
++.tab-pane.active { display: block; }
++.tab-pane .group-heading:first-child { margin-top: 0; }
+ .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
+-.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
+-.stat { flex: 1; }
++.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
++.stat { flex: 1; min-width: 90px; }
+ .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
+ .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
+ table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+@@ -9123,7 +9251,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -204,7 +233,7 @@ index 4b5a702..e073355 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9246,13 @@ form.upload {
+@@ -9133,8 +9263,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -220,7 +249,7 @@ index 4b5a702..e073355 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9344,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9361,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -244,7 +273,62 @@ index 4b5a702..e073355 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9330,7 +9465,7 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9476,62 @@ input[type="file"], input[type="text"] {
+     </div>
+   </div>
+ 
++  <div class="tabs">
++    <button type="button" class="tab-btn active" data-tab="overview">Overview</button>
++    <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
++    <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
++    <button type="button" class="tab-btn" data-tab="activity">Activity</button>
++    <button type="button" class="tab-btn" data-tab="settings">Settings</button>
++  </div>
++
++  <div class="tab-pane active" data-tab="overview">
++    <h2 class="group-heading">Overview</h2>
++    <div class="section">
++      <h2>At a Glance</h2>
++      <div class="stats">
++        <div class="stat">
++          <div class="stat-value">{{ stats.up }}</div>
++          <div class="stat-label">Thumbs up</div>
++        </div>
++        <div class="stat">
++          <div class="stat-value">{{ stats.down }}</div>
++          <div class="stat-label">Thumbs down</div>
++        </div>
++        <div class="stat">
++          <div class="stat-value">
++            {% if stats.total > 0 %}{{ (100 * stats.up / stats.total)|round(0)|int }}%{% else %}—{% endif %}
++          </div>
++          <div class="stat-label">Helpful rate</div>
++        </div>
++        <div class="stat">
++          <div class="stat-value">{{ docs|length if rag_ready else '—' }}</div>
++          <div class="stat-label">Documents</div>
++        </div>
++        <div class="stat">
++          <div class="stat-value">{{ advisors|length + 1 }}</div>
++          <div class="stat-label">Advisors</div>
++        </div>
++        <div class="stat">
++          <div class="stat-value">{{ 'Required' if settings.require_login else 'Open' }}</div>
++          <div class="stat-label">Sign-in</div>
++        </div>
++      </div>
++      <p class="muted" style="margin: 1.2rem 0 0; font-size: 0.82rem;">
++        Full detail on ratings, learning runs and briefings is under
++        <strong>Activity</strong>; documents and uploads are under
++        <strong>Knowledge</strong>.
++      </p>
++    </div>
++  </div>
++
++  <div class="tab-pane" data-tab="settings">
+   <h2 class="group-heading">Display</h2>
+ 
+   <div class="section">
      <h2>Display Settings</h2>
      <form method="POST" action="/admin/settings" id="settings-form">
        <input type="hidden" name="_fields"
@@ -253,7 +337,17 @@ index 4b5a702..e073355 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9389,7 +9524,7 @@ input[type="file"], input[type="text"] {
+@@ -9369,7 +9570,9 @@ input[type="file"], input[type="text"] {
+     </form>
+ 
+   </div>
++  </div>
+ 
++  <div class="tab-pane" data-tab="advisors">
+   <h2 class="group-heading">Advisors</h2>
+ 
+   <div class="section">
+@@ -9389,7 +9592,7 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -262,7 +356,7 @@ index 4b5a702..e073355 100644
            </span>
          </div>
        </div>
-@@ -9419,6 +9554,14 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +9622,14 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -277,7 +371,7 @@ index 4b5a702..e073355 100644
        </div>
  
        <div class="advisor-links">
-@@ -9469,6 +9612,7 @@ input[type="file"], input[type="text"] {
+@@ -9469,6 +9680,7 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -285,7 +379,37 @@ index 4b5a702..e073355 100644
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
            <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -10105,8 +10249,30 @@ input[type="file"], input[type="text"] {
+@@ -9583,7 +9795,9 @@ input[type="file"], input[type="text"] {
+       </form>
+     </div>
+   </div>
++  </div>
+ 
++  <div class="tab-pane" data-tab="settings">
+   <h2 class="group-heading">Access</h2>
+ 
+   <div class="section">
+@@ -9620,7 +9834,9 @@ input[type="file"], input[type="text"] {
+       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
+     </form>
+   </div>
++  </div>
+ 
++  <div class="tab-pane" data-tab="activity">
+   <h2 class="group-heading">Feedback</h2>
+ 
+   <div class="section">
+@@ -10084,7 +10300,9 @@ input[type="file"], input[type="text"] {
+     <p class="muted">No feedback yet.</p>
+     {% endif %}
+   </div>
++  </div>
+ 
++  <div class="tab-pane" data-tab="knowledge">
+   {% if rag_ready %}
+   <h2 class="group-heading">Knowledge Base</h2>
+ 
+@@ -10105,8 +10323,30 @@ input[type="file"], input[type="text"] {
        {% for d in docs %}
        <tr>
          <td class="kb-title">{{ d.title }}</td>
@@ -318,7 +442,53 @@ index 4b5a702..e073355 100644
          </td>
          <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
          <td style="text-align: right;">{{ d.chunk_count }}</td>
-@@ -10528,6 +10694,8 @@ def admin_dashboard():
+@@ -10250,7 +10490,10 @@ input[type="file"], input[type="text"] {
+       <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
+     </form>
+   </div>
++  {% else %}
++  <p class="muted">Set up Postgres and <code>OPENAI_API_KEY</code> to enable the knowledge base — see the notice above.</p>
+   {% endif %}
++  </div>
+ 
+ </div>
+ 
+@@ -10488,6 +10731,34 @@ input[type="file"], input[type="text"] {
+         }, true);
+       })();
+     </script>
++
++    <script>
++      // ---------------------------------------------------------------
++      // Tab navigation — five groups instead of eight stacked sections.
++      // The active tab is remembered in localStorage so it survives the
++      // full-page reload every form submission on this page causes.
++      // ---------------------------------------------------------------
++      (function() {
++        const KEY = "j3p_admin_tab";
++        const tabs = Array.from(document.querySelectorAll(".tab-btn"));
++        const panes = Array.from(document.querySelectorAll(".tab-pane"));
++        if (!tabs.length) return;
++
++        function activate(name) {
++          tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
++          panes.forEach(p => p.classList.toggle("active", p.dataset.tab === name));
++        }
++
++        tabs.forEach(t => t.addEventListener("click", () => {
++          activate(t.dataset.tab);
++          try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
++        }));
++
++        let saved = null;
++        try { saved = localStorage.getItem(KEY); } catch (e) {}
++        if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
++      })();
++    </script>
+ </body></html>"""
+ 
+ 
+@@ -10528,6 +10799,8 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -327,7 +497,7 @@ index 4b5a702..e073355 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +10703,9 @@ def admin_dashboard():
+@@ -10535,7 +10808,9 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -338,7 +508,7 @@ index 4b5a702..e073355 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,13 +10801,16 @@ def admin_save_advisor():
+@@ -10631,13 +10906,16 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -359,7 +529,7 @@ index 4b5a702..e073355 100644
  
      if save_advisor(slug, name, photo, mime, no_photo=no_photo):
          flash(f"✓ {name} saved — links are listed below.")
-@@ -10672,6 +10845,7 @@ def admin_settings():
+@@ -10672,6 +10950,7 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -367,7 +537,7 @@ index 4b5a702..e073355 100644
          "allow_materials": ("Participant materials", "on", "off"),
          "auto_learning": ("Continuous learning", "on", "off"),
          "require_login": ("Sign-in", "required", "not required"),
-@@ -11160,6 +11334,30 @@ def admin_delete(doc_id):
+@@ -11160,6 +11439,30 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

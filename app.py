@@ -9206,9 +9206,26 @@ header a:hover { color: var(--gold); }
   margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
   border-bottom: 2px solid var(--gold);
 }
+
+/* Top-level tabs — five groups instead of eight stacked sections */
+.tabs {
+  display: flex; gap: 0.3rem; border-bottom: 2px solid var(--line);
+  margin-bottom: 1.6rem; flex-wrap: wrap;
+}
+.tab-btn {
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  padding: 0.7rem 1.1rem; font-size: 0.78rem; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted);
+  border-bottom: 2px solid transparent; margin-bottom: -2px;
+}
+.tab-btn.active { color: var(--navy); border-bottom-color: var(--rust); font-weight: 500; }
+.tab-btn:hover:not(.active) { color: var(--navy); }
+.tab-pane { display: none; }
+.tab-pane.active { display: block; }
+.tab-pane .group-heading:first-child { margin-top: 0; }
 .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
-.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
-.stat { flex: 1; }
+.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
+.stat { flex: 1; min-width: 90px; }
 .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
 .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
 table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
@@ -9459,6 +9476,55 @@ input[type="file"], input[type="text"] {
     </div>
   </div>
 
+  <div class="tabs">
+    <button type="button" class="tab-btn active" data-tab="overview">Overview</button>
+    <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
+    <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
+    <button type="button" class="tab-btn" data-tab="activity">Activity</button>
+    <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+  </div>
+
+  <div class="tab-pane active" data-tab="overview">
+    <h2 class="group-heading">Overview</h2>
+    <div class="section">
+      <h2>At a Glance</h2>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value">{{ stats.up }}</div>
+          <div class="stat-label">Thumbs up</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">{{ stats.down }}</div>
+          <div class="stat-label">Thumbs down</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">
+            {% if stats.total > 0 %}{{ (100 * stats.up / stats.total)|round(0)|int }}%{% else %}—{% endif %}
+          </div>
+          <div class="stat-label">Helpful rate</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">{{ docs|length if rag_ready else '—' }}</div>
+          <div class="stat-label">Documents</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">{{ advisors|length + 1 }}</div>
+          <div class="stat-label">Advisors</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value">{{ 'Required' if settings.require_login else 'Open' }}</div>
+          <div class="stat-label">Sign-in</div>
+        </div>
+      </div>
+      <p class="muted" style="margin: 1.2rem 0 0; font-size: 0.82rem;">
+        Full detail on ratings, learning runs and briefings is under
+        <strong>Activity</strong>; documents and uploads are under
+        <strong>Knowledge</strong>.
+      </p>
+    </div>
+  </div>
+
+  <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Display</h2>
 
   <div class="section">
@@ -9504,7 +9570,9 @@ input[type="file"], input[type="text"] {
     </form>
 
   </div>
+  </div>
 
+  <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
 
   <div class="section">
@@ -9727,7 +9795,9 @@ input[type="file"], input[type="text"] {
       </form>
     </div>
   </div>
+  </div>
 
+  <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Access</h2>
 
   <div class="section">
@@ -9764,7 +9834,9 @@ input[type="file"], input[type="text"] {
       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
   </div>
+  </div>
 
+  <div class="tab-pane" data-tab="activity">
   <h2 class="group-heading">Feedback</h2>
 
   <div class="section">
@@ -10228,7 +10300,9 @@ input[type="file"], input[type="text"] {
     <p class="muted">No feedback yet.</p>
     {% endif %}
   </div>
+  </div>
 
+  <div class="tab-pane" data-tab="knowledge">
   {% if rag_ready %}
   <h2 class="group-heading">Knowledge Base</h2>
 
@@ -10416,7 +10490,10 @@ input[type="file"], input[type="text"] {
       <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
     </form>
   </div>
+  {% else %}
+  <p class="muted">Set up Postgres and <code>OPENAI_API_KEY</code> to enable the knowledge base — see the notice above.</p>
   {% endif %}
+  </div>
 
 </div>
 
@@ -10652,6 +10729,34 @@ input[type="file"], input[type="text"] {
             buttonLabel: "Delete document",
           });
         }, true);
+      })();
+    </script>
+
+    <script>
+      // ---------------------------------------------------------------
+      // Tab navigation — five groups instead of eight stacked sections.
+      // The active tab is remembered in localStorage so it survives the
+      // full-page reload every form submission on this page causes.
+      // ---------------------------------------------------------------
+      (function() {
+        const KEY = "j3p_admin_tab";
+        const tabs = Array.from(document.querySelectorAll(".tab-btn"));
+        const panes = Array.from(document.querySelectorAll(".tab-pane"));
+        if (!tabs.length) return;
+
+        function activate(name) {
+          tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
+          panes.forEach(p => p.classList.toggle("active", p.dataset.tab === name));
+        }
+
+        tabs.forEach(t => t.addEventListener("click", () => {
+          activate(t.dataset.tab);
+          try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
+        }));
+
+        let saved = null;
+        try { saved = localStorage.getItem(KEY); } catch (e) {}
+        if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
       })();
     </script>
 </body></html>"""
