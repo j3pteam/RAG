@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..0d1fc51 100644
+index 4b5a702..fc949ed 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
@@ -218,12 +218,12 @@ index 4b5a702..0d1fc51 100644
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -318,7 +318,7 @@ index 4b5a702..0d1fc51 100644
          out.append(adv)
      return out
  
-@@ -6296,6 +6440,149 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6296,6 +6440,266 @@ def participant_materials_block(budget=24000) -> str:
      )
  
  
@@ -465,10 +465,127 @@ index 4b5a702..0d1fc51 100644
 +    )
 +
 +
++# ---------------------------------------------------------------------------
++# Biometric data files
++# ---------------------------------------------------------------------------
++# Admin-side only: J3P staff upload a wearable or lab export (CSV, PDF, XLSX,
++# whatever the participant's device or provider produces) and tag it with
++# that participant's email so it's easy to find later. This is storage and
++# review for the J3P team — nothing here is read into the advisor's prompt
++# or retrieval; it never reaches the AI.
++
++BIOMETRIC_FILE_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — generous for a CSV/PDF export
++
++
++def _biometric_files_ensure_table(conn):
++    with conn.cursor() as cur:
++        cur.execute("""
++            CREATE TABLE IF NOT EXISTS participant_biometric_files (
++                id                BIGSERIAL PRIMARY KEY,
++                participant_email TEXT NOT NULL,
++                title             TEXT NOT NULL,
++                notes             TEXT,
++                mime              TEXT,
++                content           BYTEA NOT NULL,
++                size_bytes        INTEGER NOT NULL,
++                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
++            )
++        """)
++        cur.execute("""CREATE INDEX IF NOT EXISTS participant_biometric_files_email
++                       ON participant_biometric_files (participant_email)""")
++    conn.commit()
++
++
++def add_biometric_file(participant_email: str, title: str, notes: str,
++                        mime: str, content: bytes) -> bool:
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _biometric_files_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                INSERT INTO participant_biometric_files
++                    (participant_email, title, notes, mime, content, size_bytes)
++                VALUES (%s, %s, %s, %s, %s, %s)
++            """, (participant_email[:200], title[:200], (notes or "")[:2000],
++                  mime, content, len(content)))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[biometric] upload failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def list_biometric_files() -> list:
++    """Every uploaded file, grouped by participant (then newest first)."""
++    conn = _settings_db_conn()
++    if not conn:
++        return []
++    try:
++        _biometric_files_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                SELECT id, participant_email, title, notes, size_bytes, uploaded_at
++                FROM participant_biometric_files
++                ORDER BY participant_email ASC, uploaded_at DESC
++            """)
++            rows = cur.fetchall()
++        return [{"id": r[0], "participant_email": r[1], "title": r[2],
++                 "notes": r[3], "size_bytes": r[4], "uploaded_at": r[5]}
++                for r in rows]
++    except Exception as e:
++        app.logger.error(f"[biometric] list failed: {e}")
++        return []
++    finally:
++        conn.close()
++
++
++def get_biometric_file(file_id: int):
++    """(content, mime, title) for download, or None."""
++    conn = _settings_db_conn()
++    if not conn:
++        return None
++    try:
++        _biometric_files_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                SELECT content, mime, title FROM participant_biometric_files
++                WHERE id = %s
++            """, (file_id,))
++            row = cur.fetchone()
++        return (row[0], row[1], row[2]) if row else None
++    except Exception as e:
++        app.logger.error(f"[biometric] fetch failed: {e}")
++        return None
++    finally:
++        conn.close()
++
++
++def delete_biometric_file(file_id: int) -> bool:
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _biometric_files_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("DELETE FROM participant_biometric_files WHERE id = %s",
++                        (file_id,))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[biometric] delete failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
  # ---------------------------------------------------------------------------
  # Participant profile
  # ---------------------------------------------------------------------------
-@@ -6789,12 +7076,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7193,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -490,7 +607,7 @@ index 4b5a702..0d1fc51 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7145,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7262,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -611,7 +728,7 @@ index 4b5a702..0d1fc51 100644
              keep.append(r)
      return keep
  
-@@ -7165,6 +7552,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7165,6 +7669,7 @@ def _render_chat(force_scheduling=None, advisor=None):
          release_heading=RELEASE_HEADING,
          release_body=RELEASE_BODY_HTML,
          release_checkbox_label=RELEASE_CHECKBOX_LABEL,
@@ -619,7 +736,7 @@ index 4b5a702..0d1fc51 100644
      )
  
  
-@@ -7173,6 +7561,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +7678,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -632,7 +749,7 @@ index 4b5a702..0d1fc51 100644
      return _render_chat()
  
  
-@@ -7182,6 +7576,7 @@ def index():
+@@ -7182,6 +7693,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -640,7 +757,7 @@ index 4b5a702..0d1fc51 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +7670,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +7787,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -648,7 +765,7 @@ index 4b5a702..0d1fc51 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7918,12 +8314,14 @@ def chat():
+@@ -7918,12 +8431,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -663,7 +780,7 @@ index 4b5a702..0d1fc51 100644
          )
  
      try:
-@@ -8277,6 +8675,22 @@ def acknowledge_release():
+@@ -8277,6 +8792,22 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -686,7 +803,7 @@ index 4b5a702..0d1fc51 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8820,8 +9234,17 @@ def advisor_avatar():
+@@ -8820,8 +9351,17 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -705,7 +822,7 @@ index 4b5a702..0d1fc51 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -9095,9 +9518,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9635,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -735,7 +852,7 @@ index 4b5a702..0d1fc51 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9564,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9681,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -746,7 +863,7 @@ index 4b5a702..0d1fc51 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9576,13 @@ form.upload {
+@@ -9133,8 +9693,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -762,7 +879,7 @@ index 4b5a702..0d1fc51 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9674,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9791,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -786,7 +903,7 @@ index 4b5a702..0d1fc51 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9789,102 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9906,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -835,7 +952,71 @@ index 4b5a702..0d1fc51 100644
 +    <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
 +    <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
 +    <button type="button" class="tab-btn" data-tab="activity">Activity</button>
++    <button type="button" class="tab-btn" data-tab="biometric">Biometric Data</button>
 +    <button type="button" class="tab-btn" data-tab="settings">Settings</button>
++  </div>
++
++  <div class="tab-pane" data-tab="biometric">
++    <h2 class="group-heading">Biometric Data</h2>
++
++    <div class="section">
++      <h2>Upload a file</h2>
++      <p class="muted" style="margin: 0 0 1rem 0;">
++        Attach a wearable or lab export to a participant's email — CSV, PDF,
++        XLSX, whatever their device or provider produces. Up to 20 MB.
++        Nothing uploaded here is read by the advisor; it's for the J3P team
++        only.
++      </p>
++      <form method="POST" action="/admin/biometric/upload" enctype="multipart/form-data" class="upload">
++        <input type="email" name="participant_email" placeholder="participant@email.com" required
++               style="flex: 1 1 220px; padding: 0.5rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
++        <input type="text" name="notes" placeholder="Notes (optional) — e.g. Oura sleep export, Aug 2026"
++               style="flex: 2 1 260px; padding: 0.5rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
++        <input type="file" name="file" required
++               style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
++        <button type="submit" class="btn">Upload</button>
++      </form>
++    </div>
++
++    <div class="section">
++      <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
++      {% if biometric_files %}
++      {% for email, files in biometric_files|groupby('participant_email') %}
++      <h3 style="margin: {{ '0' if loop.first else '1.4rem' }} 0 0.6rem;
++                 font-size: 0.8rem; letter-spacing: 0.06em; color: var(--navy);">
++        {{ email }}
++      </h3>
++      <table style="font-size: 0.8rem; margin-bottom: 0.5rem;">
++        <tr>
++          <th style="width: 26%;">Title</th><th>Notes</th>
++          <th style="width: 10%; text-align: right;">Size</th>
++          <th style="width: 16%;">Uploaded</th><th style="width: 10%;"></th>
++        </tr>
++        {% for f in files %}
++        <tr>
++          <td class="kb-title">
++            <a href="/admin/biometric/download/{{ f.id }}">{{ f.title }}</a>
++          </td>
++          <td class="muted">{{ f.notes or '—' }}</td>
++          <td style="text-align: right;">{{ (f.size_bytes / 1024)|round(1) }} KB</td>
++          <td class="muted kb-date">{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
++          <td style="text-align: right;">
++            <form method="POST" action="/admin/biometric/delete/{{ f.id }}" style="display:inline;"
++                  data-doc-title="{{ f.title }} ({{ email }})">
++              <button type="submit" class="btn btn-danger">Delete</button>
++            </form>
++          </td>
++        </tr>
++        {% endfor %}
++      </table>
++      {% endfor %}
++      {% else %}
++      <p class="muted" style="margin: 0;">No files uploaded yet.</p>
++      {% endif %}
++    </div>
 +  </div>
 +
 +  <div class="tab-pane active" data-tab="overview">
@@ -890,7 +1071,7 @@ index 4b5a702..0d1fc51 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +9918,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10099,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -924,7 +1105,7 @@ index 4b5a702..0d1fc51 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,7 +9963,7 @@ input[type="file"], input[type="text"] {
+@@ -9389,7 +10144,7 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -933,7 +1114,7 @@ index 4b5a702..0d1fc51 100644
            </span>
          </div>
        </div>
-@@ -9402,7 +9976,6 @@ input[type="file"], input[type="text"] {
+@@ -9402,7 +10157,6 @@ input[type="file"], input[type="text"] {
                   placeholder="{{ cfg.persona_name }}"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
@@ -941,7 +1122,7 @@ index 4b5a702..0d1fc51 100644
          </div>
          <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
                style="display: flex; gap: 0.5rem; align-items: center;
-@@ -9419,6 +9992,16 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10173,16 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -958,7 +1139,7 @@ index 4b5a702..0d1fc51 100644
        </div>
  
        <div class="advisor-links">
-@@ -9469,6 +10052,7 @@ input[type="file"], input[type="text"] {
+@@ -9469,6 +10233,7 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -966,7 +1147,7 @@ index 4b5a702..0d1fc51 100644
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
            <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -9509,14 +10093,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10274,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -996,7 +1177,7 @@ index 4b5a702..0d1fc51 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9583,7 +10176,9 @@ input[type="file"], input[type="text"] {
+@@ -9583,7 +10357,9 @@ input[type="file"], input[type="text"] {
        </form>
      </div>
    </div>
@@ -1006,7 +1187,7 @@ index 4b5a702..0d1fc51 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10215,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10396,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1016,7 +1197,7 @@ index 4b5a702..0d1fc51 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10681,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10862,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1026,7 +1207,7 @@ index 4b5a702..0d1fc51 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +10702,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10883,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1049,7 +1230,7 @@ index 4b5a702..0d1fc51 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +10835,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11016,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1060,7 +1241,23 @@ index 4b5a702..0d1fc51 100644
  
  </div>
  
-@@ -10488,6 +11076,34 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11247,15 @@ input[type="file"], input[type="text"] {
+             return;
+           }
+ 
++          if (action.indexOf("/admin/biometric/delete/") !== -1) {
++            open(form, {
++              message: "Delete this biometric file? This cannot be undone.",
++              detail: form.dataset.docTitle || "",
++              buttonLabel: "Delete file",
++            });
++            return;
++          }
++
+           open(form, {
+             message: "Delete this document and every embedded chunk from the "
+                    + "knowledge base? The advisor will stop drawing on it. "
+@@ -10488,6 +11266,34 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1095,7 +1292,7 @@ index 4b5a702..0d1fc51 100644
  </body></html>"""
  
  
-@@ -10528,6 +11144,12 @@ def admin_dashboard():
+@@ -10528,6 +11334,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1108,7 +1305,7 @@ index 4b5a702..0d1fc51 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11157,10 @@ def admin_dashboard():
+@@ -10535,7 +11347,11 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1117,10 +1314,11 @@ index 4b5a702..0d1fc51 100644
 +        doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
 +        advisor_names=_advisor_names,
 +        advisor_docs=_advisor_docs,
++        biometric_files=list_biometric_files(),
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,13 +11256,16 @@ def admin_save_advisor():
+@@ -10631,13 +11447,16 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1141,7 +1339,7 @@ index 4b5a702..0d1fc51 100644
  
      if save_advisor(slug, name, photo, mime, no_photo=no_photo):
          flash(f"✓ {name} saved — links are listed below.")
-@@ -10672,6 +11300,7 @@ def admin_settings():
+@@ -10672,6 +11491,7 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1149,7 +1347,7 @@ index 4b5a702..0d1fc51 100644
          "allow_materials": ("Participant materials", "on", "off"),
          "auto_learning": ("Continuous learning", "on", "off"),
          "require_login": ("Sign-in", "required", "not required"),
-@@ -11160,6 +11789,30 @@ def admin_delete(doc_id):
+@@ -11160,6 +11980,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -1174,6 +1372,60 @@ index 4b5a702..0d1fc51 100644
 +        flash(f"✓ '{title}' assigned to {', '.join(names) if names else ', '.join(slugs)}.")
 +    else:
 +        flash(f"✓ '{title}' moved to the shared J3P base — available to every advisor.")
++    return redirect(url_for("admin_dashboard"))
++
++
++@app.route("/admin/biometric/upload", methods=["POST"])
++@admin_required
++def admin_upload_biometric():
++    """Attach a wearable/lab export to a participant's email for the J3P
++    team to review — never read by the advisor."""
++    email = (request.form.get("participant_email") or "").strip().lower()
++    notes = (request.form.get("notes") or "").strip()
++    file = request.files.get("file")
++
++    if not email:
++        flash("A participant email is required to upload a biometric file.")
++        return redirect(url_for("admin_dashboard"))
++    if not file or not file.filename:
++        flash("Choose a file to upload.")
++        return redirect(url_for("admin_dashboard"))
++
++    raw = file.read()
++    if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
++        flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
++              f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
++        return redirect(url_for("admin_dashboard"))
++
++    title = file.filename[:200]
++    mime = file.mimetype or "application/octet-stream"
++    if add_biometric_file(email, title, notes, mime, raw):
++        flash(f"✓ Uploaded '{title}' for {email}.")
++    else:
++        flash("Upload failed — check the server logs.")
++    return redirect(url_for("admin_dashboard"))
++
++
++@app.route("/admin/biometric/download/<int:file_id>")
++@admin_required
++def admin_download_biometric(file_id):
++    result = get_biometric_file(file_id)
++    if not result:
++        return ("Not found.", 404)
++    content, mime, title = result
++    return app.response_class(
++        content, mimetype=mime or "application/octet-stream",
++        headers={"Content-Disposition": f'attachment; filename="{title}"'},
++    )
++
++
++@app.route("/admin/biometric/delete/<int:file_id>", methods=["POST"])
++@admin_required
++def admin_delete_biometric(file_id):
++    if delete_biometric_file(file_id):
++        flash("Deleted.")
++    else:
++        flash("Delete failed — check the server logs.")
 +    return redirect(url_for("admin_dashboard"))
 +
 +

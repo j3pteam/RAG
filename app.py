@@ -6584,6 +6584,123 @@ def personality_style_block() -> str:
 
 
 # ---------------------------------------------------------------------------
+# Biometric data files
+# ---------------------------------------------------------------------------
+# Admin-side only: J3P staff upload a wearable or lab export (CSV, PDF, XLSX,
+# whatever the participant's device or provider produces) and tag it with
+# that participant's email so it's easy to find later. This is storage and
+# review for the J3P team — nothing here is read into the advisor's prompt
+# or retrieval; it never reaches the AI.
+
+BIOMETRIC_FILE_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — generous for a CSV/PDF export
+
+
+def _biometric_files_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_biometric_files (
+                id                BIGSERIAL PRIMARY KEY,
+                participant_email TEXT NOT NULL,
+                title             TEXT NOT NULL,
+                notes             TEXT,
+                mime              TEXT,
+                content           BYTEA NOT NULL,
+                size_bytes        INTEGER NOT NULL,
+                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""CREATE INDEX IF NOT EXISTS participant_biometric_files_email
+                       ON participant_biometric_files (participant_email)""")
+    conn.commit()
+
+
+def add_biometric_file(participant_email: str, title: str, notes: str,
+                        mime: str, content: bytes) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _biometric_files_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO participant_biometric_files
+                    (participant_email, title, notes, mime, content, size_bytes)
+                VALUES (%s, %s, %s, %s, %s, %s)
+            """, (participant_email[:200], title[:200], (notes or "")[:2000],
+                  mime, content, len(content)))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[biometric] upload failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def list_biometric_files() -> list:
+    """Every uploaded file, grouped by participant (then newest first)."""
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    try:
+        _biometric_files_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, participant_email, title, notes, size_bytes, uploaded_at
+                FROM participant_biometric_files
+                ORDER BY participant_email ASC, uploaded_at DESC
+            """)
+            rows = cur.fetchall()
+        return [{"id": r[0], "participant_email": r[1], "title": r[2],
+                 "notes": r[3], "size_bytes": r[4], "uploaded_at": r[5]}
+                for r in rows]
+    except Exception as e:
+        app.logger.error(f"[biometric] list failed: {e}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_biometric_file(file_id: int):
+    """(content, mime, title) for download, or None."""
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _biometric_files_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT content, mime, title FROM participant_biometric_files
+                WHERE id = %s
+            """, (file_id,))
+            row = cur.fetchone()
+        return (row[0], row[1], row[2]) if row else None
+    except Exception as e:
+        app.logger.error(f"[biometric] fetch failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def delete_biometric_file(file_id: int) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _biometric_files_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM participant_biometric_files WHERE id = %s",
+                        (file_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[biometric] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
 # Participant profile
 # ---------------------------------------------------------------------------
 # A deliberately thin profile: first name, role, specialty. No institution, no
@@ -9834,7 +9951,71 @@ input[type="file"], input[type="text"] {
     <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
     <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
     <button type="button" class="tab-btn" data-tab="activity">Activity</button>
+    <button type="button" class="tab-btn" data-tab="biometric">Biometric Data</button>
     <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+  </div>
+
+  <div class="tab-pane" data-tab="biometric">
+    <h2 class="group-heading">Biometric Data</h2>
+
+    <div class="section">
+      <h2>Upload a file</h2>
+      <p class="muted" style="margin: 0 0 1rem 0;">
+        Attach a wearable or lab export to a participant's email — CSV, PDF,
+        XLSX, whatever their device or provider produces. Up to 20 MB.
+        Nothing uploaded here is read by the advisor; it's for the J3P team
+        only.
+      </p>
+      <form method="POST" action="/admin/biometric/upload" enctype="multipart/form-data" class="upload">
+        <input type="email" name="participant_email" placeholder="participant@email.com" required
+               style="flex: 1 1 220px; padding: 0.5rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="text" name="notes" placeholder="Notes (optional) — e.g. Oura sleep export, Aug 2026"
+               style="flex: 2 1 260px; padding: 0.5rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="file" name="file" required
+               style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+        <button type="submit" class="btn">Upload</button>
+      </form>
+    </div>
+
+    <div class="section">
+      <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
+      {% if biometric_files %}
+      {% for email, files in biometric_files|groupby('participant_email') %}
+      <h3 style="margin: {{ '0' if loop.first else '1.4rem' }} 0 0.6rem;
+                 font-size: 0.8rem; letter-spacing: 0.06em; color: var(--navy);">
+        {{ email }}
+      </h3>
+      <table style="font-size: 0.8rem; margin-bottom: 0.5rem;">
+        <tr>
+          <th style="width: 26%;">Title</th><th>Notes</th>
+          <th style="width: 10%; text-align: right;">Size</th>
+          <th style="width: 16%;">Uploaded</th><th style="width: 10%;"></th>
+        </tr>
+        {% for f in files %}
+        <tr>
+          <td class="kb-title">
+            <a href="/admin/biometric/download/{{ f.id }}">{{ f.title }}</a>
+          </td>
+          <td class="muted">{{ f.notes or '—' }}</td>
+          <td style="text-align: right;">{{ (f.size_bytes / 1024)|round(1) }} KB</td>
+          <td class="muted kb-date">{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td style="text-align: right;">
+            <form method="POST" action="/admin/biometric/delete/{{ f.id }}" style="display:inline;"
+                  data-doc-title="{{ f.title }} ({{ email }})">
+              <button type="submit" class="btn btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% endfor %}
+      {% else %}
+      <p class="muted" style="margin: 0;">No files uploaded yet.</p>
+      {% endif %}
+    </div>
   </div>
 
   <div class="tab-pane active" data-tab="overview">
@@ -11066,6 +11247,15 @@ input[type="file"], input[type="text"] {
             return;
           }
 
+          if (action.indexOf("/admin/biometric/delete/") !== -1) {
+            open(form, {
+              message: "Delete this biometric file? This cannot be undone.",
+              detail: form.dataset.docTitle || "",
+              buttonLabel: "Delete file",
+            });
+            return;
+          }
+
           open(form, {
             message: "Delete this document and every embedded chunk from the "
                    + "knowledge base? The advisor will stop drawing on it. "
@@ -11161,6 +11351,7 @@ def admin_dashboard():
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
+        biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=recent_learning_runs(),
@@ -11810,6 +12001,60 @@ def admin_set_document_advisors():
         flash(f"✓ '{title}' assigned to {', '.join(names) if names else ', '.join(slugs)}.")
     else:
         flash(f"✓ '{title}' moved to the shared J3P base — available to every advisor.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/biometric/upload", methods=["POST"])
+@admin_required
+def admin_upload_biometric():
+    """Attach a wearable/lab export to a participant's email for the J3P
+    team to review — never read by the advisor."""
+    email = (request.form.get("participant_email") or "").strip().lower()
+    notes = (request.form.get("notes") or "").strip()
+    file = request.files.get("file")
+
+    if not email:
+        flash("A participant email is required to upload a biometric file.")
+        return redirect(url_for("admin_dashboard"))
+    if not file or not file.filename:
+        flash("Choose a file to upload.")
+        return redirect(url_for("admin_dashboard"))
+
+    raw = file.read()
+    if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
+        flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
+              f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
+        return redirect(url_for("admin_dashboard"))
+
+    title = file.filename[:200]
+    mime = file.mimetype or "application/octet-stream"
+    if add_biometric_file(email, title, notes, mime, raw):
+        flash(f"✓ Uploaded '{title}' for {email}.")
+    else:
+        flash("Upload failed — check the server logs.")
+    return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/biometric/download/<int:file_id>")
+@admin_required
+def admin_download_biometric(file_id):
+    result = get_biometric_file(file_id)
+    if not result:
+        return ("Not found.", 404)
+    content, mime, title = result
+    return app.response_class(
+        content, mimetype=mime or "application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{title}"'},
+    )
+
+
+@app.route("/admin/biometric/delete/<int:file_id>", methods=["POST"])
+@admin_required
+def admin_delete_biometric(file_id):
+    if delete_biometric_file(file_id):
+        flash("Deleted.")
+    else:
+        flash("Delete failed — check the server logs.")
     return redirect(url_for("admin_dashboard"))
 
 
