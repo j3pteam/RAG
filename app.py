@@ -88,8 +88,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-03-l"
-APP_BUILD_NOTES = "photo, name, links and briefings grouped per advisor"
+APP_VERSION = "2026-09-04-a"
+APP_BUILD_NOTES = "advisors can run with initials instead of a photo"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2624,7 +2624,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             aria-label="Read the latest reply aloud">
       <img class="presence-photo" src="{{ cfg.avatar_url }}" alt=""
            onerror="document.getElementById('presence').style.display='none'" />
-      {% if cfg.avatar_loop_url %}
+      {% if cfg.avatar_loop_url and not advisor_photo_override %}
       <video class="presence-loop" id="presence-loop" muted loop playsinline
              autoplay preload="auto" aria-hidden="true"
              onerror="this.style.display='none'">
@@ -5930,6 +5930,36 @@ def prepare_avatar(raw: bytes):
 # name and its own photo, and gets its own pair of links — with and without the
 # scheduling button. Stored in Postgres so photos survive redeploys.
 
+def initials_for(name: str) -> str:
+    parts = [w for w in re.split(r"[^A-Za-z]+", name or "") if w]
+    if not parts:
+        return "?"
+    if len(parts) == 1:
+        return parts[0][:2].upper()
+    return (parts[0][0] + parts[-1][0]).upper()
+
+
+def placeholder_avatar_svg(name: str) -> str:
+    """A monogram to stand in for a photo.
+
+    Chosen over a generic silhouette: initials read as a deliberate choice
+    rather than a missing image, and they still identify who the participant
+    is speaking with.
+    """
+    text = initials_for(name)
+    size = 320
+    font = 128 if len(text) > 1 else 148
+    return (
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
+        f'width="{size}" height="{size}" role="img" aria-label="{text}">'
+        f'<circle cx="{size/2}" cy="{size/2}" r="{size/2}" fill="#27334A"/>'
+        f'<text x="50%" y="50%" dy="0.35em" text-anchor="middle" '
+        f'font-family="Jost, Helvetica, Arial, sans-serif" font-weight="400" '
+        f'font-size="{font}" letter-spacing="6" fill="#D2BC8D">{text}</text>'
+        f'</svg>'
+    )
+
+
 def _advisors_ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("""
@@ -5941,6 +5971,14 @@ def _advisors_ensure_table(conn):
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Added later: distinguishes "no photo chosen" from "not set up yet",
+        # so the first shows a monogram rather than falling back to the
+        # default advisor's face.
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -5969,11 +6007,13 @@ def list_advisors():
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT slug, name, (photo IS NOT NULL) FROM advisors
-                ORDER BY name
+                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE)
+                FROM advisors ORDER BY name
             """)
-            for slug, name, has_photo in cur.fetchall():
-                out.append({"slug": slug, "name": name, "has_photo": bool(has_photo)})
+            for slug, name, has_photo, no_photo in cur.fetchall():
+                out.append({"slug": slug, "name": name,
+                            "has_photo": bool(has_photo),
+                            "no_photo": bool(no_photo)})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -5990,9 +6030,11 @@ def get_advisor(slug: str):
     try:
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
-            cur.execute("SELECT slug, name FROM advisors WHERE slug = %s", (slug,))
+            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE)
+                           FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
-        return {"slug": row[0], "name": row[1]} if row else None
+        return {"slug": row[0], "name": row[1],
+                "no_photo": bool(row[2])} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -6021,7 +6063,7 @@ def get_advisor_photo(slug: str):
         conn.close()
 
 
-def save_advisor(slug: str, name: str, photo=None, mime=None) -> bool:
+def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> bool:
     conn = _settings_db_conn()
     if not conn:
         return False
@@ -6041,6 +6083,13 @@ def save_advisor(slug: str, name: str, photo=None, mime=None) -> bool:
                     INSERT INTO advisors (slug, name) VALUES (%s, %s)
                     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
                 """, (slug, name))
+            if no_photo is not None:
+                cur.execute("UPDATE advisors SET no_photo = %s WHERE slug = %s",
+                            (bool(no_photo), slug))
+                if no_photo:
+                    # Clear the stored image so the monogram is what's served
+                    cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
+                                "WHERE slug = %s", (slug,))
         conn.commit()
         return True
     except Exception as e:
@@ -7097,7 +7146,9 @@ def _render_chat(force_scheduling=None, advisor=None):
     default_name = (load_settings().get("avatar_name") or "").strip()
     if default_name and not active:
         name_the_advisor(page_cfg, default_name)
+    photo_override = False
     if active:
+        photo_override = True      # their own photo or monogram, not the loop
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
         name_the_advisor(page_cfg, active["name"])
@@ -7106,6 +7157,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         INDEX_HTML,
         cfg=page_cfg,
         show_avatar=bool(load_settings().get("show_avatar")),
+        advisor_photo_override=photo_override,
         allow_materials=bool(load_settings().get("allow_materials")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
@@ -7188,11 +7240,18 @@ def advisor_index_tolerant(slug, rest):
 
 @app.route("/a/<slug>/photo.jpg")
 def advisor_photo(slug):
-    """A named advisor's photo, falling back to the default one."""
+    """A named advisor's photo, their monogram, or the default photo."""
     stored = get_advisor_photo(slug)
     if stored:
         data, mime = stored
         resp = app.response_class(data, mimetype=mime)
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+
+    advisor = get_advisor(slug)
+    if advisor and advisor.get("no_photo"):
+        resp = app.response_class(placeholder_avatar_svg(advisor["name"]),
+                                  mimetype="image/svg+xml")
         resp.headers["Cache-Control"] = "no-cache"
         return resp
     return redirect(url_for("advisor_avatar"))
@@ -9390,7 +9449,7 @@ input[type="file"], input[type="text"] {
         <div style="flex: 1 1 auto; min-width: 0;">
           <strong style="font-size: 0.98rem;">{{ adv.name }}</strong><br />
           <span class="muted" style="font-size: 0.76rem;">
-            {{ adv.slug }}{% if not adv.has_photo %} · no photo, using the default{% endif %}
+            {{ adv.slug }}{% if adv.no_photo %} · initials, no photo{% elif not adv.has_photo %} · using the default photo{% endif %}
           </span>
         </div>
         <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
@@ -9411,6 +9470,14 @@ input[type="file"], input[type="text"] {
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
+          <label style="display: flex; align-items: center; gap: 0.4rem;
+                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
+                        margin-top: 0.2rem;">
+            <input type="checkbox" name="no_photo" value="1"
+                   {% if adv.no_photo %}checked{% endif %}
+                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
+            <span class="muted">No photo — show their initials instead</span>
+          </label>
         </form>
         <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
           The name appears beneath the photo in their sessions. Leave the file
@@ -10543,7 +10610,15 @@ def admin_save_advisor():
             return redirect(url_for("admin_dashboard"))
         photo, mime = prepare_avatar(raw)
 
-    if save_advisor(slug, name, photo, mime):
+    # Three states: a new photo, keep the current one, or deliberately none
+    no_photo = None
+    if request.form.get("no_photo"):
+        no_photo = True
+        photo, mime = None, None
+    elif photo is not None:
+        no_photo = False
+
+    if save_advisor(slug, name, photo, mime, no_photo=no_photo):
         flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")
