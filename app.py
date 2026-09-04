@@ -9593,6 +9593,7 @@ input[type="file"], input[type="text"] {
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
           <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
+                 onchange="this.form.querySelector('input[name=no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
@@ -10781,13 +10782,16 @@ def admin_save_advisor():
             return redirect(url_for("admin_dashboard"))
         photo, mime = prepare_avatar(raw)
 
-    # Three states: a new photo, keep the current one, or deliberately none
+    # Three states: a new photo, deliberately none, or keep the current one.
+    # An uploaded file always wins — if the admin chose a photo and clicked
+    # Save, that's a photo update even if "no photo" was still checked from
+    # a previous save.
     no_photo = None
-    if request.form.get("no_photo"):
+    if photo is not None:
+        no_photo = False
+    elif request.form.get("no_photo"):
         no_photo = True
         photo, mime = None, None
-    elif photo is not None:
-        no_photo = False
 
     if save_advisor(slug, name, photo, mime, no_photo=no_photo):
         flash(f"✓ {name} saved — links are listed below.")
