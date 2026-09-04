@@ -1,7 +1,16 @@
 diff --git a/app.py b/app.py
-index 4b5a702..96580b7 100644
+index 4b5a702..aa08bf7 100644
 --- a/app.py
 +++ b/app.py
+@@ -5823,7 +5823,7 @@ def _did_request(text: str):
+ # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
+ # deploy, so an uploaded file would silently revert to the bundled one.
+ 
+-AVATAR_MAX_BYTES = 8 * 1024 * 1024
++AVATAR_MAX_BYTES = 25 * 1024 * 1024
+ _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
+                  "image/webp": "webp", "image/gif": "gif"}
+ 
 @@ -5993,8 +5993,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
@@ -156,7 +165,34 @@ index 4b5a702..96580b7 100644
              keep.append(r)
      return keep
  
-@@ -9226,6 +9326,23 @@ input[type="file"], input[type="text"] {
+@@ -9123,7 +9223,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+ .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
+ .btn-danger:hover { background: #fff; color: var(--rust); }
+ /* All three upload rows share one grid, so the field and the button line up
+-   across sections regardless of button label length. */
++   across sections regardless of button label length. The "which base"
++   select sits on its own full-width row underneath, rather than squeezed
++   into the same row as the button. */
+ form.upload {
+   display: grid;
+   /* Columns collapse on their own when there isn't room, so this holds on a
+@@ -9133,8 +9235,13 @@ form.upload {
+   gap: 0.6rem; align-items: center;
+ }
+ @media (min-width: 860px) {
+-  /* four columns now: file, title, which base, submit */
+-  form.upload { grid-template-columns: 280px minmax(0, 1fr) 200px 200px; }
++  /* Three columns in the top row now: file, title, submit. The base
++     selector is pulled out of this row entirely (see below). */
++  form.upload { grid-template-columns: 280px minmax(0, 1fr) 200px; }
++  form.upload button[type="submit"] { order: 2; }
++  form.upload select[name="owner"] {
++    order: 3; grid-column: 1 / -1; max-width: 320px; margin-top: 0.2rem;
++  }
+ }
+ form.upload > * { min-width: 0; }
+ form.upload .btn { width: 100%; justify-content: center; text-align: center; }
+@@ -9226,6 +9333,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -180,7 +216,7 @@ index 4b5a702..96580b7 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -10105,8 +10222,30 @@ input[type="file"], input[type="text"] {
+@@ -10105,8 +10229,30 @@ input[type="file"], input[type="text"] {
        {% for d in docs %}
        <tr>
          <td class="kb-title">{{ d.title }}</td>
@@ -213,7 +249,7 @@ index 4b5a702..96580b7 100644
          </td>
          <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
          <td style="text-align: right;">{{ d.chunk_count }}</td>
-@@ -10528,6 +10667,8 @@ def admin_dashboard():
+@@ -10528,6 +10674,8 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -222,7 +258,7 @@ index 4b5a702..96580b7 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +10676,9 @@ def admin_dashboard():
+@@ -10535,7 +10683,9 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -233,7 +269,7 @@ index 4b5a702..96580b7 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -11160,6 +11303,30 @@ def admin_delete(doc_id):
+@@ -11160,6 +11310,30 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

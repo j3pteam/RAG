@@ -5823,7 +5823,7 @@ def _did_request(text: str):
 # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
 # deploy, so an uploaded file would silently revert to the bundled one.
 
-AVATAR_MAX_BYTES = 8 * 1024 * 1024
+AVATAR_MAX_BYTES = 25 * 1024 * 1024
 _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                  "image/webp": "webp", "image/gif": "gif"}
 
@@ -9223,7 +9223,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
 /* All three upload rows share one grid, so the field and the button line up
-   across sections regardless of button label length. */
+   across sections regardless of button label length. The "which base"
+   select sits on its own full-width row underneath, rather than squeezed
+   into the same row as the button. */
 form.upload {
   display: grid;
   /* Columns collapse on their own when there isn't room, so this holds on a
@@ -9233,8 +9235,13 @@ form.upload {
   gap: 0.6rem; align-items: center;
 }
 @media (min-width: 860px) {
-  /* four columns now: file, title, which base, submit */
-  form.upload { grid-template-columns: 280px minmax(0, 1fr) 200px 200px; }
+  /* Three columns in the top row now: file, title, submit. The base
+     selector is pulled out of this row entirely (see below). */
+  form.upload { grid-template-columns: 280px minmax(0, 1fr) 200px; }
+  form.upload button[type="submit"] { order: 2; }
+  form.upload select[name="owner"] {
+    order: 3; grid-column: 1 / -1; max-width: 320px; margin-top: 0.2rem;
+  }
 }
 form.upload > * { min-width: 0; }
 form.upload .btn { width: 100%; justify-content: center; text-align: center; }
