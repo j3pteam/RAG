@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..c84b819 100644
+index 4b5a702..78a35a4 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,6 +209,8 @@ _SETTINGS_DEFAULTS = {
@@ -218,12 +218,12 @@ index 4b5a702..c84b819 100644
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -676,7 +676,7 @@ index 4b5a702..c84b819 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -9095,9 +9510,35 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9510,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -698,14 +698,6 @@ index 4b5a702..c84b819 100644
 +.tab-pane.active { display: block; }
 +.tab-pane .group-heading:first-child { margin-top: 0; }
 +
-+/* Links from an advisor's Knowledge list to its row in the Documents table */
-+.doc-jump-link { color: var(--navy); text-decoration: underline; text-decoration-color: var(--line); }
-+.doc-jump-link:hover { text-decoration-color: var(--rust); color: var(--rust); }
-+@keyframes docRowFlash {
-+  0%   { background: rgba(210, 188, 141, 0.55); }
-+  100% { background: transparent; }
-+}
-+.doc-row-flash { animation: docRowFlash 1.6s ease-out; }
  .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
 -.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
 -.stat { flex: 1; }
@@ -714,7 +706,7 @@ index 4b5a702..c84b819 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9564,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9556,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -725,7 +717,7 @@ index 4b5a702..c84b819 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9576,13 @@ form.upload {
+@@ -9133,8 +9568,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -741,7 +733,7 @@ index 4b5a702..c84b819 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9674,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9666,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -765,10 +757,50 @@ index 4b5a702..c84b819 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9789,62 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9781,102 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
++  {% macro doc_row(d, id_prefix="") %}
++  <tr id="{{ id_prefix }}doc-row-{{ d.id }}">
++    <td class="kb-title">{{ d.title }}</td>
++    <td class="muted kb-owner-cell" style="font-size: 0.76rem;">
++      {% if advisors %}
++      <details class="kb-owner">
++        <summary>{{ doc_owner_labels.get(d.title, 'Shared') }}</summary>
++        <form method="POST" action="/admin/document-advisors" class="kb-owner-panel">
++          <input type="hidden" name="title" value="{{ d.title }}" />
++          <p class="muted" style="margin: 0 0 0.4rem 0; font-size: 0.72rem;">
++            Leave everything unchecked for the shared J3P base. Check one
++            advisor, or several, to limit this document to just them.
++          </p>
++          {% set assigned = advisor_map.get(d.title) or [] %}
++          {% for a in advisors %}
++          <label class="kb-owner-option">
++            <input type="checkbox" name="advisors" value="{{ a.slug }}"
++                   {% if a.slug in assigned %}checked{% endif %} />
++            {{ a.name }}
++          </label>
++          {% endfor %}
++          <button type="submit" class="btn btn-small">Save</button>
++        </form>
++      </details>
++      {% else %}
++      {{ doc_owner_labels.get(d.title, 'Shared') }}
++      {% endif %}
++    </td>
++    <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
++    <td style="text-align: right;">{{ d.chunk_count }}</td>
++    <td class="muted kb-date">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
++    <td style="text-align: right;">
++      <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
++            data-doc-title="{{ d.title }}">
++        <button type="submit" class="btn btn-danger">Delete</button>
++      </form>
++    </td>
++  </tr>
++  {% endmacro %}
++
 +  <div class="tabs">
 +    <button type="button" class="tab-btn active" data-tab="overview">Overview</button>
 +    <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
@@ -829,7 +861,7 @@ index 4b5a702..c84b819 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +9878,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +9910,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -863,7 +895,7 @@ index 4b5a702..c84b819 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,7 +9923,7 @@ input[type="file"], input[type="text"] {
+@@ -9389,7 +9955,7 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -872,7 +904,7 @@ index 4b5a702..c84b819 100644
            </span>
          </div>
        </div>
-@@ -9402,7 +9936,6 @@ input[type="file"], input[type="text"] {
+@@ -9402,7 +9968,6 @@ input[type="file"], input[type="text"] {
                   placeholder="{{ cfg.persona_name }}"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
@@ -880,7 +912,7 @@ index 4b5a702..c84b819 100644
          </div>
          <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
                style="display: flex; gap: 0.5rem; align-items: center;
-@@ -9419,6 +9952,16 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +9984,16 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -897,7 +929,7 @@ index 4b5a702..c84b819 100644
        </div>
  
        <div class="advisor-links">
-@@ -9469,6 +10012,7 @@ input[type="file"], input[type="text"] {
+@@ -9469,6 +10044,7 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -905,25 +937,37 @@ index 4b5a702..c84b819 100644
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
            <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -9512,7 +10056,16 @@ input[type="file"], input[type="text"] {
-         <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
-         {% if adv.documents %}
-         <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
+@@ -9509,14 +10085,23 @@ input[type="file"], input[type="text"] {
+       </div>
+ 
+       <div class="advisor-links">
+-        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
+-        {% if adv.documents %}
+-        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
 -          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
-+          {% for t in adv.documents %}
-+          {% set did = doc_id_by_title.get(t) %}
-+          <li>
-+            {% if did %}
-+            <a href="#doc-row-{{ did }}" class="doc-jump-link" data-doc-id="{{ did }}">{{ t }}</a>
-+            {% else %}
-+            {{ t }} <span class="muted" style="font-size: 0.72rem;">(no longer in the knowledge base)</span>
-+            {% endif %}
-+          </li>
+-        </ul>
++        {% set adv_docs = advisor_docs.get(adv.slug, []) %}
++        <h3>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</h3>
++        {% if adv_docs %}
++        <table class="kb-table">
++          <tr>
++            <th>Title</th><th>Base</th><th>Source</th>
++            <th style="text-align: right;">Chunks</th>
++            <th>Uploaded</th><th></th>
++          </tr>
++          {% for d in adv_docs %}
++          {{ doc_row(d, id_prefix="adv-" + adv.slug + "-") }}
 +          {% endfor %}
-         </ul>
++        </table>
          <p class="muted" style="margin: 0.45rem 0 0; font-size: 0.76rem;">
            Only {{ adv.name }}'s sessions retrieve these. The shared J3P base is
-@@ -9583,7 +10136,9 @@ input[type="file"], input[type="text"] {
+-          available to them as well.
++          available to them as well. Reassigning or deleting one here does the
++          same thing it would from the main Documents table under Knowledge.
+         </p>
+         {% else %}
+         <p class="muted" style="margin: 0; font-size: 0.8rem;">
+@@ -9583,7 +10168,9 @@ input[type="file"], input[type="text"] {
        </form>
      </div>
    </div>
@@ -933,7 +977,7 @@ index 4b5a702..c84b819 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10175,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10207,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -943,7 +987,7 @@ index 4b5a702..c84b819 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10641,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10673,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -953,43 +997,30 @@ index 4b5a702..c84b819 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,10 +10662,32 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10694,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
 -      <tr>
-+      <tr id="doc-row-{{ d.id }}">
-         <td class="kb-title">{{ d.title }}</td>
+-        <td class="kb-title">{{ d.title }}</td>
 -        <td class="muted" style="font-size: 0.76rem;">
 -          {% if owners.get(d.title) %}{{ advisor_names.get(owners[d.title], owners[d.title]) }}{% else %}Shared{% endif %}
-+        <td class="muted kb-owner-cell" style="font-size: 0.76rem;">
-+          {% if advisors %}
-+          <details class="kb-owner">
-+            <summary>{{ doc_owner_labels.get(d.title, 'Shared') }}</summary>
-+            <form method="POST" action="/admin/document-advisors" class="kb-owner-panel">
-+              <input type="hidden" name="title" value="{{ d.title }}" />
-+              <p class="muted" style="margin: 0 0 0.4rem 0; font-size: 0.72rem;">
-+                Leave everything unchecked for the shared J3P base. Check one
-+                advisor, or several, to limit this document to just them.
-+              </p>
-+              {% set assigned = advisor_map.get(d.title) or [] %}
-+              {% for adv in advisors %}
-+              <label class="kb-owner-option">
-+                <input type="checkbox" name="advisors" value="{{ adv.slug }}"
-+                       {% if adv.slug in assigned %}checked{% endif %} />
-+                {{ adv.name }}
-+              </label>
-+              {% endfor %}
-+              <button type="submit" class="btn btn-small">Save</button>
-+            </form>
-+          </details>
-+          {% else %}
-+          {{ doc_owner_labels.get(d.title, 'Shared') }}
-+          {% endif %}
-         </td>
-         <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
-         <td style="text-align: right;">{{ d.chunk_count }}</td>
-@@ -10250,7 +10831,10 @@ input[type="file"], input[type="text"] {
+-        </td>
+-        <td class="muted kb-source" title="{{ d.source or '' }}">{{ d.source or '—' }}</td>
+-        <td style="text-align: right;">{{ d.chunk_count }}</td>
+-        <td class="muted kb-date">{{ d.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+-        <td style="text-align: right;">
+-          <form method="POST" action="/admin/delete/{{ d.id }}" style="display:inline;"
+-                data-doc-title="{{ d.title }}">
+-            <button type="submit" class="btn btn-danger">Delete</button>
+-          </form>
+-        </td>
+-      </tr>
++      {{ doc_row(d) }}
+       {% endfor %}
+     </table>
+     {% else %}
+@@ -10250,7 +10827,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1000,7 +1031,7 @@ index 4b5a702..c84b819 100644
  
  </div>
  
-@@ -10488,6 +11072,50 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11068,34 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1030,38 +1061,25 @@ index 4b5a702..c84b819 100644
 +        let saved = null;
 +        try { saved = localStorage.getItem(KEY); } catch (e) {}
 +        if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
-+
-+        // Links from an advisor's Knowledge list jump to that document's row
-+        // in the Documents table — switch to the Knowledge tab, scroll to
-+        // the row, and flash it so it's easy to spot.
-+        document.querySelectorAll(".doc-jump-link").forEach(link => {
-+          link.addEventListener("click", (e) => {
-+            e.preventDefault();
-+            activate("knowledge");
-+            try { localStorage.setItem(KEY, "knowledge"); } catch (e) {}
-+            const row = document.getElementById("doc-row-" + link.dataset.docId);
-+            if (!row) return;
-+            row.scrollIntoView({ behavior: "smooth", block: "center" });
-+            row.classList.add("doc-row-flash");
-+            setTimeout(() => row.classList.remove("doc-row-flash"), 1600);
-+          });
-+        });
 +      })();
 +    </script>
  </body></html>"""
  
  
-@@ -10528,6 +11156,9 @@ def admin_dashboard():
+@@ -10528,6 +11136,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
 +    _advisor_map = document_advisor_map()
 +    _advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
-+    _doc_id_by_title = {d["title"]: d["id"] for d in docs}
++    _advisor_docs = {}
++    for d in docs:
++        for slug in _advisor_map.get(d["title"], []):
++            _advisor_docs.setdefault(slug, []).append(d)
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11166,10 @@ def admin_dashboard():
+@@ -10535,7 +11149,10 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1069,11 +1087,11 @@ index 4b5a702..c84b819 100644
 +        advisor_map=_advisor_map,
 +        doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
 +        advisor_names=_advisor_names,
-+        doc_id_by_title=_doc_id_by_title,
++        advisor_docs=_advisor_docs,
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,13 +11265,16 @@ def admin_save_advisor():
+@@ -10631,13 +11248,16 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1094,7 +1112,7 @@ index 4b5a702..c84b819 100644
  
      if save_advisor(slug, name, photo, mime, no_photo=no_photo):
          flash(f"✓ {name} saved — links are listed below.")
-@@ -10672,6 +11309,7 @@ def admin_settings():
+@@ -10672,6 +11292,7 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1102,7 +1120,7 @@ index 4b5a702..c84b819 100644
          "allow_materials": ("Participant materials", "on", "off"),
          "auto_learning": ("Continuous learning", "on", "off"),
          "require_login": ("Sign-in", "required", "not required"),
-@@ -11160,6 +11798,30 @@ def admin_delete(doc_id):
+@@ -11160,6 +11781,30 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
