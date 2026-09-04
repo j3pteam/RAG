@@ -6067,12 +6067,20 @@ def prepare_avatar(raw: bytes):
 # scheduling button. Stored in Postgres so photos survive redeploys.
 
 def initials_for(name: str) -> str:
-    parts = [w for w in re.split(r"[^A-Za-z]+", name or "") if w]
-    if not parts:
+    """First+last initials for a real name ('Alan Friedman' -> 'AF'), or the
+    first few characters of a single-token name/acronym ('J3P' -> 'J3P').
+
+    Splits on whitespace, not on every non-letter character — a digit or
+    punctuation inside one word (as in "J3P") is part of that word, not a
+    word boundary, so it doesn't get silently dropped.
+    """
+    words = [re.sub(r"[^A-Za-z0-9]", "", w) for w in (name or "").split()]
+    words = [w for w in words if w]
+    if not words:
         return "?"
-    if len(parts) == 1:
-        return parts[0][:2].upper()
-    return (parts[0][0] + parts[-1][0]).upper()
+    if len(words) == 1:
+        return words[0][:3].upper()
+    return (words[0][0] + words[-1][0]).upper()
 
 
 def placeholder_avatar_svg(name: str) -> str:
@@ -6084,7 +6092,7 @@ def placeholder_avatar_svg(name: str) -> str:
     """
     text = initials_for(name)
     size = 320
-    font = 128 if len(text) > 1 else 148
+    font = 148 if len(text) <= 1 else (128 if len(text) == 2 else 104)
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
         f'width="{size}" height="{size}" role="img" aria-label="{text}">'
