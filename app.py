@@ -10204,7 +10204,7 @@ input[type="file"], input[type="text"] {
       </p>
       <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
             class="upload">
-        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
+        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
                oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
         <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
         <button type="submit" class="btn">Save advisor</button>

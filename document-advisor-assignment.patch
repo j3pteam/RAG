@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..c710eab 100644
+index 4b5a702..c4c76b6 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,15 @@ _SETTINGS_DEFAULTS = {
@@ -1299,7 +1299,7 @@ index 4b5a702..c710eab 100644
 +      </p>
 +      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
 +            class="upload">
-+        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
++        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
 +               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
 +        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
 +        <button type="submit" class="btn">Save advisor</button>
