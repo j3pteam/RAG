@@ -10179,6 +10179,27 @@ input[type="file"], input[type="text"] {
       across all of them.
     </p>
 
+    <div style="padding-bottom: 1.1rem; margin-bottom: 1.1rem; border-bottom: 1px dashed var(--line);">
+      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
+        <strong>Add or update an advisor</strong>
+      </p>
+      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
+        Re-using an existing name updates that profile. Leave the photo blank to
+        keep the current one.
+      </p>
+      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+            class="upload">
+        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
+        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+        <button type="submit" class="btn">Save advisor</button>
+        <div class="initials-preview-row" style="grid-column: 1 / -1;">
+          <span id="initials-preview-new" class="initials-preview">?</span>
+          <span class="muted">Preview if no photo is used</span>
+        </div>
+      </form>
+    </div>
+
     <div class="advisor-block">
       <div class="advisor-head">
         <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
@@ -10405,30 +10426,9 @@ input[type="file"], input[type="text"] {
     {% else %}
     <p class="muted">
       No advisor profiles yet. The links above still work and use the default
-      photo; add a profile below to give someone their own.
+      photo; add a profile above to give someone their own.
     </p>
     {% endif %}
-
-    <div style="padding-top: 1.1rem; border-top: 1px dashed var(--line);">
-      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
-        <strong>Add or update an advisor</strong>
-      </p>
-      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
-        Re-using an existing name updates that profile. Leave the photo blank to
-        keep the current one.
-      </p>
-      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
-            class="upload">
-        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
-               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
-        <button type="submit" class="btn">Save advisor</button>
-        <div class="initials-preview-row" style="grid-column: 1 / -1;">
-          <span id="initials-preview-new" class="initials-preview">?</span>
-          <span class="muted">Preview if no photo is used</span>
-        </div>
-      </form>
-    </div>
   </div>
   </div>
 

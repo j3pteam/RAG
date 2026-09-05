@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..028ca65 100644
+index 4b5a702..8958e9e 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,15 @@ _SETTINGS_DEFAULTS = {
@@ -1269,7 +1269,35 @@ index 4b5a702..028ca65 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,28 +10188,45 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10179,27 @@ input[type="file"], input[type="text"] {
+       across all of them.
+     </p>
+ 
++    <div style="padding-bottom: 1.1rem; margin-bottom: 1.1rem; border-bottom: 1px dashed var(--line);">
++      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
++        <strong>Add or update an advisor</strong>
++      </p>
++      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
++        Re-using an existing name updates that profile. Leave the photo blank to
++        keep the current one.
++      </p>
++      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
++            class="upload">
++        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
++               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
++        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
++        <button type="submit" class="btn">Save advisor</button>
++        <div class="initials-preview-row" style="grid-column: 1 / -1;">
++          <span id="initials-preview-new" class="initials-preview">?</span>
++          <span class="muted">Preview if no photo is used</span>
++        </div>
++      </form>
++    </div>
++
+     <div class="advisor-block">
+       <div class="advisor-head">
+         <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
+@@ -9389,28 +10209,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1326,7 +1354,7 @@ index 4b5a702..028ca65 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10235,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10256,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -1337,7 +1365,7 @@ index 4b5a702..028ca65 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10286,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10307,13 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -1352,7 +1380,7 @@ index 4b5a702..028ca65 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10301,18 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10322,18 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -1371,7 +1399,7 @@ index 4b5a702..028ca65 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10342,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10363,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1401,23 +1429,32 @@ index 4b5a702..028ca65 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9577,13 +10419,20 @@ input[type="file"], input[type="text"] {
-       </p>
-       <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
-             class="upload">
+@@ -9563,27 +10426,13 @@ input[type="file"], input[type="text"] {
+     {% else %}
+     <p class="muted">
+       No advisor profiles yet. The links above still work and use the default
+-      photo; add a profile below to give someone their own.
++      photo; add a profile above to give someone their own.
+     </p>
+     {% endif %}
+-
+-    <div style="padding-top: 1.1rem; border-top: 1px dashed var(--line);">
+-      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
+-        <strong>Add or update an advisor</strong>
+-      </p>
+-      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
+-        Re-using an existing name updates that profile. Leave the photo blank to
+-        keep the current one.
+-      </p>
+-      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+-            class="upload">
 -        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required />
-+        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
-+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-         <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
-         <button type="submit" class="btn">Save advisor</button>
-+        <div class="initials-preview-row" style="grid-column: 1 / -1;">
-+          <span id="initials-preview-new" class="initials-preview">?</span>
-+          <span class="muted">Preview if no photo is used</span>
-+        </div>
-       </form>
-     </div>
-   </div>
+-        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+-        <button type="submit" class="btn">Save advisor</button>
+-      </form>
+-    </div>
 +  </div>
+   </div>
  
 +  <div class="tab-pane" data-tab="settings">
    <h2 class="group-heading">Access</h2>
