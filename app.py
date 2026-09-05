@@ -218,6 +218,8 @@ _SETTINGS_DEFAULTS = {
     # The default advisor's own external booking link. Blank uses the
     # shared FOOTER_CTA_URL.
     "default_scheduling_url": "",
+    # Show the optional five-question personality gate after acknowledgment
+    "personality_assessment_enabled": True,
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -465,6 +467,142 @@ def acknowledgements_for(interaction_ids):
     finally:
         conn.close()
     return out
+
+
+def _interaction_personality_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS interaction_personality (
+                interaction_id    BIGINT PRIMARY KEY,
+                openness          SMALLINT,
+                conscientiousness SMALLINT,
+                extraversion      SMALLINT,
+                agreeableness     SMALLINT,
+                stability         SMALLINT,
+                recorded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def record_personality(interaction_id: int):
+    """Snapshot this session's personality self-report (if any) against one
+    logged interaction, the same way record_acknowledgement() does for the
+    release. Only writes something when the participant actually has scores
+    on file — most interactions won't."""
+    if not interaction_id:
+        return
+    scores = get_personality_scores()
+    if not scores:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _interaction_personality_ensure_table(conn)
+        cols = ", ".join(scores.keys())
+        placeholders = ", ".join(["%s"] * len(scores))
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO interaction_personality (interaction_id, {cols})
+                VALUES (%s, {placeholders})
+                ON CONFLICT (interaction_id) DO NOTHING
+            """, (int(interaction_id), *scores.values()))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[personality] interaction snapshot failed: {e}")
+    finally:
+        conn.close()
+
+
+def personality_for(interaction_ids):
+    """Map interaction_id -> {trait: score} for the admin log table."""
+    out = {}
+    ids = [int(i) for i in interaction_ids if i]
+    if not ids:
+        return out
+    conn = _settings_db_conn()
+    if not conn:
+        return out
+    try:
+        _interaction_personality_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT interaction_id, openness, conscientiousness, extraversion,
+                       agreeableness, stability
+                FROM interaction_personality WHERE interaction_id = ANY(%s)
+            """, (ids,))
+            for row in cur.fetchall():
+                iid = row[0]
+                scores = {k: v for k, v in zip(_PERSONALITY_TRAITS, row[1:]) if v is not None}
+                if scores:
+                    out[iid] = scores
+    except Exception as e:
+        app.logger.error(f"[personality] interaction read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def personality_interpretation_lines(scores: dict) -> list:
+    """Plain-language read of a participant's five-question self-report, for
+    the admin conversation log — distinct from personality_style_block(),
+    which is worded as private tone guidance for the AI, not a human reader.
+    """
+    if not scores:
+        return []
+    labels = {
+        "openness": "Openness",
+        "conscientiousness": "Conscientiousness",
+        "extraversion": "Extraversion",
+        "agreeableness": "Agreeableness",
+        "stability": "Emotional stability",
+    }
+    readings = {
+        "openness": {
+            5: "strongly drawn to new ideas and unconventional approaches",
+            4: "leans curious and open to new approaches",
+            3: "balanced between novelty and the tried-and-true",
+            2: "prefers concrete, practical framing over abstract theorizing",
+            1: "strongly prefers proven, familiar approaches",
+        },
+        "conscientiousness": {
+            5: "highly structured — values clear plans and follow-through",
+            4: "appreciates structure and clear next steps",
+            3: "comfortable with a mix of structure and flexibility",
+            2: "prefers a lighter touch on planning and structure",
+            1: "strongly prefers flexibility over structure",
+        },
+        "extraversion": {
+            5: "energized by talking things through with others",
+            4: "comfortable with an energetic, talk-it-out style",
+            3: "comfortable either talking it through or reflecting alone",
+            2: "prefers a calmer, more reflective pace",
+            1: "strongly prefers quiet, reflective processing over discussion",
+        },
+        "agreeableness": {
+            5: "highly attuned to others' feelings; values harmony strongly",
+            4: "values warmth and consensus-building",
+            3: "balances their own view with others' feelings",
+            2: "comfortable with direct, blunt feedback",
+            1: "strongly prioritizes their own view over consensus",
+        },
+        "stability": {
+            5: "very steady under pressure; rarely rattled",
+            4: "generally stays composed under pressure",
+            3: "reacts to pressure situationally",
+            2: "some extra sensitivity to stress or setbacks",
+            1: "notable sensitivity to stress — handle setbacks gently",
+        },
+    }
+    lines = []
+    for trait in _PERSONALITY_TRAITS:
+        score = scores.get(trait)
+        if not score:
+            continue
+        reading = readings.get(trait, {}).get(score, "")
+        lines.append(f"{labels[trait]} ({score}/5) — {reading}")
+    return lines
 
 
 def _geo_ensure_table(conn):
@@ -2517,6 +2655,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  {% if personality_enabled %}
   <div id="personality-overlay" class="ack-overlay" role="dialog" aria-modal="true"
        aria-labelledby="personality-title" aria-describedby="personality-body" hidden>
     <div class="ack-box">
@@ -2536,6 +2675,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             agree.&rdquo;
           </p>
         </div>
+        <button type="button" id="personality-skip" class="ack-secondary">Skip for now</button>
         <div id="personality-questions">
           {% for q in personality_questions %}
           <div class="pq-row" data-trait="{{ q.trait }}">
@@ -2551,10 +2691,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
           {% endfor %}
         </div>
         <button type="button" id="personality-continue" disabled>Continue</button>
-        <button type="button" id="personality-skip" class="ack-secondary">Skip for now</button>
       </div>
     </div>
   </div>
+  {% endif %}
 
   <header>
     <div class="brand">
@@ -7706,6 +7846,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=PERSONALITY_QUESTIONS,
+        personality_enabled=bool(load_settings().get("personality_assessment_enabled", True)),
     )
 
 
@@ -8764,6 +8905,7 @@ def chat():
         # Resolve city/region/country in the background — never blocks the reply
         record_location_async(interaction_id, client_ip())
         record_acknowledgement(interaction_id)
+        record_personality(interaction_id)
     except Exception as e:
         app.logger.error(f"log_interaction failed: {e}")
 
@@ -10124,7 +10266,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials" />
+             value="show_scheduling_button,show_avatar,allow_materials,personality_assessment_enabled" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -10173,6 +10315,25 @@ input[type="file"], input[type="text"] {
             writing so the advisor can draw on it in their session. When off,
             that option is hidden and nothing already uploaded is shared with
             the advisor.
+          </span>
+        </span>
+      </label>
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
+                    margin-top: 1.1rem; padding-top: 1.1rem;
+                    border-top: 1px dashed var(--line);">
+        <input type="checkbox" name="personality_assessment_enabled" value="1"
+               {% if settings.personality_assessment_enabled %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Ask the five-question personality style survey</strong><br />
+          <span class="muted">
+            Shown once per session, right after the release is acknowledged
+            — skippable. Answers softly steer the advisor's tone; they're
+            never shown to the participant as a score. When off, this step
+            is skipped entirely and the composer opens right after the
+            release.
           </span>
         </span>
       </label>
@@ -10762,6 +10923,20 @@ input[type="file"], input[type="text"] {
                 <div class="feedback-detail-content" style="font-style: italic; color: var(--muted);">No comment provided.</div>
               {% endif %}
             </div>
+
+            {% if personality_notes.get(f.id) %}
+            <div class="feedback-detail-block">
+              <div class="feedback-detail-label">Personality snapshot (self-reported)</div>
+              <div class="feedback-detail-content" style="font-style: normal;">
+                {% for line in personality_notes[f.id] %}{{ line }}<br />{% endfor %}
+              </div>
+              <p class="muted" style="font-size: 0.72rem; margin: 0.4rem 0 0;">
+                From this participant's optional five-question self-report,
+                answered once for this session. Not a validated or clinical
+                assessment.
+              </p>
+            </div>
+            {% endif %}
 
             {% if f.rating == 'down' and f.comment %}
             <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
@@ -11475,6 +11650,10 @@ def admin_dashboard():
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
         acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
+        personality_notes={
+            iid: personality_interpretation_lines(scores)
+            for iid, scores in personality_for([r.get("id") for r in feedback_rows]).items()
+        },
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
@@ -11615,6 +11794,7 @@ def admin_settings():
         "allow_materials": ("Participant materials", "on", "off"),
         "auto_learning": ("Continuous learning", "on", "off"),
         "require_login": ("Sign-in", "required", "not required"),
+        "personality_assessment_enabled": ("Personality survey", "on", "off"),
     }
     messages = []
 
