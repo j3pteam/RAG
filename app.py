@@ -2831,7 +2831,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             aria-label="Read the latest reply aloud">
       <img class="presence-photo" src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
            onerror="document.getElementById('presence').style.display='none'" />
-      {% if cfg.avatar_loop_url and not advisor_photo_override %}
+      {% if cfg.avatar_loop_url and not advisor_photo_override and not avatar_no_photo %}
       <video class="presence-loop" id="presence-loop" muted loop playsinline
              autoplay preload="auto" aria-hidden="true"
              onerror="this.style.display='none'">
@@ -7849,6 +7849,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         cfg=page_cfg,
         show_avatar=bool(settings.get("show_avatar")),
         advisor_photo_override=photo_override,
+        avatar_no_photo=bool(settings.get("avatar_no_photo")),
         allow_materials=bool(settings.get("allow_materials")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
