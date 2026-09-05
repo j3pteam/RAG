@@ -215,6 +215,9 @@ _SETTINGS_DEFAULTS = {
     "allow_materials": True,
     # Name shown with the default advisor photo. Blank uses the app name.
     "avatar_name": "",
+    # The default advisor's own external booking link. Blank uses the
+    # shared FOOTER_CTA_URL.
+    "default_scheduling_url": "",
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -6123,6 +6126,13 @@ def _advisors_ensure_table(conn):
                         "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
         except Exception:
             pass
+        # Added later: an advisor's own external booking link (Calendly,
+        # Acuity, etc). Empty means "use the shared J3P scheduling link."
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "scheduling_url TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -6153,13 +6163,15 @@ def list_advisors():
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE)
+                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
+                       COALESCE(scheduling_url, '')
                 FROM advisors ORDER BY name
             """)
-            for slug, name, has_photo, no_photo in cur.fetchall():
+            for slug, name, has_photo, no_photo, scheduling_url in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
-                            "no_photo": bool(no_photo)})
+                            "no_photo": bool(no_photo),
+                            "scheduling_url": scheduling_url or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -6176,11 +6188,12 @@ def get_advisor(slug: str):
     try:
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
-            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE)
+            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE),
+                                  COALESCE(scheduling_url, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
-        return {"slug": row[0], "name": row[1],
-                "no_photo": bool(row[2])} if row else None
+        return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
+                "scheduling_url": row[3] or ""} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -6209,7 +6222,8 @@ def get_advisor_photo(slug: str):
         conn.close()
 
 
-def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> bool:
+def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
+                  scheduling_url=None) -> bool:
     conn = _settings_db_conn()
     if not conn:
         return False
@@ -6236,6 +6250,9 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> 
                     # Clear the stored image so the monogram is what's served
                     cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                 "WHERE slug = %s", (slug,))
+            if scheduling_url is not None:
+                cur.execute("UPDATE advisors SET scheduling_url = %s WHERE slug = %s",
+                            (scheduling_url[:500], slug))
         conn.commit()
         return True
     except Exception as e:
@@ -7658,6 +7675,10 @@ def _render_chat(force_scheduling=None, advisor=None):
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
         name_the_advisor(page_cfg, active["name"])
+        if active.get("scheduling_url"):
+            page_cfg["footer_cta_url"] = active["scheduling_url"]
+    elif (load_settings().get("default_scheduling_url") or "").strip():
+        page_cfg["footer_cta_url"] = load_settings()["default_scheduling_url"].strip()
 
     return render_template_string(
         INDEX_HTML,
@@ -10065,7 +10086,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo" />
+             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo,default_scheduling_url" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -10181,6 +10202,15 @@ input[type="file"], input[type="text"] {
                  style="width: 15px; height: 15px; accent-color: var(--navy);" />
           <span class="muted">No photo — show their initials instead</span>
         </label>
+        <label class="muted" style="display: block; font-size: 0.72rem;
+                      margin-top: 0.9rem; text-transform: uppercase;
+                      letter-spacing: 0.08em;">Scheduling link (optional)</label>
+        <input type="url" name="default_scheduling_url" form="settings-form"
+               value="{{ settings.default_scheduling_url or '' }}"
+               placeholder="https://calendly.com/... — blank uses the shared J3P link"
+               style="width: 100%; margin-top: 0.3rem; padding: 0.45rem;
+                      border: 1px solid var(--line); border-radius: 2px;
+                      font-family: inherit; font-size: 0.82rem;" />
         <button type="submit" form="settings-form" class="btn"
                 style="font-size: 0.66rem; margin-top: 0.7rem;">Save</button>
       </div>
@@ -10245,6 +10275,13 @@ input[type="file"], input[type="text"] {
                    style="width: 15px; height: 15px; accent-color: var(--navy);" />
             <span class="muted">No photo — show their initials instead</span>
           </label>
+          <label class="muted" style="display: block; font-size: 0.72rem;
+                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
+                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
+          <input type="url" name="scheduling_url" value="{{ adv.scheduling_url or '' }}"
+                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
+                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
         </form>
         <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
           The name appears beneath the photo in their sessions. Leave the file
@@ -11458,7 +11495,13 @@ def admin_save_advisor():
         no_photo = True
         photo, mime = None, None
 
-    if save_advisor(slug, name, photo, mime, no_photo=no_photo):
+    scheduling_url = (request.form.get("scheduling_url") or "").strip()
+    if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
+        flash("The scheduling link needs to start with http:// or https://.")
+        return redirect(url_for("admin_dashboard"))
+
+    if save_advisor(slug, name, photo, mime, no_photo=no_photo,
+                     scheduling_url=scheduling_url):
         flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")
@@ -11506,6 +11549,15 @@ def admin_settings():
                             else "Photo name cleared")
         else:
             messages.append("Could not save the photo name")
+
+    if "default_scheduling_url" in managed:
+        su = (request.form.get("default_scheduling_url") or "").strip()[:500]
+        if su and not re.match(r"^https?://", su, re.I):
+            messages.append("Scheduling link NOT saved — it needs to start with http:// or https://")
+        elif save_setting("default_scheduling_url", su):
+            messages.append("Scheduling link set" if su else "Scheduling link cleared — using the shared J3P link")
+        else:
+            messages.append("Could not save the scheduling link")
 
     for key in managed:
         if key not in _SETTINGS_DEFAULTS:
