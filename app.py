@@ -6289,6 +6289,16 @@ def _advisors_ensure_table(conn):
                         "scheduling_url TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Added later: per-advisor overrides for the four Display Settings
+        # toggles. NULL means "inherit the global setting" — these only take
+        # over when explicitly set to true or false for this advisor.
+        for col in ("show_scheduling_override", "show_avatar_override",
+                    "allow_materials_override", "personality_override"):
+            try:
+                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                            f"{col} BOOLEAN")
+            except Exception:
+                pass
     conn.commit()
 
 
@@ -6320,14 +6330,22 @@ def list_advisors():
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
-                       COALESCE(scheduling_url, '')
+                       COALESCE(scheduling_url, ''), show_scheduling_override,
+                       show_avatar_override, allow_materials_override,
+                       personality_override
                 FROM advisors ORDER BY name
             """)
-            for slug, name, has_photo, no_photo, scheduling_url in cur.fetchall():
+            for (slug, name, has_photo, no_photo, scheduling_url,
+                 show_scheduling_override, show_avatar_override,
+                 allow_materials_override, personality_override) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
-                            "scheduling_url": scheduling_url or ""})
+                            "scheduling_url": scheduling_url or "",
+                            "show_scheduling_override": show_scheduling_override,
+                            "show_avatar_override": show_avatar_override,
+                            "allow_materials_override": allow_materials_override,
+                            "personality_override": personality_override})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -6345,11 +6363,17 @@ def get_advisor(slug: str):
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE),
-                                  COALESCE(scheduling_url, '')
+                                  COALESCE(scheduling_url, ''),
+                                  show_scheduling_override, show_avatar_override,
+                                  allow_materials_override, personality_override
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
-                "scheduling_url": row[3] or ""} if row else None
+                "scheduling_url": row[3] or "",
+                "show_scheduling_override": row[4],
+                "show_avatar_override": row[5],
+                "allow_materials_override": row[6],
+                "personality_override": row[7]} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -6378,8 +6402,15 @@ def get_advisor_photo(slug: str):
         conn.close()
 
 
+_UNSET = object()  # distinguishes "caller didn't touch this field" from
+                   # "caller explicitly set it to None" (which, for the
+                   # override fields below, means "inherit the global setting")
+
+
 def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
-                  scheduling_url=None) -> bool:
+                  scheduling_url=None, show_scheduling_override=_UNSET,
+                  show_avatar_override=_UNSET, allow_materials_override=_UNSET,
+                  personality_override=_UNSET) -> bool:
     conn = _settings_db_conn()
     if not conn:
         return False
@@ -6409,6 +6440,17 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
             if scheduling_url is not None:
                 cur.execute("UPDATE advisors SET scheduling_url = %s WHERE slug = %s",
                             (scheduling_url[:500], slug))
+            overrides = {
+                "show_scheduling_override": show_scheduling_override,
+                "show_avatar_override": show_avatar_override,
+                "allow_materials_override": allow_materials_override,
+                "personality_override": personality_override,
+            }
+            for col, val in overrides.items():
+                if val is _UNSET:
+                    continue
+                cur.execute(f"UPDATE advisors SET {col} = %s WHERE slug = %s",
+                            (val, slug))
         conn.commit()
         return True
     except Exception as e:
@@ -7798,8 +7840,23 @@ def _render_chat(force_scheduling=None, advisor=None):
         clear_history()
     else:
         session["messages"] = []
+
+    # Remember which advisor this visitor is with, so a reset keeps the photo
+    if advisor:
+        session["advisor_slug"] = advisor["slug"]
+    active = advisor or get_advisor(session.get("advisor_slug"))
+
+    def _effective(override_key, settings_key, default=False):
+        """This advisor's own override if they have one, else the global
+        Display Settings toggle. None means "no override — inherit"."""
+        if active is not None:
+            override = active.get(override_key)
+            if override is not None:
+                return bool(override)
+        return bool(settings.get(settings_key, default))
+
     if force_scheduling is None:
-        show = settings["show_scheduling_button"]
+        show = _effective("show_scheduling_override", "show_scheduling_button")
     else:
         show = bool(force_scheduling)
         # Remember the choice so a reset or refresh keeps the same experience
@@ -7807,11 +7864,6 @@ def _render_chat(force_scheduling=None, advisor=None):
     # A visitor who arrived on a fixed link keeps that variant for the session
     if force_scheduling is None and "force_scheduling" in session:
         show = bool(session["force_scheduling"])
-
-    # Remember which advisor this visitor is with, so a reset keeps the photo
-    if advisor:
-        session["advisor_slug"] = advisor["slug"]
-    active = advisor or get_advisor(session.get("advisor_slug"))
 
     page_cfg = dict(CONFIG)
     # A name for the default photo, so the general link can read "Alan
@@ -7847,16 +7899,17 @@ def _render_chat(force_scheduling=None, advisor=None):
     return render_template_string(
         INDEX_HTML,
         cfg=page_cfg,
-        show_avatar=bool(settings.get("show_avatar")),
+        show_avatar=_effective("show_avatar_override", "show_avatar"),
         advisor_photo_override=photo_override,
         avatar_no_photo=bool(settings.get("avatar_no_photo")),
-        allow_materials=bool(settings.get("allow_materials")),
+        allow_materials=_effective("allow_materials_override", "allow_materials"),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=PERSONALITY_QUESTIONS,
-        personality_enabled=bool(settings.get("personality_assessment_enabled", True)),
+        personality_enabled=_effective("personality_override",
+                                        "personality_assessment_enabled", True),
         avatar_version=int(datetime.now().timestamp()),
     )
 
@@ -10528,6 +10581,32 @@ input[type="file"], input[type="text"] {
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+
+          <div style="flex: 1 1 100%; margin-top: 0.7rem; padding-top: 0.7rem;
+                      border-top: 1px dashed var(--line);">
+            <label class="muted" style="display: block; font-size: 0.72rem;
+                          text-transform: uppercase; letter-spacing: 0.08em;
+                          margin-bottom: 0.5rem;">
+              Feature overrides for {{ adv.name }} (optional)
+            </label>
+            {% for field, label in [
+                ('show_scheduling_override', 'Scheduling button'),
+                ('show_avatar_override', 'Advisor avatar'),
+                ('allow_materials_override', 'Participant materials'),
+                ('personality_override', 'Personality survey')] %}
+            <div style="display: flex; align-items: center; justify-content: space-between;
+                        gap: 0.6rem; margin-bottom: 0.45rem;">
+              <span style="font-size: 0.8rem;">{{ label }}</span>
+              <select name="{{ field }}" style="padding: 0.35rem 0.5rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.76rem; background: #fff;">
+                <option value="" {% if adv[field] == none %}selected{% endif %}>Use the global setting</option>
+                <option value="1" {% if adv[field] == true %}selected{% endif %}>On for {{ adv.name }}</option>
+                <option value="0" {% if adv[field] == false %}selected{% endif %}>Off for {{ adv.name }}</option>
+              </select>
+            </div>
+            {% endfor %}
+          </div>
+
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
         <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
@@ -11775,8 +11854,18 @@ def admin_save_advisor():
         flash("The scheduling link needs to start with http:// or https://.")
         return redirect(url_for("admin_dashboard"))
 
+    def _tristate(field):
+        """'' -> inherit the global setting (None); '1'/'0' -> an explicit
+        override for just this advisor."""
+        raw = request.form.get(field, "")
+        return {"1": True, "0": False}.get(raw)
+
     if save_advisor(slug, name, photo, mime, no_photo=no_photo,
-                     scheduling_url=scheduling_url):
+                     scheduling_url=scheduling_url,
+                     show_scheduling_override=_tristate("show_scheduling_override"),
+                     show_avatar_override=_tristate("show_avatar_override"),
+                     allow_materials_override=_tristate("allow_materials_override"),
+                     personality_override=_tristate("personality_override")):
         flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")

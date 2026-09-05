@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..6b70d7c 100644
+index 4b5a702..cfaad5e 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -545,7 +545,7 @@ index 4b5a702..6b70d7c 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6282,13 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6282,23 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -556,10 +556,20 @@ index 4b5a702..6b70d7c 100644
 +                        "scheduling_url TEXT NOT NULL DEFAULT ''")
 +        except Exception:
 +            pass
++        # Added later: per-advisor overrides for the four Display Settings
++        # toggles. NULL means "inherit the global setting" — these only take
++        # over when explicitly set to true or false for this advisor.
++        for col in ("show_scheduling_override", "show_avatar_override",
++                    "allow_materials_override", "personality_override"):
++            try:
++                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
++                            f"{col} BOOLEAN")
++            except Exception:
++                pass
      conn.commit()
  
  
-@@ -5993,8 +6303,8 @@ def advisors_with_detail():
+@@ -5993,8 +6313,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -570,62 +580,94 @@ index 4b5a702..6b70d7c 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6319,15 @@ def list_advisors():
+@@ -6009,13 +6329,23 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
 -                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE)
 +                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
-+                       COALESCE(scheduling_url, '')
++                       COALESCE(scheduling_url, ''), show_scheduling_override,
++                       show_avatar_override, allow_materials_override,
++                       personality_override
                  FROM advisors ORDER BY name
              """)
 -            for slug, name, has_photo, no_photo in cur.fetchall():
-+            for slug, name, has_photo, no_photo, scheduling_url in cur.fetchall():
++            for (slug, name, has_photo, no_photo, scheduling_url,
++                 show_scheduling_override, show_avatar_override,
++                 allow_materials_override, personality_override) in cur.fetchall():
                  out.append({"slug": slug, "name": name,
                              "has_photo": bool(has_photo),
 -                            "no_photo": bool(no_photo)})
 +                            "no_photo": bool(no_photo),
-+                            "scheduling_url": scheduling_url or ""})
++                            "scheduling_url": scheduling_url or "",
++                            "show_scheduling_override": show_scheduling_override,
++                            "show_avatar_override": show_avatar_override,
++                            "allow_materials_override": allow_materials_override,
++                            "personality_override": personality_override})
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6344,12 @@ def get_advisor(slug: str):
+@@ -6032,11 +6362,18 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
 -            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE)
 +            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE),
-+                                  COALESCE(scheduling_url, '')
++                                  COALESCE(scheduling_url, ''),
++                                  show_scheduling_override, show_avatar_override,
++                                  allow_materials_override, personality_override
                             FROM advisors WHERE slug = %s""", (slug,))
              row = cur.fetchone()
 -        return {"slug": row[0], "name": row[1],
 -                "no_photo": bool(row[2])} if row else None
 +        return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
-+                "scheduling_url": row[3] or ""} if row else None
++                "scheduling_url": row[3] or "",
++                "show_scheduling_override": row[4],
++                "show_avatar_override": row[5],
++                "allow_materials_override": row[6],
++                "personality_override": row[7]} if row else None
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6065,7 +6378,8 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6402,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
 -def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> bool:
++_UNSET = object()  # distinguishes "caller didn't touch this field" from
++                   # "caller explicitly set it to None" (which, for the
++                   # override fields below, means "inherit the global setting")
++
++
 +def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
-+                  scheduling_url=None) -> bool:
++                  scheduling_url=None, show_scheduling_override=_UNSET,
++                  show_avatar_override=_UNSET, allow_materials_override=_UNSET,
++                  personality_override=_UNSET) -> bool:
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6406,9 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6437,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
 +            if scheduling_url is not None:
 +                cur.execute("UPDATE advisors SET scheduling_url = %s WHERE slug = %s",
 +                            (scheduling_url[:500], slug))
++            overrides = {
++                "show_scheduling_override": show_scheduling_override,
++                "show_avatar_override": show_avatar_override,
++                "allow_materials_override": allow_materials_override,
++                "personality_override": personality_override,
++            }
++            for col, val in overrides.items():
++                if val is _UNSET:
++                    continue
++                cur.execute(f"UPDATE advisors SET {col} = %s WHERE slug = %s",
++                            (val, slug))
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +6565,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +6607,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -634,7 +676,7 @@ index 4b5a702..6b70d7c 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6296,6 +6613,266 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6296,6 +6655,266 @@ def participant_materials_block(budget=24000) -> str:
      )
  
  
@@ -901,7 +943,7 @@ index 4b5a702..6b70d7c 100644
  # ---------------------------------------------------------------------------
  # Participant profile
  # ---------------------------------------------------------------------------
-@@ -6789,12 +7366,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7408,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -923,7 +965,7 @@ index 4b5a702..6b70d7c 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,24 +7435,118 @@ def document_owners() -> dict:
+@@ -6852,19 +7477,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -940,29 +982,20 @@ index 4b5a702..6b70d7c 100644
 +            )
 +        """)
 +    conn.commit()
- 
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
--    """
--    owners = document_owners()
--    if not owners:
--        return results
--    keep = []
--    for r in results:
--        owner = owners.get(r.get("title"))
--        if not owner or owner == advisor_slug:
--            keep.append(r)
--    return keep
- 
++
++
 +def set_document_advisors(title: str, advisor_slugs) -> bool:
 +    """Assign a document to zero or more advisors.
  
--def detect_deliverable_request(text: str) -> bool:
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
 +    An empty list clears any restriction — the document returns to the
 +    shared J3P base, available to every advisor. A non-empty list restricts
 +    retrieval to just those advisors (one, several, or — by checking every
 +    advisor — effectively all of them).
-+    """
+     """
+-    owners = document_owners()
+-    if not owners:
 +    if not title:
 +        return False
 +    slugs = sorted({(s or "").strip() for s in (advisor_slugs or []) if (s or "").strip()})
@@ -1044,20 +1077,17 @@ index 4b5a702..6b70d7c 100644
 +    """
 +    advisor_map = document_advisor_map()
 +    if not advisor_map:
-+        return results
-+    keep = []
-+    for r in results:
+         return results
+     keep = []
+     for r in results:
+-        owner = owners.get(r.get("title"))
+-        if not owner or owner == advisor_slug:
 +        slugs = advisor_map.get(r.get("title"))
 +        if not slugs or advisor_slug in slugs:
-+            keep.append(r)
-+    return keep
-+
-+
-+def detect_deliverable_request(text: str) -> bool:
-     """True when the user is asking for a written document of some kind."""
-     import re as _r
-     if not text:
-@@ -7107,6 +7784,14 @@ def _render_chat(force_scheduling=None, advisor=None):
+             keep.append(r)
+     return keep
+ 
+@@ -7107,14 +7826,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -1072,16 +1102,43 @@ index 4b5a702..6b70d7c 100644
      # Anonymous visitors start fresh each visit. Signed-in participants keep
      # their history — that continuity is the point of signing in.
      if not current_user():
-@@ -7114,7 +7799,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+         clear_history()
      else:
          session["messages"] = []
++
++    # Remember which advisor this visitor is with, so a reset keeps the photo
++    if advisor:
++        session["advisor_slug"] = advisor["slug"]
++    active = advisor or get_advisor(session.get("advisor_slug"))
++
++    def _effective(override_key, settings_key, default=False):
++        """This advisor's own override if they have one, else the global
++        Display Settings toggle. None means "no override — inherit"."""
++        if active is not None:
++            override = active.get(override_key)
++            if override is not None:
++                return bool(override)
++        return bool(settings.get(settings_key, default))
++
      if force_scheduling is None:
 -        show = load_settings()["show_scheduling_button"]
-+        show = settings["show_scheduling_button"]
++        show = _effective("show_scheduling_override", "show_scheduling_button")
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7145,7 +7830,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +7865,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+     if force_scheduling is None and "force_scheduling" in session:
+         show = bool(session["force_scheduling"])
+ 
+-    # Remember which advisor this visitor is with, so a reset keeps the photo
+-    if advisor:
+-        session["advisor_slug"] = advisor["slug"]
+-    active = advisor or get_advisor(session.get("advisor_slug"))
+-
+     page_cfg = dict(CONFIG)
+     # A name for the default photo, so the general link can read "Alan
+     # Friedman" rather than the app's own name.
+@@ -7145,7 +7882,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -1090,7 +1147,7 @@ index 4b5a702..6b70d7c 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7154,17 +7839,25 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,17 +7891,26 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -1103,22 +1160,23 @@ index 4b5a702..6b70d7c 100644
          INDEX_HTML,
          cfg=page_cfg,
 -        show_avatar=bool(load_settings().get("show_avatar")),
-+        show_avatar=bool(settings.get("show_avatar")),
++        show_avatar=_effective("show_avatar_override", "show_avatar"),
          advisor_photo_override=photo_override,
 -        allow_materials=bool(load_settings().get("allow_materials")),
 +        avatar_no_photo=bool(settings.get("avatar_no_photo")),
-+        allow_materials=bool(settings.get("allow_materials")),
++        allow_materials=_effective("allow_materials_override", "allow_materials"),
          show_scheduling_button=show,
          release_heading=RELEASE_HEADING,
          release_body=RELEASE_BODY_HTML,
          release_checkbox_label=RELEASE_CHECKBOX_LABEL,
 +        personality_questions=PERSONALITY_QUESTIONS,
-+        personality_enabled=bool(settings.get("personality_assessment_enabled", True)),
++        personality_enabled=_effective("personality_override",
++                                        "personality_assessment_enabled", True),
 +        avatar_version=int(datetime.now().timestamp()),
      )
  
  
-@@ -7173,6 +7866,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +7919,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -1131,7 +1189,7 @@ index 4b5a702..6b70d7c 100644
      return _render_chat()
  
  
-@@ -7182,6 +7881,7 @@ def index():
+@@ -7182,6 +7934,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -1139,7 +1197,7 @@ index 4b5a702..6b70d7c 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +7975,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8028,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -1147,7 +1205,7 @@ index 4b5a702..6b70d7c 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7918,12 +8619,14 @@ def chat():
+@@ -7918,12 +8672,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -1162,7 +1220,7 @@ index 4b5a702..6b70d7c 100644
          )
  
      try:
-@@ -8213,6 +8916,7 @@ def chat():
+@@ -8213,6 +8969,7 @@ def chat():
          # Resolve city/region/country in the background — never blocks the reply
          record_location_async(interaction_id, client_ip())
          record_acknowledgement(interaction_id)
@@ -1170,7 +1228,7 @@ index 4b5a702..6b70d7c 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +8981,22 @@ def acknowledge_release():
+@@ -8277,6 +9034,22 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -1193,7 +1251,7 @@ index 4b5a702..6b70d7c 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8614,7 +9334,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +9387,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -1204,7 +1262,7 @@ index 4b5a702..6b70d7c 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +9542,23 @@ def advisor_avatar():
+@@ -8820,8 +9595,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -1229,7 +1287,7 @@ index 4b5a702..6b70d7c 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +9576,38 @@ def advisor_avatar():
+@@ -8839,28 +9629,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -1286,7 +1344,7 @@ index 4b5a702..6b70d7c 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9095,9 +9842,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9895,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -1316,7 +1374,7 @@ index 4b5a702..6b70d7c 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9888,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9941,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -1327,7 +1385,7 @@ index 4b5a702..6b70d7c 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9900,13 @@ form.upload {
+@@ -9133,8 +9953,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -1343,7 +1401,7 @@ index 4b5a702..6b70d7c 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +9942,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +9995,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -1363,7 +1421,7 @@ index 4b5a702..6b70d7c 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10011,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10064,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1387,7 +1445,7 @@ index 4b5a702..6b70d7c 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10126,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10179,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1555,7 +1613,7 @@ index 4b5a702..6b70d7c 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10319,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10372,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -1608,7 +1666,7 @@ index 4b5a702..6b70d7c 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10374,27 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10427,27 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -1636,7 +1694,7 @@ index 4b5a702..6b70d7c 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10404,45 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10457,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1693,7 +1751,7 @@ index 4b5a702..6b70d7c 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10451,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10504,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -1704,7 +1762,7 @@ index 4b5a702..6b70d7c 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10502,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10555,13 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -1719,7 +1777,7 @@ index 4b5a702..6b70d7c 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10517,18 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10570,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -1734,11 +1792,37 @@ index 4b5a702..6b70d7c 100644
 +                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
 +                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
 +                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
++
++          <div style="flex: 1 1 100%; margin-top: 0.7rem; padding-top: 0.7rem;
++                      border-top: 1px dashed var(--line);">
++            <label class="muted" style="display: block; font-size: 0.72rem;
++                          text-transform: uppercase; letter-spacing: 0.08em;
++                          margin-bottom: 0.5rem;">
++              Feature overrides for {{ adv.name }} (optional)
++            </label>
++            {% for field, label in [
++                ('show_scheduling_override', 'Scheduling button'),
++                ('show_avatar_override', 'Advisor avatar'),
++                ('allow_materials_override', 'Participant materials'),
++                ('personality_override', 'Personality survey')] %}
++            <div style="display: flex; align-items: center; justify-content: space-between;
++                        gap: 0.6rem; margin-bottom: 0.45rem;">
++              <span style="font-size: 0.8rem;">{{ label }}</span>
++              <select name="{{ field }}" style="padding: 0.35rem 0.5rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.76rem; background: #fff;">
++                <option value="" {% if adv[field] == none %}selected{% endif %}>Use the global setting</option>
++                <option value="1" {% if adv[field] == true %}selected{% endif %}>On for {{ adv.name }}</option>
++                <option value="0" {% if adv[field] == false %}selected{% endif %}>Off for {{ adv.name }}</option>
++              </select>
++            </div>
++            {% endfor %}
++          </div>
++
 +          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10558,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10637,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1768,7 +1852,7 @@ index 4b5a702..6b70d7c 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +10621,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +10700,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -1799,7 +1883,7 @@ index 4b5a702..6b70d7c 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10664,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10743,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1809,7 +1893,7 @@ index 4b5a702..6b70d7c 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9897,6 +10943,20 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11022,20 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -1830,7 +1914,7 @@ index 4b5a702..6b70d7c 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11144,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11223,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1840,7 +1924,7 @@ index 4b5a702..6b70d7c 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11165,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11244,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1863,7 +1947,7 @@ index 4b5a702..6b70d7c 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11298,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11377,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1874,7 +1958,7 @@ index 4b5a702..6b70d7c 100644
  
  </div>
  
-@@ -10478,6 +11529,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11608,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -1890,7 +1974,7 @@ index 4b5a702..6b70d7c 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11548,59 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11627,59 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1950,7 +2034,7 @@ index 4b5a702..6b70d7c 100644
  </body></html>"""
  
  
-@@ -10528,6 +11641,12 @@ def admin_dashboard():
+@@ -10528,6 +11720,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1963,7 +2047,7 @@ index 4b5a702..6b70d7c 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11654,12 @@ def admin_dashboard():
+@@ -10535,7 +11733,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1977,7 +2061,7 @@ index 4b5a702..6b70d7c 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,6 +11669,10 @@ def admin_dashboard():
+@@ -10545,6 +11748,10 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -1988,7 +2072,7 @@ index 4b5a702..6b70d7c 100644
          base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
          stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
          log_filter=log_filter,
-@@ -10631,15 +11759,24 @@ def admin_save_advisor():
+@@ -10631,15 +11838,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2013,12 +2097,22 @@ index 4b5a702..6b70d7c 100644
 +        flash("The scheduling link needs to start with http:// or https://.")
 +        return redirect(url_for("admin_dashboard"))
 +
++    def _tristate(field):
++        """'' -> inherit the global setting (None); '1'/'0' -> an explicit
++        override for just this advisor."""
++        raw = request.form.get(field, "")
++        return {"1": True, "0": False}.get(raw)
++
 +    if save_advisor(slug, name, photo, mime, no_photo=no_photo,
-+                     scheduling_url=scheduling_url):
++                     scheduling_url=scheduling_url,
++                     show_scheduling_override=_tristate("show_scheduling_override"),
++                     show_avatar_override=_tristate("show_avatar_override"),
++                     allow_materials_override=_tristate("allow_materials_override"),
++                     personality_override=_tristate("personality_override")):
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +11809,14 @@ def admin_settings():
+@@ -10672,21 +11898,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2042,7 +2136,7 @@ index 4b5a702..6b70d7c 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12290,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12379,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
