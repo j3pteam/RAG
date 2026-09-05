@@ -2828,7 +2828,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div class="presence" id="presence">
     <button type="button" class="presence-frame" id="presence-frame"
             aria-label="Read the latest reply aloud">
-      <img class="presence-photo" src="{{ cfg.avatar_url }}" alt=""
+      <img class="presence-photo" src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
            onerror="document.getElementById('presence').style.display='none'" />
       {% if cfg.avatar_loop_url and not advisor_photo_override %}
       <video class="presence-loop" id="presence-loop" muted loop playsinline
@@ -4151,7 +4151,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return html;
     }
 
-    const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}"{% else %}""{% endif %};
+    const ADVISOR_AVATAR = {% if show_avatar %}"{{ cfg.avatar_url }}?v={{ avatar_version }}"{% else %}""{% endif %};
     const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
 
     // ---------------------------------------------------------------
@@ -7847,6 +7847,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=PERSONALITY_QUESTIONS,
         personality_enabled=bool(load_settings().get("personality_assessment_enabled", True)),
+        avatar_version=int(datetime.now().timestamp()),
     )
 
 
@@ -10400,7 +10401,7 @@ input[type="file"], input[type="text"] {
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
           <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
-                 onchange="this.form.querySelector('input[name=avatar_no_photo]').checked=false"
+                 onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <label style="display: flex; align-items: center; gap: 0.4rem;
@@ -10487,7 +10488,7 @@ input[type="file"], input[type="text"] {
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
           <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
-                 onchange="this.form.querySelector('input[name=no_photo]').checked=false"
+                 onchange="if (this.files.length) this.form.querySelector('input[name=no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <label style="display: flex; align-items: center; gap: 0.4rem;
