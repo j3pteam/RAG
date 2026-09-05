@@ -937,9 +937,14 @@ def mail_transport_configured() -> bool:
 
 
 def login_is_required() -> bool:
-    """Admin setting wins; falls back to the environment variable."""
+    """Admin setting wins; falls back to the environment variable.
+
+    Forces a fresh read — this gates every request across every worker
+    process, so a stale per-process cache here could mean some visitors
+    get a different sign-in requirement than the admin just set.
+    """
     try:
-        return bool(load_settings()["require_login"])
+        return bool(load_settings(force=True)["require_login"])
     except Exception:
         return REQUIRE_LOGIN
 
@@ -1383,7 +1388,7 @@ def _learning_loop():
     time.sleep(120 + (os.getpid() % 47))
     while True:
         try:
-            if load_settings().get("auto_learning"):
+            if load_settings(force=True).get("auto_learning"):
                 conn = _settings_db_conn()
                 may_run = True
                 if conn:
@@ -6560,7 +6565,7 @@ def delete_participant_doc(doc_id: int) -> bool:
 
 def participant_materials_block(budget=24000) -> str:
     """The participant's own materials, for their prompt only."""
-    if not load_settings().get("allow_materials"):
+    if not load_settings(force=True).get("allow_materials"):
         return ""
     docs = []
     conn = _settings_db_conn()
@@ -7779,6 +7784,14 @@ def _render_chat(force_scheduling=None, advisor=None):
     force_scheduling overrides the admin default; advisor selects a named
     profile so the page shows that person's photo.
     """
+    # One fresh read for the whole request — this runs on every page load
+    # across every worker process, and the module-level settings cache is
+    # per-process. Trusting a possibly-stale cached copy here means an
+    # admin change (avatar, scheduling link, sign-in requirement, feature
+    # toggles) can silently fail to take effect for whichever worker
+    # happens to serve a given visitor, sometimes indefinitely.
+    settings = load_settings(force=True)
+
     # Anonymous visitors start fresh each visit. Signed-in participants keep
     # their history — that continuity is the point of signing in.
     if not current_user():
@@ -7786,7 +7799,7 @@ def _render_chat(force_scheduling=None, advisor=None):
     else:
         session["messages"] = []
     if force_scheduling is None:
-        show = load_settings()["show_scheduling_button"]
+        show = settings["show_scheduling_button"]
     else:
         show = bool(force_scheduling)
         # Remember the choice so a reset or refresh keeps the same experience
@@ -7817,7 +7830,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                 person_name, opening).replace(
                 CONFIG["persona_name"], person_name)
 
-    default_name = (load_settings().get("avatar_name") or "").strip()
+    default_name = (settings.get("avatar_name") or "").strip()
     if default_name and not active:
         name_the_advisor(page_cfg, default_name)
     photo_override = False
@@ -7828,21 +7841,21 @@ def _render_chat(force_scheduling=None, advisor=None):
         name_the_advisor(page_cfg, active["name"])
         if active.get("scheduling_url"):
             page_cfg["footer_cta_url"] = active["scheduling_url"]
-    elif (load_settings().get("default_scheduling_url") or "").strip():
-        page_cfg["footer_cta_url"] = load_settings()["default_scheduling_url"].strip()
+    elif (settings.get("default_scheduling_url") or "").strip():
+        page_cfg["footer_cta_url"] = settings["default_scheduling_url"].strip()
 
     return render_template_string(
         INDEX_HTML,
         cfg=page_cfg,
-        show_avatar=bool(load_settings().get("show_avatar")),
+        show_avatar=bool(settings.get("show_avatar")),
         advisor_photo_override=photo_override,
-        allow_materials=bool(load_settings().get("allow_materials")),
+        allow_materials=bool(settings.get("allow_materials")),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=PERSONALITY_QUESTIONS,
-        personality_enabled=bool(load_settings().get("personality_assessment_enabled", True)),
+        personality_enabled=bool(settings.get("personality_assessment_enabled", True)),
         avatar_version=int(datetime.now().timestamp()),
     )
 
@@ -9320,7 +9333,9 @@ def advisor_placeholder_webm():
 
 
 def materials_enabled() -> bool:
-    return bool(load_settings().get("allow_materials"))
+    """Gates the materials-upload routes for every participant request, so
+    this reads fresh rather than trusting this worker's cached settings."""
+    return bool(load_settings(force=True).get("allow_materials"))
 
 
 def scrub_internal_emails(text: str) -> str:
@@ -9529,9 +9544,15 @@ def advisor_avatar():
     file is the fallback when nothing has been uploaded. "No photo — show
     initials instead" (a setting, since the default advisor isn't a row in
     the advisors table) takes priority over both.
+
+    Forces a fresh settings read rather than trusting this worker process's
+    cache — this route runs on every page load across every worker, and a
+    stale cache here means the admin can toggle this setting all day and
+    some (or all) visitors keep seeing the old photo indefinitely.
     """
-    if load_settings().get("avatar_no_photo"):
-        name = load_settings().get("avatar_name") or CONFIG["persona_name"]
+    settings = load_settings(force=True)
+    if settings.get("avatar_no_photo"):
+        name = settings.get("avatar_name") or CONFIG["persona_name"]
         resp = app.response_class(placeholder_avatar_svg(name),
                                   mimetype="image/svg+xml")
         resp.headers["Cache-Control"] = "no-cache"
