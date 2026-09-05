@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..f967dba 100644
+index 4b5a702..028ca65 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,15 @@ _SETTINGS_DEFAULTS = {
@@ -225,12 +225,12 @@ index 4b5a702..f967dba 100644
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -1023,7 +1023,27 @@ index 4b5a702..f967dba 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9822,23 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +9766,19 @@ input[type="file"], input[type="text"] {
+ }
+ .advisor-link-row { margin-bottom: 0.6rem; }
+ .advisor-link-row:last-child { margin-bottom: 0; }
++
++/* Live "what will the initials look like" preview beside the name field */
++.initials-preview-row {
++  display: flex; align-items: center; gap: 0.5rem;
++  margin-top: 0.4rem; flex: 1 1 100%;
++}
++.initials-preview {
++  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
++  background: var(--navy); color: var(--gold);
++  display: flex; align-items: center; justify-content: center;
++  font-size: 0.62rem; font-weight: 500; letter-spacing: 0.02em;
++}
++.initials-preview-row span.muted { font-size: 0.72rem; }
+ .advisor-link-label {
+   font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+   margin-bottom: 0.15rem;
+@@ -9226,6 +9835,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1047,7 +1067,7 @@ index 4b5a702..f967dba 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9937,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9950,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1215,7 +1235,7 @@ index 4b5a702..f967dba 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10130,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10143,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -1249,7 +1269,7 @@ index 4b5a702..f967dba 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,28 +10175,40 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10188,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1268,6 +1288,7 @@ index 4b5a702..f967dba 100644
 +              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
 +          <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
                   placeholder="{{ cfg.persona_name }}"
++                 oninput="document.getElementById('initials-preview-default').textContent = initialsForPreview(this.value)"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
 -          <span class="muted" style="font-size: 0.74rem;">saves with Display Settings</span>
@@ -1289,6 +1310,10 @@ index 4b5a702..f967dba 100644
 +                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
 +            <span class="muted">No photo — show their initials instead</span>
 +          </label>
++          <div class="initials-preview-row">
++            <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
++            <span class="muted">Preview if no photo is used</span>
++          </div>
 +          <label class="muted" style="display: block; font-size: 0.72rem;
 +                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
 +                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
@@ -1301,7 +1326,7 @@ index 4b5a702..f967dba 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10217,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10235,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -1312,7 +1337,11 @@ index 4b5a702..f967dba 100644
        </div>
  
        <div class="advisor-links">
-@@ -9469,9 +10271,9 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10286,13 @@ input[type="file"], input[type="text"] {
+               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+           <input type="hidden" name="slug" value="{{ adv.slug }}" />
+           <input type="text" name="name" value="{{ adv.name }}" required
++                 oninput="document.getElementById('initials-preview-{{ adv.slug }}').textContent = initialsForPreview(this.value)"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -1323,10 +1352,14 @@ index 4b5a702..f967dba 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10282,14 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10301,18 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
++          <div class="initials-preview-row">
++            <span id="initials-preview-{{ adv.slug }}" class="initials-preview">{{ initials_for(adv.name) }}</span>
++            <span class="muted">Preview if no photo is used</span>
++          </div>
 +          <label class="muted" style="display: block; font-size: 0.72rem;
 +                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
 +                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
@@ -1338,7 +1371,7 @@ index 4b5a702..f967dba 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10319,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10342,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1368,7 +1401,19 @@ index 4b5a702..f967dba 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9583,7 +10402,9 @@ input[type="file"], input[type="text"] {
+@@ -9577,13 +10419,20 @@ input[type="file"], input[type="text"] {
+       </p>
+       <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+             class="upload">
+-        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required />
++        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
++               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
+         <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+         <button type="submit" class="btn">Save advisor</button>
++        <div class="initials-preview-row" style="grid-column: 1 / -1;">
++          <span id="initials-preview-new" class="initials-preview">?</span>
++          <span class="muted">Preview if no photo is used</span>
++        </div>
        </form>
      </div>
    </div>
@@ -1378,7 +1423,7 @@ index 4b5a702..f967dba 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10441,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10469,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1388,7 +1433,7 @@ index 4b5a702..f967dba 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10907,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10935,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1398,7 +1443,7 @@ index 4b5a702..f967dba 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +10928,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10956,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1421,7 +1466,7 @@ index 4b5a702..f967dba 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11061,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11089,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1432,7 +1477,7 @@ index 4b5a702..f967dba 100644
  
  </div>
  
-@@ -10478,6 +11292,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11320,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -1448,10 +1493,26 @@ index 4b5a702..f967dba 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11311,34 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11339,50 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
++
++    <script>
++      // ---------------------------------------------------------------
++      // Live "what will the initials look like" preview. Mirrors
++      // initials_for() in app.py exactly — keep the two in sync if that
++      // logic ever changes.
++      // ---------------------------------------------------------------
++      function initialsForPreview(name) {
++        const words = (name || "").split(/\\s+/)
++          .map(w => w.replace(/[^A-Za-z0-9]/g, ""))
++          .filter(Boolean);
++        if (!words.length) return "?";
++        if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
++        return (words[0][0] + words[words.length - 1][0]).toUpperCase();
++      }
++    </script>
 +
 +    <script>
 +      // ---------------------------------------------------------------
@@ -1483,7 +1544,7 @@ index 4b5a702..f967dba 100644
  </body></html>"""
  
  
-@@ -10528,6 +11379,12 @@ def admin_dashboard():
+@@ -10528,6 +11423,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1496,7 +1557,7 @@ index 4b5a702..f967dba 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11392,11 @@ def admin_dashboard():
+@@ -10535,7 +11436,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1505,11 +1566,12 @@ index 4b5a702..f967dba 100644
 +        doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
 +        advisor_names=_advisor_names,
 +        advisor_docs=_advisor_docs,
++        initials_for=initials_for,
 +        biometric_files=list_biometric_files(),
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,15 +11492,24 @@ def admin_save_advisor():
+@@ -10631,15 +11537,24 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1539,7 +1601,7 @@ index 4b5a702..f967dba 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +11542,13 @@ def admin_settings():
+@@ -10672,21 +11587,13 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1562,7 +1624,7 @@ index 4b5a702..f967dba 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12022,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12067,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

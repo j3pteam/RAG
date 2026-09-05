@@ -9766,6 +9766,19 @@ input[type="file"], input[type="text"] {
 }
 .advisor-link-row { margin-bottom: 0.6rem; }
 .advisor-link-row:last-child { margin-bottom: 0; }
+
+/* Live "what will the initials look like" preview beside the name field */
+.initials-preview-row {
+  display: flex; align-items: center; gap: 0.5rem;
+  margin-top: 0.4rem; flex: 1 1 100%;
+}
+.initials-preview {
+  width: 32px; height: 32px; border-radius: 50%; flex-shrink: 0;
+  background: var(--navy); color: var(--gold);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.62rem; font-weight: 500; letter-spacing: 0.02em;
+}
+.initials-preview-row span.muted { font-size: 0.72rem; }
 .advisor-link-label {
   font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
   margin-bottom: 0.15rem;
@@ -10186,6 +10199,7 @@ input[type="file"], input[type="text"] {
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
                  placeholder="{{ cfg.persona_name }}"
+                 oninput="document.getElementById('initials-preview-default').textContent = initialsForPreview(this.value)"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
           <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -10200,6 +10214,10 @@ input[type="file"], input[type="text"] {
                    style="width: 15px; height: 15px; accent-color: var(--navy);" />
             <span class="muted">No photo — show their initials instead</span>
           </label>
+          <div class="initials-preview-row">
+            <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
+            <span class="muted">Preview if no photo is used</span>
+          </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
                         letter-spacing: 0.08em;">Scheduling link (optional)</label>
@@ -10268,6 +10286,7 @@ input[type="file"], input[type="text"] {
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <input type="hidden" name="slug" value="{{ adv.slug }}" />
           <input type="text" name="name" value="{{ adv.name }}" required
+                 oninput="document.getElementById('initials-preview-{{ adv.slug }}').textContent = initialsForPreview(this.value)"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
           <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
@@ -10282,6 +10301,10 @@ input[type="file"], input[type="text"] {
                    style="width: 15px; height: 15px; accent-color: var(--navy);" />
             <span class="muted">No photo — show their initials instead</span>
           </label>
+          <div class="initials-preview-row">
+            <span id="initials-preview-{{ adv.slug }}" class="initials-preview">{{ initials_for(adv.name) }}</span>
+            <span class="muted">Preview if no photo is used</span>
+          </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
                         letter-spacing: 0.08em;">Scheduling link (optional)</label>
@@ -10396,9 +10419,14 @@ input[type="file"], input[type="text"] {
       </p>
       <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
             class="upload">
-        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required />
+        <input type="text" name="name" placeholder="Advisor name (e.g. Bruce Gewertz)" required
+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
         <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
         <button type="submit" class="btn">Save advisor</button>
+        <div class="initials-preview-row" style="grid-column: 1 / -1;">
+          <span id="initials-preview-new" class="initials-preview">?</span>
+          <span class="muted">Preview if no photo is used</span>
+        </div>
       </form>
     </div>
   </div>
@@ -11314,6 +11342,22 @@ input[type="file"], input[type="text"] {
 
     <script>
       // ---------------------------------------------------------------
+      // Live "what will the initials look like" preview. Mirrors
+      // initials_for() in app.py exactly — keep the two in sync if that
+      // logic ever changes.
+      // ---------------------------------------------------------------
+      function initialsForPreview(name) {
+        const words = (name || "").split(/\\s+/)
+          .map(w => w.replace(/[^A-Za-z0-9]/g, ""))
+          .filter(Boolean);
+        if (!words.length) return "?";
+        if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
+        return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+      }
+    </script>
+
+    <script>
+      // ---------------------------------------------------------------
       // Tab navigation — five groups instead of eight stacked sections.
       // The active tab is remembered in localStorage so it survives the
       // full-page reload every form submission on this page causes.
@@ -11396,6 +11440,7 @@ def admin_dashboard():
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
+        initials_for=initials_for,
         biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
