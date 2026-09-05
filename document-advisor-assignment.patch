@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..8958e9e 100644
+index 4b5a702..c710eab 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,15 @@ _SETTINGS_DEFAULTS = {
@@ -279,9 +279,20 @@ index 4b5a702..8958e9e 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5931,12 +6070,20 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6069,36 @@ def prepare_avatar(raw: bytes):
+ # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
++# Trailing credentials/suffixes to skip when picking which word is the
++# "last name" for initials — so "Bruce Gewertz, MD" reads as Bruce + Gewertz,
++# not Bruce + MD.
++_NAME_SUFFIXES = {
++    "md", "do", "phd", "rn", "np", "pa", "dds", "dmd", "esq", "jr", "sr",
++    "ii", "iii", "iv", "mba", "mph", "rph", "dvm", "jd", "cpa", "lmft",
++    "lcsw", "psyd", "edd",
++}
++
++
  def initials_for(name: str) -> str:
 -    parts = [w for w in re.split(r"[^A-Za-z]+", name or "") if w]
 -    if not parts:
@@ -290,7 +301,9 @@ index 4b5a702..8958e9e 100644
 +
 +    Splits on whitespace, not on every non-letter character — a digit or
 +    punctuation inside one word (as in "J3P") is part of that word, not a
-+    word boundary, so it doesn't get silently dropped.
++    word boundary, so it doesn't get silently dropped. Trailing credentials
++    (MD, PhD, Jr, III, ...) are ignored when picking the "last" word, so a
++    name ending in one doesn't turn into initials for the credential itself.
 +    """
 +    words = [re.sub(r"[^A-Za-z0-9]", "", w) for w in (name or "").split()]
 +    words = [w for w in words if w]
@@ -299,13 +312,16 @@ index 4b5a702..8958e9e 100644
 -    if len(parts) == 1:
 -        return parts[0][:2].upper()
 -    return (parts[0][0] + parts[-1][0]).upper()
-+    if len(words) == 1:
-+        return words[0][:3].upper()
-+    return (words[0][0] + words[-1][0]).upper()
++    core = list(words)
++    while len(core) > 1 and core[-1].lower() in _NAME_SUFFIXES:
++        core.pop()
++    if len(core) == 1:
++        return core[0][:3].upper()
++    return (core[0][0] + core[-1][0]).upper()
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6095,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6110,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -314,7 +330,7 @@ index 4b5a702..8958e9e 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6126,13 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6141,13 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -328,7 +344,7 @@ index 4b5a702..8958e9e 100644
      conn.commit()
  
  
-@@ -5993,8 +6147,8 @@ def advisors_with_detail():
+@@ -5993,8 +6162,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -339,7 +355,7 @@ index 4b5a702..8958e9e 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6163,15 @@ def list_advisors():
+@@ -6009,13 +6178,15 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -358,7 +374,7 @@ index 4b5a702..8958e9e 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6188,12 @@ def get_advisor(slug: str):
+@@ -6032,11 +6203,12 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -374,7 +390,7 @@ index 4b5a702..8958e9e 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6065,7 +6222,8 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6237,8 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -384,7 +400,7 @@ index 4b5a702..8958e9e 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6250,9 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6265,9 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -394,7 +410,7 @@ index 4b5a702..8958e9e 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6296,6 +6457,266 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6296,6 +6472,266 @@ def participant_materials_block(budget=24000) -> str:
      )
  
  
@@ -661,7 +677,7 @@ index 4b5a702..8958e9e 100644
  # ---------------------------------------------------------------------------
  # Participant profile
  # ---------------------------------------------------------------------------
-@@ -6789,12 +7210,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7225,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -683,7 +699,7 @@ index 4b5a702..8958e9e 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7279,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7294,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -804,7 +820,7 @@ index 4b5a702..8958e9e 100644
              keep.append(r)
      return keep
  
-@@ -7154,6 +7675,10 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,6 +7690,10 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -815,7 +831,7 @@ index 4b5a702..8958e9e 100644
  
      return render_template_string(
          INDEX_HTML,
-@@ -7165,6 +7690,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7165,6 +7705,7 @@ def _render_chat(force_scheduling=None, advisor=None):
          release_heading=RELEASE_HEADING,
          release_body=RELEASE_BODY_HTML,
          release_checkbox_label=RELEASE_CHECKBOX_LABEL,
@@ -823,7 +839,7 @@ index 4b5a702..8958e9e 100644
      )
  
  
-@@ -7173,6 +7699,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +7714,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -836,7 +852,7 @@ index 4b5a702..8958e9e 100644
      return _render_chat()
  
  
-@@ -7182,6 +7714,7 @@ def index():
+@@ -7182,6 +7729,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -844,7 +860,7 @@ index 4b5a702..8958e9e 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +7808,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +7823,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -852,7 +868,7 @@ index 4b5a702..8958e9e 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7918,12 +8452,14 @@ def chat():
+@@ -7918,12 +8467,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -867,7 +883,7 @@ index 4b5a702..8958e9e 100644
          )
  
      try:
-@@ -8277,6 +8813,22 @@ def acknowledge_release():
+@@ -8277,6 +8828,22 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -890,7 +906,7 @@ index 4b5a702..8958e9e 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8820,8 +9372,17 @@ def advisor_avatar():
+@@ -8820,8 +9387,17 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -909,7 +925,7 @@ index 4b5a702..8958e9e 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +9400,38 @@ def advisor_avatar():
+@@ -8839,28 +9415,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -966,7 +982,7 @@ index 4b5a702..8958e9e 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9095,9 +9666,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9681,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -996,7 +1012,7 @@ index 4b5a702..8958e9e 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9712,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9727,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -1007,7 +1023,7 @@ index 4b5a702..8958e9e 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9724,13 @@ form.upload {
+@@ -9133,8 +9739,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -1023,7 +1039,7 @@ index 4b5a702..8958e9e 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +9766,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +9781,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -1043,7 +1059,7 @@ index 4b5a702..8958e9e 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +9835,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9850,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1067,7 +1083,7 @@ index 4b5a702..8958e9e 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9950,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9965,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1235,7 +1251,7 @@ index 4b5a702..8958e9e 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10143,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10158,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -1269,7 +1285,7 @@ index 4b5a702..8958e9e 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10179,27 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10194,27 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -1297,7 +1313,7 @@ index 4b5a702..8958e9e 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10209,45 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10224,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1354,7 +1370,7 @@ index 4b5a702..8958e9e 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10256,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10271,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -1365,7 +1381,7 @@ index 4b5a702..8958e9e 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10307,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10322,13 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -1380,7 +1396,7 @@ index 4b5a702..8958e9e 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10322,18 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10337,18 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -1399,7 +1415,7 @@ index 4b5a702..8958e9e 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10363,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10378,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1429,7 +1445,7 @@ index 4b5a702..8958e9e 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +10426,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +10441,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -1460,7 +1476,7 @@ index 4b5a702..8958e9e 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10469,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10484,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1470,7 +1486,7 @@ index 4b5a702..8958e9e 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10935,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10950,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1480,7 +1496,7 @@ index 4b5a702..8958e9e 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +10956,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10971,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1503,7 +1519,7 @@ index 4b5a702..8958e9e 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11089,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11104,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1514,7 +1530,7 @@ index 4b5a702..8958e9e 100644
  
  </div>
  
-@@ -10478,6 +11320,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11335,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -1530,7 +1546,7 @@ index 4b5a702..8958e9e 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11339,50 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11354,59 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1541,13 +1557,22 @@ index 4b5a702..8958e9e 100644
 +      // initials_for() in app.py exactly — keep the two in sync if that
 +      // logic ever changes.
 +      // ---------------------------------------------------------------
++      const NAME_SUFFIXES = new Set([
++        "md", "do", "phd", "rn", "np", "pa", "dds", "dmd", "esq", "jr", "sr",
++        "ii", "iii", "iv", "mba", "mph", "rph", "dvm", "jd", "cpa", "lmft",
++        "lcsw", "psyd", "edd",
++      ]);
 +      function initialsForPreview(name) {
 +        const words = (name || "").split(/\\s+/)
 +          .map(w => w.replace(/[^A-Za-z0-9]/g, ""))
 +          .filter(Boolean);
 +        if (!words.length) return "?";
-+        if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
-+        return (words[0][0] + words[words.length - 1][0]).toUpperCase();
++        const core = words.slice();
++        while (core.length > 1 && NAME_SUFFIXES.has(core[core.length - 1].toLowerCase())) {
++          core.pop();
++        }
++        if (core.length === 1) return core[0].slice(0, 3).toUpperCase();
++        return (core[0][0] + core[core.length - 1][0]).toUpperCase();
 +      }
 +    </script>
 +
@@ -1581,7 +1606,7 @@ index 4b5a702..8958e9e 100644
  </body></html>"""
  
  
-@@ -10528,6 +11423,12 @@ def admin_dashboard():
+@@ -10528,6 +11447,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1594,7 +1619,7 @@ index 4b5a702..8958e9e 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11436,12 @@ def admin_dashboard():
+@@ -10535,7 +11460,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1608,7 +1633,7 @@ index 4b5a702..8958e9e 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,15 +11537,24 @@ def admin_save_advisor():
+@@ -10631,15 +11561,24 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1638,7 +1663,7 @@ index 4b5a702..8958e9e 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +11587,13 @@ def admin_settings():
+@@ -10672,21 +11611,13 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1661,7 +1686,7 @@ index 4b5a702..8958e9e 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12067,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12091,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

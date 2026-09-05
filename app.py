@@ -6069,21 +6069,36 @@ def prepare_avatar(raw: bytes):
 # name and its own photo, and gets its own pair of links — with and without the
 # scheduling button. Stored in Postgres so photos survive redeploys.
 
+# Trailing credentials/suffixes to skip when picking which word is the
+# "last name" for initials — so "Bruce Gewertz, MD" reads as Bruce + Gewertz,
+# not Bruce + MD.
+_NAME_SUFFIXES = {
+    "md", "do", "phd", "rn", "np", "pa", "dds", "dmd", "esq", "jr", "sr",
+    "ii", "iii", "iv", "mba", "mph", "rph", "dvm", "jd", "cpa", "lmft",
+    "lcsw", "psyd", "edd",
+}
+
+
 def initials_for(name: str) -> str:
     """First+last initials for a real name ('Alan Friedman' -> 'AF'), or the
     first few characters of a single-token name/acronym ('J3P' -> 'J3P').
 
     Splits on whitespace, not on every non-letter character — a digit or
     punctuation inside one word (as in "J3P") is part of that word, not a
-    word boundary, so it doesn't get silently dropped.
+    word boundary, so it doesn't get silently dropped. Trailing credentials
+    (MD, PhD, Jr, III, ...) are ignored when picking the "last" word, so a
+    name ending in one doesn't turn into initials for the credential itself.
     """
     words = [re.sub(r"[^A-Za-z0-9]", "", w) for w in (name or "").split()]
     words = [w for w in words if w]
     if not words:
         return "?"
-    if len(words) == 1:
-        return words[0][:3].upper()
-    return (words[0][0] + words[-1][0]).upper()
+    core = list(words)
+    while len(core) > 1 and core[-1].lower() in _NAME_SUFFIXES:
+        core.pop()
+    if len(core) == 1:
+        return core[0][:3].upper()
+    return (core[0][0] + core[-1][0]).upper()
 
 
 def placeholder_avatar_svg(name: str) -> str:
@@ -11346,13 +11361,22 @@ input[type="file"], input[type="text"] {
       // initials_for() in app.py exactly — keep the two in sync if that
       // logic ever changes.
       // ---------------------------------------------------------------
+      const NAME_SUFFIXES = new Set([
+        "md", "do", "phd", "rn", "np", "pa", "dds", "dmd", "esq", "jr", "sr",
+        "ii", "iii", "iv", "mba", "mph", "rph", "dvm", "jd", "cpa", "lmft",
+        "lcsw", "psyd", "edd",
+      ]);
       function initialsForPreview(name) {
         const words = (name || "").split(/\\s+/)
           .map(w => w.replace(/[^A-Za-z0-9]/g, ""))
           .filter(Boolean);
         if (!words.length) return "?";
-        if (words.length === 1) return words[0].slice(0, 3).toUpperCase();
-        return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+        const core = words.slice();
+        while (core.length > 1 && NAME_SUFFIXES.has(core[core.length - 1].toLowerCase())) {
+          core.pop();
+        }
+        if (core.length === 1) return core[0].slice(0, 3).toUpperCase();
+        return (core[0][0] + core[core.length - 1][0]).toUpperCase();
       }
     </script>
 
