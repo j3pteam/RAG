@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..cfaad5e 100644
+index 4b5a702..4059747 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -20,7 +20,7 @@ index 4b5a702..cfaad5e 100644
  }
  _settings_cache = None
  _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
-@@ -462,6 +469,142 @@ def acknowledgements_for(interaction_ids):
+@@ -462,6 +469,152 @@ def acknowledgements_for(interaction_ids):
      return out
  
  
@@ -29,14 +29,24 @@ index 4b5a702..cfaad5e 100644
 +        cur.execute("""
 +            CREATE TABLE IF NOT EXISTS interaction_personality (
 +                interaction_id    BIGINT PRIMARY KEY,
-+                openness          SMALLINT,
-+                conscientiousness SMALLINT,
-+                extraversion      SMALLINT,
-+                agreeableness     SMALLINT,
-+                stability         SMALLINT,
++                openness          NUMERIC(3,1),
++                conscientiousness NUMERIC(3,1),
++                extraversion      NUMERIC(3,1),
++                agreeableness     NUMERIC(3,1),
++                stability         NUMERIC(3,1),
 +                recorded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 +            )
 +        """)
++        # Upgrading from the old 1-5 single-item version: scores are now
++        # TIPI averages of two 1-7 items, which can land on a half-point
++        # (4.5), so the columns need to hold a decimal, not just an integer.
++        for col in ("openness", "conscientiousness", "extraversion",
++                    "agreeableness", "stability"):
++            try:
++                cur.execute(f"ALTER TABLE interaction_personality "
++                            f"ALTER COLUMN {col} TYPE NUMERIC(3,1)")
++            except Exception:
++                pass
 +    conn.commit()
 +
 +
@@ -155,15 +165,15 @@ index 4b5a702..cfaad5e 100644
 +        score = scores.get(trait)
 +        if not score:
 +            continue
-+        reading = readings.get(trait, {}).get(score, "")
-+        lines.append(f"{labels[trait]} ({score}/5) — {reading}")
++        reading = readings.get(trait, {}).get(_tipi_bucket(score), "")
++        lines.append(f"{labels[trait]} ({score}/7) — {reading}")
 +    return lines
 +
 +
  def _geo_ensure_table(conn):
      with conn.cursor() as cur:
          cur.execute("""
-@@ -794,9 +937,14 @@ def mail_transport_configured() -> bool:
+@@ -794,9 +947,14 @@ def mail_transport_configured() -> bool:
  
  
  def login_is_required() -> bool:
@@ -180,7 +190,7 @@ index 4b5a702..cfaad5e 100644
      except Exception:
          return REQUIRE_LOGIN
  
-@@ -1240,7 +1388,7 @@ def _learning_loop():
+@@ -1240,7 +1398,7 @@ def _learning_loop():
      time.sleep(120 + (os.getpid() % 47))
      while True:
          try:
@@ -189,7 +199,7 @@ index 4b5a702..cfaad5e 100644
                  conn = _settings_db_conn()
                  may_run = True
                  if conn:
-@@ -1716,7 +1864,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1716,7 +1874,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        margin: 0.18rem 0 0 0; width: 17px; height: 17px;
        accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
      }
@@ -198,7 +208,7 @@ index 4b5a702..cfaad5e 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,8 +1872,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,8 +1882,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -209,7 +219,7 @@ index 4b5a702..cfaad5e 100644
      .ack-secondary {
        width: 100%; margin-top: 0.55rem;
        padding: 0.7rem 1rem;
-@@ -1737,6 +1885,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1737,6 +1895,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
      .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
  
@@ -238,7 +248,7 @@ index 4b5a702..cfaad5e 100644
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
        font-size: 0.62rem; color: var(--muted);
-@@ -1983,18 +2153,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1983,18 +2163,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {
        /* Smaller, and above the composer — the send button owns the bottom
@@ -259,7 +269,7 @@ index 4b5a702..cfaad5e 100644
      @media (prefers-reduced-motion: reduce) {
        .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
        .presence.speaking .presence-ring,
-@@ -2490,6 +2656,47 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2490,6 +2666,47 @@ INDEX_HTML = r"""<!DOCTYPE html>
      </div>
    </div>
  
@@ -277,24 +287,24 @@ index 4b5a702..cfaad5e 100644
 +        <div id="personality-body" class="ack-text">
 +          <p>
 +            In order to customize my responses to best match your personality,
-+            please answer a few quick questions. This isn't a clinical
-+            assessment — just five short statements to help shape tone, not
-+            content. 1 is &ldquo;strongly disagree,&rdquo; 5 is &ldquo;strongly
-+            agree.&rdquo;
++            please answer a few quick questions — this is the TIPI, a short,
++            published personality measure, not a clinical assessment. For
++            each pair of words, rate how well they describe you, from 1
++            (&ldquo;disagree strongly&rdquo;) to 7 (&ldquo;agree strongly&rdquo;).
 +          </p>
 +        </div>
 +        <button type="button" id="personality-skip" class="ack-secondary">Skip for now</button>
 +        <div id="personality-questions">
 +          {% for q in personality_questions %}
-+          <div class="pq-row" data-trait="{{ q.trait }}">
-+            <p class="pq-statement">{{ q.text }}</p>
++          <div class="pq-row" data-item-id="{{ q.id }}">
++            <p class="pq-statement">I see myself as: {{ q.text }}</p>
 +            <div class="pq-scale" role="radiogroup" aria-label="{{ q.text }}">
-+              {% for v in range(1, 6) %}
++              {% for v in range(1, 8) %}
 +              <button type="button" class="pq-opt" data-value="{{ v }}"
 +                      aria-label="{{ v }}">{{ v }}</button>
 +              {% endfor %}
 +            </div>
-+            <div class="pq-labels"><span>Disagree</span><span>Agree</span></div>
++            <div class="pq-labels"><span>Disagree strongly</span><span>Agree strongly</span></div>
 +          </div>
 +          {% endfor %}
 +        </div>
@@ -307,7 +317,7 @@ index 4b5a702..cfaad5e 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2622,9 +2829,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +2839,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -319,7 +329,7 @@ index 4b5a702..cfaad5e 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +2912,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +2922,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -384,13 +394,13 @@ index 4b5a702..cfaad5e 100644
 +        const rows = Array.from(personalityOverlay.querySelectorAll(".pq-row"));
 +        const answers = {};
 +        rows.forEach(row => {
-+          const trait = row.dataset.trait;
++          const itemId = row.dataset.itemId;
 +          const opts = Array.from(row.querySelectorAll(".pq-opt"));
 +          opts.forEach(opt => {
 +            opt.addEventListener("click", () => {
 +              opts.forEach(o => o.classList.remove("selected"));
 +              opt.classList.add("selected");
-+              answers[trait] = opt.dataset.value;
++              answers[itemId] = opt.dataset.value;
 +              personalityContinueBtn.disabled = Object.keys(answers).length < rows.length;
 +            });
 +          });
@@ -426,17 +436,17 @@ index 4b5a702..cfaad5e 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3011,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3021,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -456,7 +466,7 @@ index 4b5a702..cfaad5e 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3035,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3045,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -476,7 +486,7 @@ index 4b5a702..cfaad5e 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -3872,7 +4152,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4162,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -485,7 +495,7 @@ index 4b5a702..cfaad5e 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -5823,7 +6103,7 @@ def _did_request(text: str):
+@@ -5823,7 +6113,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -494,7 +504,7 @@ index 4b5a702..cfaad5e 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6210,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6220,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -536,7 +546,7 @@ index 4b5a702..cfaad5e 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6251,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6261,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -545,7 +555,7 @@ index 4b5a702..cfaad5e 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6282,23 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6292,23 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -569,7 +579,7 @@ index 4b5a702..cfaad5e 100644
      conn.commit()
  
  
-@@ -5993,8 +6313,8 @@ def advisors_with_detail():
+@@ -5993,8 +6323,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -580,7 +590,7 @@ index 4b5a702..cfaad5e 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6329,23 @@ def list_advisors():
+@@ -6009,13 +6339,23 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -607,7 +617,7 @@ index 4b5a702..cfaad5e 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6362,18 @@ def get_advisor(slug: str):
+@@ -6032,11 +6372,18 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -629,7 +639,7 @@ index 4b5a702..cfaad5e 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6065,7 +6402,15 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6412,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -646,7 +656,7 @@ index 4b5a702..cfaad5e 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6437,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6447,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -667,7 +677,7 @@ index 4b5a702..cfaad5e 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +6607,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +6617,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -676,80 +686,149 @@ index 4b5a702..cfaad5e 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6296,6 +6655,266 @@ def participant_materials_block(budget=24000) -> str:
-     )
+@@ -6297,115 +6666,429 @@ def participant_materials_block(budget=24000) -> str:
  
  
-+# ---------------------------------------------------------------------------
+ # ---------------------------------------------------------------------------
+-# Participant profile
 +# Personality snapshot
-+# ---------------------------------------------------------------------------
-+# A short, optional, skippable five-question self-report — one item per Big
-+# Five trait, worded in the spirit of the public-domain IPIP item pool — that
-+# a participant can answer once per session so replies lean toward their
-+# preferred communication style. This is a light personalization touch, not
-+# a validated or clinical assessment, and the scores are never surfaced back
-+# to the participant as a label, a type, or a number.
+ # ---------------------------------------------------------------------------
+-# A deliberately thin profile: first name, role, specialty. No institution, no
+-# surname, no email beyond what sign-in already holds, nothing that would
+-# identify the person or their organisation. Enough for the advisor to stop
+-# being generic; not enough to be a personnel record.
++# The TIPI (Ten-Item Personality Inventory) — Gosling, Rentfrow & Swann,
++# 2003 — a validated, published short measure of the Big Five, released for
++# free use (research or applied) with no permission required. Each of the
++# 10 items is a pair of trait-adjectives rated 1 ("disagree strongly") to 7
++# ("agree strongly"); each trait is the average of two items, one of which
++# is reverse-scored per TIPI's standard key. Optional and skippable — this
++# is a light personalization touch, not a clinical assessment, and results
++# are never surfaced back to the participant as a label, a type, or a score.
 +
-+PERSONALITY_QUESTIONS = [
-+    {"trait": "openness",
-+     "text": "I enjoy exploring new ideas and unfamiliar approaches."},
-+    {"trait": "conscientiousness",
-+     "text": "I like to plan ahead and follow through on the details."},
-+    {"trait": "extraversion",
-+     "text": "I feel energized by talking things through out loud with others."},
-+    {"trait": "agreeableness",
-+     "text": "I tend to consider others' feelings before pushing my own view."},
-+    {"trait": "stability",
-+     "text": "I stay steady and calm even when things get stressful."},
++TIPI_ITEMS = [
++    {"id": 1, "text": "Extraverted, enthusiastic", "trait": "extraversion", "reverse": False},
++    {"id": 2, "text": "Critical, quarrelsome", "trait": "agreeableness", "reverse": True},
++    {"id": 3, "text": "Dependable, self-disciplined", "trait": "conscientiousness", "reverse": False},
++    {"id": 4, "text": "Anxious, easily upset", "trait": "stability", "reverse": True},
++    {"id": 5, "text": "Open to new experiences, complex", "trait": "openness", "reverse": False},
++    {"id": 6, "text": "Reserved, quiet", "trait": "extraversion", "reverse": True},
++    {"id": 7, "text": "Sympathetic, warm", "trait": "agreeableness", "reverse": False},
++    {"id": 8, "text": "Disorganized, careless", "trait": "conscientiousness", "reverse": True},
++    {"id": 9, "text": "Calm, emotionally stable", "trait": "stability", "reverse": False},
++    {"id": 10, "text": "Conventional, uncreative", "trait": "openness", "reverse": True},
 +]
-+_PERSONALITY_TRAITS = [q["trait"] for q in PERSONALITY_QUESTIONS]
++_PERSONALITY_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]
+ 
+-PROFILE_FIELDS = ("first_name", "role", "specialty")
+ 
++def score_tipi(answers: dict) -> dict:
++    """answers: {item_id (1-10): raw rating 1-7}. Returns {trait: average}
++    on TIPI's native 1-7 scale, applying the standard reverse-scoring
++    (score' = 8 - score) to the negatively-keyed item in each trait's pair.
++    A trait is only included if at least one of its two items was answered.
++    """
++    by_trait = {}
++    for item in TIPI_ITEMS:
++        raw = answers.get(item["id"])
++        if raw is None:
++            raw = answers.get(str(item["id"]))
++        if raw is None:
++            continue
++        try:
++            raw = int(raw)
++        except (TypeError, ValueError):
++            continue
++        if not (1 <= raw <= 7):
++            continue
++        value = (8 - raw) if item["reverse"] else raw
++        by_trait.setdefault(item["trait"], []).append(value)
++    return {trait: round(sum(vals) / len(vals), 1)
++            for trait, vals in by_trait.items() if vals}
+ 
+-def _profile_ensure_table(conn):
++
++def _tipi_bucket(score) -> int:
++    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
++    interpretation text below is written for, so a real, continuous TIPI
++    score (which can land on a half-point, like 4.5) still gets a clear,
++    discrete reading rather than needing 13 separate copy variants."""
++    try:
++        score = float(score)
++    except (TypeError, ValueError):
++        return 3
++    bucket = round(1 + (score - 1) * 4 / 6)
++    return max(1, min(5, bucket))
 +
 +
 +def _personality_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
+     with conn.cursor() as cur:
+         cur.execute("""
+-            CREATE TABLE IF NOT EXISTS participant_profile (
+-                token       TEXT PRIMARY KEY,
+-                first_name  TEXT,
+-                role        TEXT,
+-                specialty   TEXT,
+-                asked       TEXT,
+-                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 +            CREATE TABLE IF NOT EXISTS participant_personality (
 +                token             TEXT PRIMARY KEY,
-+                openness          SMALLINT,
-+                conscientiousness SMALLINT,
-+                extraversion      SMALLINT,
-+                agreeableness     SMALLINT,
-+                stability         SMALLINT,
++                openness          NUMERIC(3,1),
++                conscientiousness NUMERIC(3,1),
++                extraversion      NUMERIC(3,1),
++                agreeableness     NUMERIC(3,1),
++                stability         NUMERIC(3,1),
 +                updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+    conn.commit()
-+
-+
+             )
+         """)
++        # Upgrading from the old 1-5 single-item version to TIPI's averaged,
++        # half-point-capable 1-7 scale.
++        for col in ("openness", "conscientiousness", "extraversion",
++                    "agreeableness", "stability"):
++            try:
++                cur.execute(f"ALTER TABLE participant_personality "
++                            f"ALTER COLUMN {col} TYPE NUMERIC(3,1)")
++            except Exception:
++                pass
+     conn.commit()
+ 
+ 
+-def load_profile() -> dict:
 +def save_personality_scores(answers: dict) -> bool:
-+    """answers: {trait: 1-5} for some or all of the five traits above.
-+    Falls back to the session (this browser only) if Postgres is unavailable.
++    """answers: {trait: 1-7} — TIPI trait averages (already computed by
++    score_tipi()), for some or all of the five traits above. Falls back to
++    the session (this browser only) if Postgres is unavailable.
 +    """
 +    clean = {}
 +    for trait in _PERSONALITY_TRAITS:
 +        if trait not in answers:
 +            continue
 +        try:
-+            v = int(answers[trait])
++            v = round(float(answers[trait]), 1)
 +        except (TypeError, ValueError):
 +            continue
-+        if 1 <= v <= 5:
++        if 1 <= v <= 7:
 +            clean[trait] = v
 +    if not clean:
 +        return False
 +
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return dict(session.get("profile_fallback") or {})
 +        session["personality"] = clean
 +        session.permanent = True
 +        return True
-+    try:
+     try:
+-        _profile_ensure_table(conn)
 +        _personality_ensure_table(conn)
 +        token = participant_token()
 +        cols = ", ".join(clean.keys())
 +        placeholders = ", ".join(["%s"] * len(clean))
 +        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("""SELECT first_name, role, specialty, asked
+-                           FROM participant_profile WHERE token = %s""",
+-                        (participant_token(),))
 +            cur.execute(f"""
 +                INSERT INTO participant_personality (token, {cols}, updated_at)
 +                VALUES (%s, {placeholders}, NOW())
@@ -776,23 +855,39 @@ index 4b5a702..cfaad5e 100644
 +                       agreeableness, stability
 +                FROM participant_personality WHERE token = %s
 +            """, (participant_token(),))
-+            row = cur.fetchone()
+             row = cur.fetchone()
+-        if not row:
+-            return {}
+-        return {"first_name": row[0], "role": row[1], "specialty": row[2],
+-                "asked": (row[3] or "")}
 +            if not row:
 +                return session.get("personality") or {}
 +            return {k: v for k, v in zip(_PERSONALITY_TRAITS, row) if v is not None}
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[profile] read failed: {e}")
+-        return {}
 +        app.logger.error(f"[personality] read failed: {e}")
 +        return session.get("personality") or {}
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+ 
+ 
+-def save_profile(**fields) -> bool:
+-    """Write only the fields given; leave the rest alone."""
+-    fields = {k: v for k, v in fields.items()
+-              if k in PROFILE_FIELDS + ("asked",) and v}
+-    if not fields:
+-        return True
 +def personality_style_block() -> str:
 +    """Turns a few self-report scores into brief, private tone guidance.
 +    Never surfaced to the participant as a score, a label, or a type."""
-+    scores = get_personality_scores()
-+    if not scores:
++    raw_scores = get_personality_scores()
++    if not raw_scores:
 +        return ""
++    # Scores come in on TIPI's native 1-7 scale; bucket them onto 1-5 so the
++    # high/low thresholds below (written before the TIPI switch) still apply
++    # without needing to be rewritten.
++    scores = {trait: _tipi_bucket(v) for trait, v in raw_scores.items()}
 +    notes = []
 +    if scores.get("openness", 3) >= 4:
 +        notes.append("leans curious and exploratory — open, unconventional framing lands well")
@@ -856,35 +951,59 @@ index 4b5a702..cfaad5e 100644
 +
 +def add_biometric_file(participant_email: str, title: str, notes: str,
 +                        mime: str, content: bytes) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        # No database — keep it for this session at least
+-        cur = dict(session.get("profile_fallback") or {})
+-        cur.update(fields)
+-        session["profile_fallback"] = cur
+-        return True
 +        return False
-+    try:
+     try:
+-        _profile_ensure_table(conn)
+-        cols = ", ".join(fields.keys())
+-        marks = ", ".join(["%s"] * len(fields))
+-        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
 +        _biometric_files_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute(f"""
+-                INSERT INTO participant_profile (token, {cols})
+-                VALUES (%s, {marks})
+-                ON CONFLICT (token) DO UPDATE
+-                SET {updates}, updated_at = NOW()
+-            """, (participant_token(), *fields.values()))
 +            cur.execute("""
 +                INSERT INTO participant_biometric_files
 +                    (participant_email, title, notes, mime, content, size_bytes)
 +                VALUES (%s, %s, %s, %s, %s, %s)
 +            """, (participant_email[:200], title[:200], (notes or "")[:2000],
 +                  mime, content, len(content)))
-+        conn.commit()
-+        return True
-+    except Exception as e:
+         conn.commit()
+         return True
+     except Exception as e:
+-        app.logger.error(f"[profile] save failed: {e}")
 +        app.logger.error(f"[biometric] upload failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
+         return False
+     finally:
+         conn.close()
+ 
+ 
+-def forget_profile() -> bool:
+-    session.pop("profile_fallback", None)
 +def list_biometric_files() -> list:
 +    """Every uploaded file, grouped by participant (then newest first)."""
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return True
 +        return []
-+    try:
+     try:
+-        _profile_ensure_table(conn)
 +        _biometric_files_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("DELETE FROM participant_profile WHERE token = %s",
+-                        (participant_token(),))
+-        conn.commit()
+-        return True
 +            cur.execute("""
 +                SELECT id, participant_email, title, notes, size_bytes, uploaded_at
 +                FROM participant_biometric_files
@@ -894,13 +1013,24 @@ index 4b5a702..cfaad5e 100644
 +        return [{"id": r[0], "participant_email": r[1], "title": r[2],
 +                 "notes": r[3], "size_bytes": r[4], "uploaded_at": r[5]}
 +                for r in rows]
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[profile] forget failed: {e}")
+-        return False
 +        app.logger.error(f"[biometric] list failed: {e}")
 +        return []
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+ 
+ 
+-# Leadership roles worth recognising, longest first so "associate program
+-# director" wins over "program director".
+-_ROLE_PATTERNS = [
+-    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
+-    (r"\b(vice chair|associate chair)\b", "vice chair"),
+-    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
+-    (r"\b(section chief|section head)\b", "section chief"),
+-    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
+-    (r"\b(associate program director)\b", "associate program director"),
 +def get_biometric_file(file_id: int):
 +    """(content, mime, title) for download, or None."""
 +    conn = _settings_db_conn()
@@ -940,10 +1070,120 @@ index 4b5a702..cfaad5e 100644
 +        conn.close()
 +
 +
- # ---------------------------------------------------------------------------
- # Participant profile
- # ---------------------------------------------------------------------------
-@@ -6789,12 +7408,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
++# ---------------------------------------------------------------------------
++# Participant profile
++# ---------------------------------------------------------------------------
++# A deliberately thin profile: first name, role, specialty. No institution, no
++# surname, no email beyond what sign-in already holds, nothing that would
++# identify the person or their organisation. Enough for the advisor to stop
++# being generic; not enough to be a personnel record.
++
++PROFILE_FIELDS = ("first_name", "role", "specialty")
++
++
++def _profile_ensure_table(conn):
++    with conn.cursor() as cur:
++        cur.execute("""
++            CREATE TABLE IF NOT EXISTS participant_profile (
++                token       TEXT PRIMARY KEY,
++                first_name  TEXT,
++                role        TEXT,
++                specialty   TEXT,
++                asked       TEXT,
++                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
++            )
++        """)
++    conn.commit()
++
++
++def load_profile() -> dict:
++    conn = _settings_db_conn()
++    if not conn:
++        return dict(session.get("profile_fallback") or {})
++    try:
++        _profile_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""SELECT first_name, role, specialty, asked
++                           FROM participant_profile WHERE token = %s""",
++                        (participant_token(),))
++            row = cur.fetchone()
++        if not row:
++            return {}
++        return {"first_name": row[0], "role": row[1], "specialty": row[2],
++                "asked": (row[3] or "")}
++    except Exception as e:
++        app.logger.error(f"[profile] read failed: {e}")
++        return {}
++    finally:
++        conn.close()
++
++
++def save_profile(**fields) -> bool:
++    """Write only the fields given; leave the rest alone."""
++    fields = {k: v for k, v in fields.items()
++              if k in PROFILE_FIELDS + ("asked",) and v}
++    if not fields:
++        return True
++    conn = _settings_db_conn()
++    if not conn:
++        # No database — keep it for this session at least
++        cur = dict(session.get("profile_fallback") or {})
++        cur.update(fields)
++        session["profile_fallback"] = cur
++        return True
++    try:
++        _profile_ensure_table(conn)
++        cols = ", ".join(fields.keys())
++        marks = ", ".join(["%s"] * len(fields))
++        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
++        with conn.cursor() as cur:
++            cur.execute(f"""
++                INSERT INTO participant_profile (token, {cols})
++                VALUES (%s, {marks})
++                ON CONFLICT (token) DO UPDATE
++                SET {updates}, updated_at = NOW()
++            """, (participant_token(), *fields.values()))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[profile] save failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def forget_profile() -> bool:
++    session.pop("profile_fallback", None)
++    conn = _settings_db_conn()
++    if not conn:
++        return True
++    try:
++        _profile_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("DELETE FROM participant_profile WHERE token = %s",
++                        (participant_token(),))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[profile] forget failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++# Leadership roles worth recognising, longest first so "associate program
++# director" wins over "program director".
++_ROLE_PATTERNS = [
++    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
++    (r"\b(vice chair|associate chair)\b", "vice chair"),
++    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
++    (r"\b(section chief|section head)\b", "section chief"),
++    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
++    (r"\b(associate program director)\b", "associate program director"),
+     (r"\b(program director)\b", "program director"),
+     (r"\b(fellowship director)\b", "fellowship director"),
+     (r"\b(residency director)\b", "residency director"),
+@@ -6789,12 +7472,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -965,12 +1205,10 @@ index 4b5a702..cfaad5e 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7477,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7541,113 @@ def document_owners() -> dict:
          conn.close()
  
  
--def filter_chunks_for_advisor(results, advisor_slug):
--    """Shared documents plus this advisor's own. Others are dropped.
 +def _doc_advisors_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -986,16 +1224,12 @@ index 4b5a702..cfaad5e 100644
 +
 +def set_document_advisors(title: str, advisor_slugs) -> bool:
 +    """Assign a document to zero or more advisors.
- 
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
++
 +    An empty list clears any restriction — the document returns to the
 +    shared J3P base, available to every advisor. A non-empty list restricts
 +    retrieval to just those advisors (one, several, or — by checking every
 +    advisor — effectively all of them).
-     """
--    owners = document_owners()
--    if not owners:
++    """
 +    if not title:
 +        return False
 +    slugs = sorted({(s or "").strip() for s in (advisor_slugs or []) if (s or "").strip()})
@@ -1067,14 +1301,19 @@ index 4b5a702..cfaad5e 100644
 +    return out
 +
 +
-+def filter_chunks_for_advisor(results, advisor_slug):
+ def filter_chunks_for_advisor(results, advisor_slug):
+-    """Shared documents plus this advisor's own. Others are dropped.
 +    """Shared documents plus every advisor this doc is assigned to. Others
 +    are dropped.
-+
+ 
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
 +    A document with no assignments belongs to the shared J3P base and is
 +    always available; an assigned one is reachable only to the advisor(s)
 +    it's been given to.
-+    """
+     """
+-    owners = document_owners()
+-    if not owners:
 +    advisor_map = document_advisor_map()
 +    if not advisor_map:
          return results
@@ -1087,7 +1326,7 @@ index 4b5a702..cfaad5e 100644
              keep.append(r)
      return keep
  
-@@ -7107,14 +7826,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +7890,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -1126,7 +1365,7 @@ index 4b5a702..cfaad5e 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +7865,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +7929,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -1138,7 +1377,7 @@ index 4b5a702..cfaad5e 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +7882,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +7946,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -1147,7 +1386,7 @@ index 4b5a702..cfaad5e 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7154,17 +7891,26 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,17 +7955,26 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -1169,14 +1408,14 @@ index 4b5a702..cfaad5e 100644
          release_heading=RELEASE_HEADING,
          release_body=RELEASE_BODY_HTML,
          release_checkbox_label=RELEASE_CHECKBOX_LABEL,
-+        personality_questions=PERSONALITY_QUESTIONS,
++        personality_questions=TIPI_ITEMS,
 +        personality_enabled=_effective("personality_override",
 +                                        "personality_assessment_enabled", True),
 +        avatar_version=int(datetime.now().timestamp()),
      )
  
  
-@@ -7173,6 +7919,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +7983,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -1189,7 +1428,7 @@ index 4b5a702..cfaad5e 100644
      return _render_chat()
  
  
-@@ -7182,6 +7934,7 @@ def index():
+@@ -7182,6 +7998,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -1197,7 +1436,7 @@ index 4b5a702..cfaad5e 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8028,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8092,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -1205,7 +1444,7 @@ index 4b5a702..cfaad5e 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7918,12 +8672,14 @@ def chat():
+@@ -7918,12 +8736,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -1220,7 +1459,7 @@ index 4b5a702..cfaad5e 100644
          )
  
      try:
-@@ -8213,6 +8969,7 @@ def chat():
+@@ -8213,6 +9033,7 @@ def chat():
          # Resolve city/region/country in the background — never blocks the reply
          record_location_async(interaction_id, client_ip())
          record_acknowledgement(interaction_id)
@@ -1228,21 +1467,27 @@ index 4b5a702..cfaad5e 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9034,22 @@ def acknowledge_release():
+@@ -8277,6 +9098,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
 +@app.route("/personality", methods=["POST"])
 +@paywall.paywall_required
 +def save_personality():
-+    """Records the optional five-question style self-report for this
-+    participant. Skipping it is a normal, silent outcome — this endpoint is
-+    only hit when someone actually answers."""
++    """Records the optional TIPI self-report for this participant. Skipping
++    it is a normal, silent outcome — this endpoint is only hit when someone
++    actually answers. The client sends raw per-item ratings (1-7, keyed by
++    item id); scoring — including reverse-keyed items — happens here."""
 +    data = request.get_json(silent=True) or {}
-+    answers = data.get("answers") or {}
-+    if not isinstance(answers, dict):
++    raw_answers = data.get("answers") or {}
++    if not isinstance(raw_answers, dict):
 +        return jsonify({"ok": False}), 400
-+    if save_personality_scores(answers):
++    try:
++        raw_answers = {int(k): v for k, v in raw_answers.items()}
++    except (TypeError, ValueError):
++        return jsonify({"ok": False}), 400
++    trait_scores = score_tipi(raw_answers)
++    if save_personality_scores(trait_scores):
 +        app.logger.info("[personality] self-report saved")
 +        return jsonify({"ok": True})
 +    return jsonify({"ok": False}), 400
@@ -1251,7 +1496,7 @@ index 4b5a702..cfaad5e 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8614,7 +9387,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +9457,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -1262,7 +1507,7 @@ index 4b5a702..cfaad5e 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +9595,23 @@ def advisor_avatar():
+@@ -8820,8 +9665,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -1287,7 +1532,7 @@ index 4b5a702..cfaad5e 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +9629,38 @@ def advisor_avatar():
+@@ -8839,28 +9699,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -1344,7 +1589,7 @@ index 4b5a702..cfaad5e 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9095,9 +9895,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +9965,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -1374,7 +1619,7 @@ index 4b5a702..cfaad5e 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9941,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10011,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -1385,7 +1630,7 @@ index 4b5a702..cfaad5e 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9953,13 @@ form.upload {
+@@ -9133,8 +10023,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -1401,7 +1646,7 @@ index 4b5a702..cfaad5e 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +9995,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10065,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -1421,7 +1666,7 @@ index 4b5a702..cfaad5e 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10064,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10134,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1445,7 +1690,7 @@ index 4b5a702..cfaad5e 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10179,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10249,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1613,7 +1858,7 @@ index 4b5a702..cfaad5e 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10372,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10442,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -1666,7 +1911,7 @@ index 4b5a702..cfaad5e 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10427,27 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10497,27 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -1694,7 +1939,7 @@ index 4b5a702..cfaad5e 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10457,45 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10527,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1751,7 +1996,7 @@ index 4b5a702..cfaad5e 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10504,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10574,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -1762,7 +2007,7 @@ index 4b5a702..cfaad5e 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10555,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10625,13 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -1777,7 +2022,7 @@ index 4b5a702..cfaad5e 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10570,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10640,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -1822,7 +2067,7 @@ index 4b5a702..cfaad5e 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10637,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10707,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1852,7 +2097,7 @@ index 4b5a702..cfaad5e 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +10700,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +10770,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -1883,7 +2128,7 @@ index 4b5a702..cfaad5e 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10743,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10813,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1893,7 +2138,7 @@ index 4b5a702..cfaad5e 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9897,6 +11022,20 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11092,20 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -1914,7 +2159,7 @@ index 4b5a702..cfaad5e 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11223,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11293,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1924,7 +2169,7 @@ index 4b5a702..cfaad5e 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11244,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11314,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1947,7 +2192,7 @@ index 4b5a702..cfaad5e 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11377,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11447,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1958,7 +2203,7 @@ index 4b5a702..cfaad5e 100644
  
  </div>
  
-@@ -10478,6 +11608,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11678,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -1974,7 +2219,7 @@ index 4b5a702..cfaad5e 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11627,59 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11697,59 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2034,7 +2279,7 @@ index 4b5a702..cfaad5e 100644
  </body></html>"""
  
  
-@@ -10528,6 +11720,12 @@ def admin_dashboard():
+@@ -10528,6 +11790,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -2047,7 +2292,7 @@ index 4b5a702..cfaad5e 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11733,12 @@ def admin_dashboard():
+@@ -10535,7 +11803,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2061,7 +2306,7 @@ index 4b5a702..cfaad5e 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,6 +11748,10 @@ def admin_dashboard():
+@@ -10545,6 +11818,10 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2072,7 +2317,7 @@ index 4b5a702..cfaad5e 100644
          base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
          stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
          log_filter=log_filter,
-@@ -10631,15 +11838,34 @@ def admin_save_advisor():
+@@ -10631,15 +11908,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2112,7 +2357,7 @@ index 4b5a702..cfaad5e 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +11898,14 @@ def admin_settings():
+@@ -10672,21 +11968,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2136,7 +2381,7 @@ index 4b5a702..cfaad5e 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12379,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12449,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

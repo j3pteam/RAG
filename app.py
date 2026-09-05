@@ -474,14 +474,24 @@ def _interaction_personality_ensure_table(conn):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS interaction_personality (
                 interaction_id    BIGINT PRIMARY KEY,
-                openness          SMALLINT,
-                conscientiousness SMALLINT,
-                extraversion      SMALLINT,
-                agreeableness     SMALLINT,
-                stability         SMALLINT,
+                openness          NUMERIC(3,1),
+                conscientiousness NUMERIC(3,1),
+                extraversion      NUMERIC(3,1),
+                agreeableness     NUMERIC(3,1),
+                stability         NUMERIC(3,1),
                 recorded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Upgrading from the old 1-5 single-item version: scores are now
+        # TIPI averages of two 1-7 items, which can land on a half-point
+        # (4.5), so the columns need to hold a decimal, not just an integer.
+        for col in ("openness", "conscientiousness", "extraversion",
+                    "agreeableness", "stability"):
+            try:
+                cur.execute(f"ALTER TABLE interaction_personality "
+                            f"ALTER COLUMN {col} TYPE NUMERIC(3,1)")
+            except Exception:
+                pass
     conn.commit()
 
 
@@ -600,8 +610,8 @@ def personality_interpretation_lines(scores: dict) -> list:
         score = scores.get(trait)
         if not score:
             continue
-        reading = readings.get(trait, {}).get(score, "")
-        lines.append(f"{labels[trait]} ({score}/5) — {reading}")
+        reading = readings.get(trait, {}).get(_tipi_bucket(score), "")
+        lines.append(f"{labels[trait]} ({score}/7) — {reading}")
     return lines
 
 
@@ -2670,24 +2680,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <div id="personality-body" class="ack-text">
           <p>
             In order to customize my responses to best match your personality,
-            please answer a few quick questions. This isn't a clinical
-            assessment — just five short statements to help shape tone, not
-            content. 1 is &ldquo;strongly disagree,&rdquo; 5 is &ldquo;strongly
-            agree.&rdquo;
+            please answer a few quick questions — this is the TIPI, a short,
+            published personality measure, not a clinical assessment. For
+            each pair of words, rate how well they describe you, from 1
+            (&ldquo;disagree strongly&rdquo;) to 7 (&ldquo;agree strongly&rdquo;).
           </p>
         </div>
         <button type="button" id="personality-skip" class="ack-secondary">Skip for now</button>
         <div id="personality-questions">
           {% for q in personality_questions %}
-          <div class="pq-row" data-trait="{{ q.trait }}">
-            <p class="pq-statement">{{ q.text }}</p>
+          <div class="pq-row" data-item-id="{{ q.id }}">
+            <p class="pq-statement">I see myself as: {{ q.text }}</p>
             <div class="pq-scale" role="radiogroup" aria-label="{{ q.text }}">
-              {% for v in range(1, 6) %}
+              {% for v in range(1, 8) %}
               <button type="button" class="pq-opt" data-value="{{ v }}"
                       aria-label="{{ v }}">{{ v }}</button>
               {% endfor %}
             </div>
-            <div class="pq-labels"><span>Disagree</span><span>Agree</span></div>
+            <div class="pq-labels"><span>Disagree strongly</span><span>Agree strongly</span></div>
           </div>
           {% endfor %}
         </div>
@@ -2963,13 +2973,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const rows = Array.from(personalityOverlay.querySelectorAll(".pq-row"));
         const answers = {};
         rows.forEach(row => {
-          const trait = row.dataset.trait;
+          const itemId = row.dataset.itemId;
           const opts = Array.from(row.querySelectorAll(".pq-opt"));
           opts.forEach(opt => {
             opt.addEventListener("click", () => {
               opts.forEach(o => o.classList.remove("selected"));
               opt.classList.add("selected");
-              answers[trait] = opt.dataset.value;
+              answers[itemId] = opt.dataset.value;
               personalityContinueBtn.disabled = Object.keys(answers).length < rows.length;
             });
           });
@@ -6658,26 +6668,66 @@ def participant_materials_block(budget=24000) -> str:
 # ---------------------------------------------------------------------------
 # Personality snapshot
 # ---------------------------------------------------------------------------
-# A short, optional, skippable five-question self-report — one item per Big
-# Five trait, worded in the spirit of the public-domain IPIP item pool — that
-# a participant can answer once per session so replies lean toward their
-# preferred communication style. This is a light personalization touch, not
-# a validated or clinical assessment, and the scores are never surfaced back
-# to the participant as a label, a type, or a number.
+# The TIPI (Ten-Item Personality Inventory) — Gosling, Rentfrow & Swann,
+# 2003 — a validated, published short measure of the Big Five, released for
+# free use (research or applied) with no permission required. Each of the
+# 10 items is a pair of trait-adjectives rated 1 ("disagree strongly") to 7
+# ("agree strongly"); each trait is the average of two items, one of which
+# is reverse-scored per TIPI's standard key. Optional and skippable — this
+# is a light personalization touch, not a clinical assessment, and results
+# are never surfaced back to the participant as a label, a type, or a score.
 
-PERSONALITY_QUESTIONS = [
-    {"trait": "openness",
-     "text": "I enjoy exploring new ideas and unfamiliar approaches."},
-    {"trait": "conscientiousness",
-     "text": "I like to plan ahead and follow through on the details."},
-    {"trait": "extraversion",
-     "text": "I feel energized by talking things through out loud with others."},
-    {"trait": "agreeableness",
-     "text": "I tend to consider others' feelings before pushing my own view."},
-    {"trait": "stability",
-     "text": "I stay steady and calm even when things get stressful."},
+TIPI_ITEMS = [
+    {"id": 1, "text": "Extraverted, enthusiastic", "trait": "extraversion", "reverse": False},
+    {"id": 2, "text": "Critical, quarrelsome", "trait": "agreeableness", "reverse": True},
+    {"id": 3, "text": "Dependable, self-disciplined", "trait": "conscientiousness", "reverse": False},
+    {"id": 4, "text": "Anxious, easily upset", "trait": "stability", "reverse": True},
+    {"id": 5, "text": "Open to new experiences, complex", "trait": "openness", "reverse": False},
+    {"id": 6, "text": "Reserved, quiet", "trait": "extraversion", "reverse": True},
+    {"id": 7, "text": "Sympathetic, warm", "trait": "agreeableness", "reverse": False},
+    {"id": 8, "text": "Disorganized, careless", "trait": "conscientiousness", "reverse": True},
+    {"id": 9, "text": "Calm, emotionally stable", "trait": "stability", "reverse": False},
+    {"id": 10, "text": "Conventional, uncreative", "trait": "openness", "reverse": True},
 ]
-_PERSONALITY_TRAITS = [q["trait"] for q in PERSONALITY_QUESTIONS]
+_PERSONALITY_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]
+
+
+def score_tipi(answers: dict) -> dict:
+    """answers: {item_id (1-10): raw rating 1-7}. Returns {trait: average}
+    on TIPI's native 1-7 scale, applying the standard reverse-scoring
+    (score' = 8 - score) to the negatively-keyed item in each trait's pair.
+    A trait is only included if at least one of its two items was answered.
+    """
+    by_trait = {}
+    for item in TIPI_ITEMS:
+        raw = answers.get(item["id"])
+        if raw is None:
+            raw = answers.get(str(item["id"]))
+        if raw is None:
+            continue
+        try:
+            raw = int(raw)
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= raw <= 7):
+            continue
+        value = (8 - raw) if item["reverse"] else raw
+        by_trait.setdefault(item["trait"], []).append(value)
+    return {trait: round(sum(vals) / len(vals), 1)
+            for trait, vals in by_trait.items() if vals}
+
+
+def _tipi_bucket(score) -> int:
+    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
+    interpretation text below is written for, so a real, continuous TIPI
+    score (which can land on a half-point, like 4.5) still gets a clear,
+    discrete reading rather than needing 13 separate copy variants."""
+    try:
+        score = float(score)
+    except (TypeError, ValueError):
+        return 3
+    bucket = round(1 + (score - 1) * 4 / 6)
+    return max(1, min(5, bucket))
 
 
 def _personality_ensure_table(conn):
@@ -6685,30 +6735,40 @@ def _personality_ensure_table(conn):
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_personality (
                 token             TEXT PRIMARY KEY,
-                openness          SMALLINT,
-                conscientiousness SMALLINT,
-                extraversion      SMALLINT,
-                agreeableness     SMALLINT,
-                stability         SMALLINT,
+                openness          NUMERIC(3,1),
+                conscientiousness NUMERIC(3,1),
+                extraversion      NUMERIC(3,1),
+                agreeableness     NUMERIC(3,1),
+                stability         NUMERIC(3,1),
                 updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Upgrading from the old 1-5 single-item version to TIPI's averaged,
+        # half-point-capable 1-7 scale.
+        for col in ("openness", "conscientiousness", "extraversion",
+                    "agreeableness", "stability"):
+            try:
+                cur.execute(f"ALTER TABLE participant_personality "
+                            f"ALTER COLUMN {col} TYPE NUMERIC(3,1)")
+            except Exception:
+                pass
     conn.commit()
 
 
 def save_personality_scores(answers: dict) -> bool:
-    """answers: {trait: 1-5} for some or all of the five traits above.
-    Falls back to the session (this browser only) if Postgres is unavailable.
+    """answers: {trait: 1-7} — TIPI trait averages (already computed by
+    score_tipi()), for some or all of the five traits above. Falls back to
+    the session (this browser only) if Postgres is unavailable.
     """
     clean = {}
     for trait in _PERSONALITY_TRAITS:
         if trait not in answers:
             continue
         try:
-            v = int(answers[trait])
+            v = round(float(answers[trait]), 1)
         except (TypeError, ValueError):
             continue
-        if 1 <= v <= 5:
+        if 1 <= v <= 7:
             clean[trait] = v
     if not clean:
         return False
@@ -6765,9 +6825,13 @@ def get_personality_scores() -> dict:
 def personality_style_block() -> str:
     """Turns a few self-report scores into brief, private tone guidance.
     Never surfaced to the participant as a score, a label, or a type."""
-    scores = get_personality_scores()
-    if not scores:
+    raw_scores = get_personality_scores()
+    if not raw_scores:
         return ""
+    # Scores come in on TIPI's native 1-7 scale; bucket them onto 1-5 so the
+    # high/low thresholds below (written before the TIPI switch) still apply
+    # without needing to be rewritten.
+    scores = {trait: _tipi_bucket(v) for trait, v in raw_scores.items()}
     notes = []
     if scores.get("openness", 3) >= 4:
         notes.append("leans curious and exploratory — open, unconventional framing lands well")
@@ -7907,7 +7971,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         release_heading=RELEASE_HEADING,
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
-        personality_questions=PERSONALITY_QUESTIONS,
+        personality_questions=TIPI_ITEMS,
         personality_enabled=_effective("personality_override",
                                         "personality_assessment_enabled", True),
         avatar_version=int(datetime.now().timestamp()),
@@ -9037,14 +9101,20 @@ def acknowledge_release():
 @app.route("/personality", methods=["POST"])
 @paywall.paywall_required
 def save_personality():
-    """Records the optional five-question style self-report for this
-    participant. Skipping it is a normal, silent outcome — this endpoint is
-    only hit when someone actually answers."""
+    """Records the optional TIPI self-report for this participant. Skipping
+    it is a normal, silent outcome — this endpoint is only hit when someone
+    actually answers. The client sends raw per-item ratings (1-7, keyed by
+    item id); scoring — including reverse-keyed items — happens here."""
     data = request.get_json(silent=True) or {}
-    answers = data.get("answers") or {}
-    if not isinstance(answers, dict):
+    raw_answers = data.get("answers") or {}
+    if not isinstance(raw_answers, dict):
         return jsonify({"ok": False}), 400
-    if save_personality_scores(answers):
+    try:
+        raw_answers = {int(k): v for k, v in raw_answers.items()}
+    except (TypeError, ValueError):
+        return jsonify({"ok": False}), 400
+    trait_scores = score_tipi(raw_answers)
+    if save_personality_scores(trait_scores):
         app.logger.info("[personality] self-report saved")
         return jsonify({"ok": True})
     return jsonify({"ok": False}), 400
