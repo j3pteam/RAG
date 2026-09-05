@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..4059747 100644
+index 4b5a702..c7635bf 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -208,7 +208,7 @@ index 4b5a702..4059747 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,8 +1882,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,18 +1882,40 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -219,10 +219,17 @@ index 4b5a702..4059747 100644
      .ack-secondary {
        width: 100%; margin-top: 0.55rem;
        padding: 0.7rem 1rem;
-@@ -1737,6 +1895,28 @@ INDEX_HTML = r"""<!DOCTYPE html>
+-      background: transparent; color: var(--muted);
+-      border: 1px solid var(--line); border-radius: 2px;
++      background: rgba(210, 188, 141, 0.22); color: var(--navy);
++      border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 2px;
+       font-family: inherit; font-size: 0.72rem;
+       letter-spacing: 0.14em; text-transform: uppercase;
+       cursor: pointer; transition: all 0.18s ease;
      }
-     .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
- 
+-    .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
++    .ack-secondary:hover { background: rgba(210, 188, 141, 0.4); border-color: var(--gold); }
++
 +    /* Five-question personality gate */
 +    .pq-row {
 +      margin: 0 0 1.15rem 0; padding: 0 0 1.15rem 0;
@@ -244,10 +251,9 @@ index 4b5a702..4059747 100644
 +      font-size: 0.66rem; letter-spacing: 0.06em; text-transform: uppercase;
 +      color: var(--muted);
 +    }
-+
+ 
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
-       font-size: 0.62rem; color: var(--muted);
 @@ -1983,18 +2163,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {

@@ -1887,13 +1887,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .ack-secondary {
       width: 100%; margin-top: 0.55rem;
       padding: 0.7rem 1rem;
-      background: transparent; color: var(--muted);
-      border: 1px solid var(--line); border-radius: 2px;
+      background: rgba(210, 188, 141, 0.22); color: var(--navy);
+      border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 2px;
       font-family: inherit; font-size: 0.72rem;
       letter-spacing: 0.14em; text-transform: uppercase;
       cursor: pointer; transition: all 0.18s ease;
     }
-    .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
+    .ack-secondary:hover { background: rgba(210, 188, 141, 0.4); border-color: var(--gold); }
 
     /* Five-question personality gate */
     .pq-row {
