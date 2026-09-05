@@ -1889,12 +1889,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .pq-statement { margin: 0 0 0.6rem 0; font-size: 0.9rem; line-height: 1.5; }
     .pq-scale { display: flex; gap: 0.4rem; }
     .pq-opt {
-      flex: 1; padding: 0.55rem 0; background: var(--paper);
-      border: 1px solid var(--line); border-radius: 2px;
+      flex: 1; padding: 0.55rem 0; background: rgba(210, 188, 141, 0.28);
+      border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 2px;
       font-family: inherit; font-size: 0.85rem; color: var(--navy);
       cursor: pointer; transition: all 0.15s ease;
     }
-    .pq-opt:hover { border-color: var(--gold); }
+    .pq-opt:hover { background: rgba(210, 188, 141, 0.45); border-color: var(--gold); }
     .pq-opt.selected { background: var(--navy); color: var(--gold); border-color: var(--navy); }
     .pq-labels {
       display: flex; justify-content: space-between; margin-top: 0.3rem;
@@ -2148,17 +2148,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     @media (max-width: 900px) {
       /* Smaller, and above the composer — the send button owns the bottom
-         right at these widths. */
+         right at these widths. Applies through phone widths too, so the
+         avatar is never fully hidden — just more compact. */
       /* Clear of the composer row, which reaches ~13rem from the bottom here */
       .presence { right: 0.7rem; bottom: 14rem; width: 76px; }
       .presence-frame { width: 60px; height: 60px; margin: 0 auto; }
       .presence-name { font-size: 0.62rem; }
       .presence-status { display: none; }
-    }
-    @media (max-width: 640px) {
-      /* Hidden on phones: there isn't room without covering the conversation,
-         and every reply already carries its own avatar there. */
-      .presence { display: none; }
     }
     @media (prefers-reduced-motion: reduce) {
       .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
