@@ -9400,28 +9400,38 @@ def advisor_avatar():
 @app.route("/admin/avatar", methods=["POST"])
 @admin_required
 def admin_upload_avatar():
-    """Replace the advisor photo."""
+    """Save the default advisor's photo, name, initials toggle and
+    scheduling link — one form, same shape as a named advisor's save."""
+    scheduling_url = (request.form.get("default_scheduling_url") or "").strip()
+    if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
+        flash("The scheduling link needs to start with http:// or https://.")
+        return redirect(url_for("admin_dashboard"))
+
     file = request.files.get("avatar")
-    if not file or not file.filename:
-        flash("Choose an image first.")
-        return redirect(url_for("admin_dashboard"))
+    if file and file.filename:
+        raw = file.read()
+        if len(raw) > AVATAR_MAX_BYTES:
+            flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+                  f"{AVATAR_MAX_BYTES // 1048576} MB.")
+            return redirect(url_for("admin_dashboard"))
+        ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+        if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+            flash("Use a JPG, PNG, WEBP or GIF image.")
+            return redirect(url_for("admin_dashboard"))
+        data, mime = prepare_avatar(raw)
+        store_avatar(data, mime)
 
-    raw = file.read()
-    if len(raw) > AVATAR_MAX_BYTES:
-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
-        return redirect(url_for("admin_dashboard"))
+    name = (request.form.get("avatar_name") or "").strip()[:60]
+    save_setting("avatar_name", name)
 
-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
-        flash("Use a JPG, PNG, WEBP or GIF image.")
-        return redirect(url_for("admin_dashboard"))
+    # An uploaded file always wins over a stale "no photo" checkbox — same
+    # priority as a named advisor's form.
+    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
+    save_setting("avatar_no_photo", no_photo)
 
-    data, mime = prepare_avatar(raw)
-    if store_avatar(data, mime):
-        flash("✓ Advisor photo updated. Participants will see it immediately.")
-    else:
-        flash("Could not save the photo — check the database connection.")
+    save_setting("default_scheduling_url", scheduling_url[:500])
+
+    flash("✓ Default advisor saved.")
     return redirect(url_for("admin_dashboard"))
 
 
@@ -10086,7 +10096,7 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo,default_scheduling_url" />
+             value="show_scheduling_button,show_avatar,allow_materials" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
         <input type="checkbox" name="show_scheduling_button" value="1"
@@ -10172,20 +10182,33 @@ input[type="file"], input[type="text"] {
 
       <div class="advisor-links">
         <h3>Photo &amp; Name</h3>
-        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-          <input type="text" id="avatar_name" name="avatar_name" form="settings-form"
-                 value="{{ settings.avatar_name or '' }}"
+        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
+              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
                  placeholder="{{ cfg.persona_name }}"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-        </div>
-        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
-              style="display: flex; gap: 0.5rem; align-items: center;
-                     flex-wrap: wrap; margin-top: 0.5rem;">
-          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required
+          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
+                 onchange="this.form.querySelector('input[name=avatar_no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="submit" class="btn" style="font-size: 0.66rem;">Upload photo</button>
+          <label style="display: flex; align-items: center; gap: 0.4rem;
+                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
+                        margin-top: 0.2rem;">
+            <input type="checkbox" name="avatar_no_photo" value="1"
+                   {% if settings.avatar_no_photo %}checked{% endif %}
+                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
+            <span class="muted">No photo — show their initials instead</span>
+          </label>
+          <label class="muted" style="display: block; font-size: 0.72rem;
+                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
+                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
+          <input type="url" name="default_scheduling_url"
+                 value="{{ settings.default_scheduling_url or '' }}"
+                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
+                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
         {% if avatar_custom %}
         <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
@@ -10194,25 +10217,10 @@ input[type="file"], input[type="text"] {
                          border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
         </form>
         {% endif %}
-        <label style="display: flex; align-items: center; gap: 0.4rem;
-                      font-size: 0.78rem; cursor: pointer; margin-top: 0.5rem;">
-          <input type="checkbox" name="avatar_no_photo" value="1"
-                 form="settings-form"
-                 {% if settings.avatar_no_photo %}checked{% endif %}
-                 style="width: 15px; height: 15px; accent-color: var(--navy);" />
-          <span class="muted">No photo — show their initials instead</span>
-        </label>
-        <label class="muted" style="display: block; font-size: 0.72rem;
-                      margin-top: 0.9rem; text-transform: uppercase;
-                      letter-spacing: 0.08em;">Scheduling link (optional)</label>
-        <input type="url" name="default_scheduling_url" form="settings-form"
-               value="{{ settings.default_scheduling_url or '' }}"
-               placeholder="https://calendly.com/... — blank uses the shared J3P link"
-               style="width: 100%; margin-top: 0.3rem; padding: 0.45rem;
-                      border: 1px solid var(--line); border-radius: 2px;
-                      font-family: inherit; font-size: 0.82rem;" />
-        <button type="submit" form="settings-form" class="btn"
-                style="font-size: 0.66rem; margin-top: 0.7rem;">Save</button>
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
+          The name appears beneath the photo in their sessions. Leave the
+          file blank to keep the current photo.
+        </p>
       </div>
 
       <div class="advisor-links">
@@ -10266,7 +10274,6 @@ input[type="file"], input[type="text"] {
                  onchange="this.form.querySelector('input[name=no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                         margin-top: 0.2rem;">
@@ -10282,6 +10289,7 @@ input[type="file"], input[type="text"] {
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
         <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
           The name appears beneath the photo in their sessions. Leave the file
@@ -11540,24 +11548,6 @@ def admin_settings():
         "require_login": ("Sign-in", "required", "not required"),
     }
     messages = []
-
-    # Text settings are saved separately; the loop below handles booleans.
-    if "avatar_name" in managed:
-        nm = (request.form.get("avatar_name") or "").strip()[:60]
-        if save_setting("avatar_name", nm):
-            messages.append(f"Photo name set to \u201c{nm}\u201d" if nm
-                            else "Photo name cleared")
-        else:
-            messages.append("Could not save the photo name")
-
-    if "default_scheduling_url" in managed:
-        su = (request.form.get("default_scheduling_url") or "").strip()[:500]
-        if su and not re.match(r"^https?://", su, re.I):
-            messages.append("Scheduling link NOT saved — it needs to start with http:// or https://")
-        elif save_setting("default_scheduling_url", su):
-            messages.append("Scheduling link set" if su else "Scheduling link cleared — using the shared J3P link")
-        else:
-            messages.append("Could not save the scheduling link")
 
     for key in managed:
         if key not in _SETTINGS_DEFAULTS:

@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..fe79caf 100644
+index 4b5a702..f967dba 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,15 @@ _SETTINGS_DEFAULTS = {
@@ -225,12 +225,12 @@ index 4b5a702..fe79caf 100644
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -909,7 +909,64 @@ index 4b5a702..fe79caf 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -9095,9 +9656,27 @@ header a:hover { color: var(--gold); }
+@@ -8839,28 +9400,38 @@ def advisor_avatar():
+ @app.route("/admin/avatar", methods=["POST"])
+ @admin_required
+ def admin_upload_avatar():
+-    """Replace the advisor photo."""
+-    file = request.files.get("avatar")
+-    if not file or not file.filename:
+-        flash("Choose an image first.")
++    """Save the default advisor's photo, name, initials toggle and
++    scheduling link — one form, same shape as a named advisor's save."""
++    scheduling_url = (request.form.get("default_scheduling_url") or "").strip()
++    if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
++        flash("The scheduling link needs to start with http:// or https://.")
+         return redirect(url_for("admin_dashboard"))
+ 
+-    raw = file.read()
+-    if len(raw) > AVATAR_MAX_BYTES:
+-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
+-        return redirect(url_for("admin_dashboard"))
++    file = request.files.get("avatar")
++    if file and file.filename:
++        raw = file.read()
++        if len(raw) > AVATAR_MAX_BYTES:
++            flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
++                  f"{AVATAR_MAX_BYTES // 1048576} MB.")
++            return redirect(url_for("admin_dashboard"))
++        ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
++        if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
++            flash("Use a JPG, PNG, WEBP or GIF image.")
++            return redirect(url_for("admin_dashboard"))
++        data, mime = prepare_avatar(raw)
++        store_avatar(data, mime)
+ 
+-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+-        flash("Use a JPG, PNG, WEBP or GIF image.")
+-        return redirect(url_for("admin_dashboard"))
++    name = (request.form.get("avatar_name") or "").strip()[:60]
++    save_setting("avatar_name", name)
+ 
+-    data, mime = prepare_avatar(raw)
+-    if store_avatar(data, mime):
+-        flash("✓ Advisor photo updated. Participants will see it immediately.")
+-    else:
+-        flash("Could not save the photo — check the database connection.")
++    # An uploaded file always wins over a stale "no photo" checkbox — same
++    # priority as a named advisor's form.
++    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
++    save_setting("avatar_no_photo", no_photo)
++
++    save_setting("default_scheduling_url", scheduling_url[:500])
++
++    flash("✓ Default advisor saved.")
+     return redirect(url_for("admin_dashboard"))
+ 
+ 
+@@ -9095,9 +9666,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -939,7 +996,7 @@ index 4b5a702..fe79caf 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +9702,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +9712,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -950,7 +1007,7 @@ index 4b5a702..fe79caf 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +9714,13 @@ form.upload {
+@@ -9133,8 +9724,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -966,7 +1023,7 @@ index 4b5a702..fe79caf 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9226,6 +9812,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +9822,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -990,7 +1047,7 @@ index 4b5a702..fe79caf 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +9927,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +9937,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1154,11 +1211,11 @@ index 4b5a702..fe79caf 100644
      <form method="POST" action="/admin/settings" id="settings-form">
        <input type="hidden" name="_fields"
 -             value="show_scheduling_button,show_avatar,allow_materials,avatar_name" />
-+             value="show_scheduling_button,show_avatar,allow_materials,avatar_name,avatar_no_photo,default_scheduling_url" />
++             value="show_scheduling_button,show_avatar,allow_materials" />
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10120,32 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10130,32 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -1192,7 +1249,7 @@ index 4b5a702..fe79caf 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9389,7 +10165,7 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10175,40 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -1201,49 +1258,72 @@ index 4b5a702..fe79caf 100644
            </span>
          </div>
        </div>
-@@ -9402,7 +10178,6 @@ input[type="file"], input[type="text"] {
+ 
+       <div class="advisor-links">
+         <h3>Photo &amp; Name</h3>
+-        <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+-          <input type="text" id="avatar_name" name="avatar_name" form="settings-form"
+-                 value="{{ settings.avatar_name or '' }}"
++        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
++              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
++          <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
                   placeholder="{{ cfg.persona_name }}"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
 -          <span class="muted" style="font-size: 0.74rem;">saves with Display Settings</span>
-         </div>
-         <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
-               style="display: flex; gap: 0.5rem; align-items: center;
-@@ -9419,6 +10194,25 @@ input[type="file"], input[type="text"] {
+-        </div>
+-        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
+-              style="display: flex; gap: 0.5rem; align-items: center;
+-                     flex-wrap: wrap; margin-top: 0.5rem;">
+-          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required
++          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
++                 onchange="this.form.querySelector('input[name=avatar_no_photo]').checked=false"
+                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+-          <button type="submit" class="btn" style="font-size: 0.66rem;">Upload photo</button>
++          <label style="display: flex; align-items: center; gap: 0.4rem;
++                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
++                        margin-top: 0.2rem;">
++            <input type="checkbox" name="avatar_no_photo" value="1"
++                   {% if settings.avatar_no_photo %}checked{% endif %}
++                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
++            <span class="muted">No photo — show their initials instead</span>
++          </label>
++          <label class="muted" style="display: block; font-size: 0.72rem;
++                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
++                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
++          <input type="url" name="default_scheduling_url"
++                 value="{{ settings.default_scheduling_url or '' }}"
++                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
++                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
++                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
++          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
+         </form>
+         {% if avatar_custom %}
+         <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
+@@ -9419,6 +10217,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
-+        <label style="display: flex; align-items: center; gap: 0.4rem;
-+                      font-size: 0.78rem; cursor: pointer; margin-top: 0.5rem;">
-+          <input type="checkbox" name="avatar_no_photo" value="1"
-+                 form="settings-form"
-+                 {% if settings.avatar_no_photo %}checked{% endif %}
-+                 style="width: 15px; height: 15px; accent-color: var(--navy);" />
-+          <span class="muted">No photo — show their initials instead</span>
-+        </label>
-+        <label class="muted" style="display: block; font-size: 0.72rem;
-+                      margin-top: 0.9rem; text-transform: uppercase;
-+                      letter-spacing: 0.08em;">Scheduling link (optional)</label>
-+        <input type="url" name="default_scheduling_url" form="settings-form"
-+               value="{{ settings.default_scheduling_url or '' }}"
-+               placeholder="https://calendly.com/... — blank uses the shared J3P link"
-+               style="width: 100%; margin-top: 0.3rem; padding: 0.45rem;
-+                      border: 1px solid var(--line); border-radius: 2px;
-+                      font-family: inherit; font-size: 0.82rem;" />
-+        <button type="submit" form="settings-form" class="btn"
-+                style="font-size: 0.66rem; margin-top: 0.7rem;">Save</button>
++        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
++          The name appears beneath the photo in their sessions. Leave the
++          file blank to keep the current photo.
++        </p>
        </div>
  
        <div class="advisor-links">
-@@ -9469,6 +10263,7 @@ input[type="file"], input[type="text"] {
+@@ -9469,9 +10271,9 @@ input[type="file"], input[type="text"] {
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
            <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
 +                 onchange="this.form.querySelector('input[name=no_photo]').checked=false"
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-           <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
-@@ -9480,6 +10275,13 @@ input[type="file"], input[type="text"] {
+-          <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
+           <label style="display: flex; align-items: center; gap: 0.4rem;
+                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
+                         margin-top: 0.2rem;">
+@@ -9480,6 +10282,14 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -1254,10 +1334,11 @@ index 4b5a702..fe79caf 100644
 +                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
 +                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
 +                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
++          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10311,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10319,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -1287,7 +1368,7 @@ index 4b5a702..fe79caf 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9583,7 +10394,9 @@ input[type="file"], input[type="text"] {
+@@ -9583,7 +10402,9 @@ input[type="file"], input[type="text"] {
        </form>
      </div>
    </div>
@@ -1297,7 +1378,7 @@ index 4b5a702..fe79caf 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10433,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10441,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -1307,7 +1388,7 @@ index 4b5a702..fe79caf 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -10084,7 +10899,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +10907,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -1317,7 +1398,7 @@ index 4b5a702..fe79caf 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +10920,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +10928,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -1340,7 +1421,7 @@ index 4b5a702..fe79caf 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11053,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11061,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -1351,7 +1432,7 @@ index 4b5a702..fe79caf 100644
  
  </div>
  
-@@ -10478,6 +11284,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11292,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -1367,7 +1448,7 @@ index 4b5a702..fe79caf 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11303,34 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11311,34 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -1402,7 +1483,7 @@ index 4b5a702..fe79caf 100644
  </body></html>"""
  
  
-@@ -10528,6 +11371,12 @@ def admin_dashboard():
+@@ -10528,6 +11379,12 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -1415,7 +1496,7 @@ index 4b5a702..fe79caf 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11384,11 @@ def admin_dashboard():
+@@ -10535,7 +11392,11 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -1428,7 +1509,7 @@ index 4b5a702..fe79caf 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10631,15 +11484,24 @@ def admin_save_advisor():
+@@ -10631,15 +11492,24 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -1458,7 +1539,7 @@ index 4b5a702..fe79caf 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,6 +11534,7 @@ def admin_settings():
+@@ -10672,21 +11542,13 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -1466,23 +1547,22 @@ index 4b5a702..fe79caf 100644
          "allow_materials": ("Participant materials", "on", "off"),
          "auto_learning": ("Continuous learning", "on", "off"),
          "require_login": ("Sign-in", "required", "not required"),
-@@ -10687,6 +11550,15 @@ def admin_settings():
-         else:
-             messages.append("Could not save the photo name")
+     }
+     messages = []
  
-+    if "default_scheduling_url" in managed:
-+        su = (request.form.get("default_scheduling_url") or "").strip()[:500]
-+        if su and not re.match(r"^https?://", su, re.I):
-+            messages.append("Scheduling link NOT saved — it needs to start with http:// or https://")
-+        elif save_setting("default_scheduling_url", su):
-+            messages.append("Scheduling link set" if su else "Scheduling link cleared — using the shared J3P link")
-+        else:
-+            messages.append("Could not save the scheduling link")
-+
+-    # Text settings are saved separately; the loop below handles booleans.
+-    if "avatar_name" in managed:
+-        nm = (request.form.get("avatar_name") or "").strip()[:60]
+-        if save_setting("avatar_name", nm):
+-            messages.append(f"Photo name set to \u201c{nm}\u201d" if nm
+-                            else "Photo name cleared")
+-        else:
+-            messages.append("Could not save the photo name")
+-
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12032,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12022,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
