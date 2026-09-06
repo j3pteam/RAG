@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..47eb70d 100644
+index 4b5a702..e6f7423 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -751,7 +751,7 @@ index 4b5a702..47eb70d 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,111 +6725,425 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,112 +6725,431 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -886,7 +886,12 @@ index 4b5a702..47eb70d 100644
      try:
 -        _profile_ensure_table(conn)
 +        _personality_ensure_table(conn)
-+        token = participant_token()
++        # _history_token(), not participant_token(): personality is meant to
++        # be a once-per-session touch (skippable, re-asked on a fresh visit),
++        # the opposite of participant_token()'s deliberate persistence —
++        # using that here was the bug that let a much earlier session's
++        # answers keep attaching to later visits even after skipping.
++        token = _history_token()
 +        cols = ", ".join(clean.keys())
 +        placeholders = ", ".join(["%s"] * len(clean))
 +        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
@@ -919,7 +924,7 @@ index 4b5a702..47eb70d 100644
 +                SELECT openness, conscientiousness, extraversion,
 +                       agreeableness, stability
 +                FROM participant_personality WHERE token = %s
-+            """, (participant_token(),))
++            """, (_history_token(),))
              row = cur.fetchone()
 -        if not row:
 -            return {}
@@ -1092,6 +1097,7 @@ index 4b5a702..47eb70d 100644
 -_ROLE_PATTERNS = [
 -    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
 -    (r"\b(vice chair|associate chair)\b", "vice chair"),
+-    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
 +def get_biometric_file(file_id: int):
 +    """(content, mime, title) for download, or None."""
 +    conn = _settings_db_conn()
@@ -1237,10 +1243,11 @@ index 4b5a702..47eb70d 100644
 +_ROLE_PATTERNS = [
 +    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
 +    (r"\b(vice chair|associate chair)\b", "vice chair"),
-     (r"\b(division chief|chief of the division|division head)\b", "division chief"),
++    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
      (r"\b(section chief|section head)\b", "section chief"),
      (r"\b(service line (?:director|lead|chief))\b", "service line director"),
-@@ -6762,10 +7504,35 @@ def build_briefing() -> str:
+     (r"\b(associate program director)\b", "associate program director"),
+@@ -6762,10 +7509,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -1277,7 +1284,7 @@ index 4b5a702..47eb70d 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,12 +7556,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7561,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -1299,7 +1306,7 @@ index 4b5a702..47eb70d 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7625,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7630,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -1420,7 +1427,7 @@ index 4b5a702..47eb70d 100644
              keep.append(r)
      return keep
  
-@@ -7107,14 +7974,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +7979,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -1459,7 +1466,7 @@ index 4b5a702..47eb70d 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8013,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8018,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -1471,7 +1478,7 @@ index 4b5a702..47eb70d 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8030,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8035,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -1480,7 +1487,7 @@ index 4b5a702..47eb70d 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7154,17 +8039,26 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,17 +8044,26 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -1509,7 +1516,7 @@ index 4b5a702..47eb70d 100644
      )
  
  
-@@ -7173,6 +8067,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8072,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -1522,7 +1529,7 @@ index 4b5a702..47eb70d 100644
      return _render_chat()
  
  
-@@ -7182,6 +8082,7 @@ def index():
+@@ -7182,6 +8087,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -1530,7 +1537,7 @@ index 4b5a702..47eb70d 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8176,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8181,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -1538,7 +1545,7 @@ index 4b5a702..47eb70d 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7918,12 +8820,14 @@ def chat():
+@@ -7918,12 +8825,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -1553,7 +1560,7 @@ index 4b5a702..47eb70d 100644
          )
  
      try:
-@@ -8213,6 +9117,7 @@ def chat():
+@@ -8213,6 +9122,7 @@ def chat():
          # Resolve city/region/country in the background — never blocks the reply
          record_location_async(interaction_id, client_ip())
          record_acknowledgement(interaction_id)
@@ -1561,7 +1568,7 @@ index 4b5a702..47eb70d 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9182,28 @@ def acknowledge_release():
+@@ -8277,6 +9187,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -1590,7 +1597,7 @@ index 4b5a702..47eb70d 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8614,7 +9541,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +9546,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -1601,7 +1608,7 @@ index 4b5a702..47eb70d 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +9749,23 @@ def advisor_avatar():
+@@ -8820,8 +9754,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -1626,7 +1633,7 @@ index 4b5a702..47eb70d 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +9783,38 @@ def advisor_avatar():
+@@ -8839,28 +9788,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -1683,7 +1690,7 @@ index 4b5a702..47eb70d 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9095,9 +10049,27 @@ header a:hover { color: var(--gold); }
+@@ -9095,9 +10054,27 @@ header a:hover { color: var(--gold); }
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -1713,7 +1720,7 @@ index 4b5a702..47eb70d 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +10095,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10100,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -1724,7 +1731,7 @@ index 4b5a702..47eb70d 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10107,13 @@ form.upload {
+@@ -9133,8 +10112,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -1740,7 +1747,7 @@ index 4b5a702..47eb70d 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10149,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10154,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -1760,7 +1767,7 @@ index 4b5a702..47eb70d 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10218,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10223,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1784,7 +1791,7 @@ index 4b5a702..47eb70d 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10333,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10338,166 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -1952,7 +1959,7 @@ index 4b5a702..47eb70d 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10526,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10531,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2005,7 +2012,7 @@ index 4b5a702..47eb70d 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10581,27 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10586,27 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2033,7 +2040,7 @@ index 4b5a702..47eb70d 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10611,45 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10616,45 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2090,7 +2097,7 @@ index 4b5a702..47eb70d 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10658,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10663,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2101,7 +2108,7 @@ index 4b5a702..47eb70d 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10709,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10714,13 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2116,7 +2123,7 @@ index 4b5a702..47eb70d 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10724,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10729,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2161,7 +2168,7 @@ index 4b5a702..47eb70d 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10791,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10796,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2191,7 +2198,7 @@ index 4b5a702..47eb70d 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +10854,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +10859,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2222,7 +2229,7 @@ index 4b5a702..47eb70d 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10897,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10902,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2232,7 +2239,7 @@ index 4b5a702..47eb70d 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9817,7 +11096,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11101,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2241,7 +2248,7 @@ index 4b5a702..47eb70d 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11125,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11130,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2259,7 +2266,7 @@ index 4b5a702..47eb70d 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11187,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11192,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2287,7 +2294,7 @@ index 4b5a702..47eb70d 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11395,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11400,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2297,7 +2304,7 @@ index 4b5a702..47eb70d 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11416,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11421,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2320,7 +2327,7 @@ index 4b5a702..47eb70d 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11549,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11554,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2331,7 +2338,7 @@ index 4b5a702..47eb70d 100644
  
  </div>
  
-@@ -10478,6 +11780,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11785,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2347,7 +2354,7 @@ index 4b5a702..47eb70d 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11799,59 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11804,59 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2407,7 +2414,7 @@ index 4b5a702..47eb70d 100644
  </body></html>"""
  
  
-@@ -10528,6 +11892,13 @@ def admin_dashboard():
+@@ -10528,6 +11897,13 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -2421,7 +2428,7 @@ index 4b5a702..47eb70d 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11906,12 @@ def admin_dashboard():
+@@ -10535,7 +11911,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2435,7 +2442,7 @@ index 4b5a702..47eb70d 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,6 +11921,18 @@ def admin_dashboard():
+@@ -10545,6 +11926,18 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2454,7 +2461,7 @@ index 4b5a702..47eb70d 100644
          base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
          stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
          log_filter=log_filter,
-@@ -10631,15 +12019,34 @@ def admin_save_advisor():
+@@ -10631,15 +12024,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2494,7 +2501,7 @@ index 4b5a702..47eb70d 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12079,14 @@ def admin_settings():
+@@ -10672,21 +12084,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2518,7 +2525,7 @@ index 4b5a702..47eb70d 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12560,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12565,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

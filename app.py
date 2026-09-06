@@ -6839,7 +6839,12 @@ def save_personality_scores(answers: dict) -> bool:
         return True
     try:
         _personality_ensure_table(conn)
-        token = participant_token()
+        # _history_token(), not participant_token(): personality is meant to
+        # be a once-per-session touch (skippable, re-asked on a fresh visit),
+        # the opposite of participant_token()'s deliberate persistence —
+        # using that here was the bug that let a much earlier session's
+        # answers keep attaching to later visits even after skipping.
+        token = _history_token()
         cols = ", ".join(clean.keys())
         placeholders = ", ".join(["%s"] * len(clean))
         updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
@@ -6869,7 +6874,7 @@ def get_personality_scores() -> dict:
                 SELECT openness, conscientiousness, extraversion,
                        agreeableness, stability
                 FROM participant_personality WHERE token = %s
-            """, (participant_token(),))
+            """, (_history_token(),))
             row = cur.fetchone()
             if not row:
                 return session.get("personality") or {}
