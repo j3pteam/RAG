@@ -297,7 +297,8 @@ def update_feedback_rating(interaction_id: int, rating: str, comment: str = "") 
         return updated > 0
 
 
-def list_feedback(limit: int = 100, rating: Optional[str] = None) -> list:
+def list_feedback(limit: int = 100, rating: Optional[str] = None,
+                   persona: Optional[str] = None) -> list:
     """Return recent conversation log entries for the admin view.
 
     rating options:
@@ -305,35 +306,47 @@ def list_feedback(limit: int = 100, rating: Optional[str] = None) -> list:
         - 'rated': only exchanges that got a rating
         - 'up' / 'down': specific ratings only
         - 'unrated': exchanges with no rating yet
+    persona: exact match on the persona/advisor name that was active for
+        that exchange, or None for every advisor.
     """
     if not is_enabled():
         return []
     with get_conn() as conn:
         with conn.cursor() as cur:
+            where = []
+            params = []
             if rating in ("up", "down"):
-                cur.execute(
-                    "SELECT * FROM feedback WHERE rating = %s "
-                    "ORDER BY created_at DESC LIMIT %s;",
-                    (rating, limit),
-                )
+                where.append("rating = %s")
+                params.append(rating)
             elif rating == "rated":
-                cur.execute(
-                    "SELECT * FROM feedback WHERE rating IS NOT NULL "
-                    "ORDER BY created_at DESC LIMIT %s;",
-                    (limit,),
-                )
+                where.append("rating IS NOT NULL")
             elif rating == "unrated":
-                cur.execute(
-                    "SELECT * FROM feedback WHERE rating IS NULL "
-                    "ORDER BY created_at DESC LIMIT %s;",
-                    (limit,),
-                )
-            else:
-                cur.execute(
-                    "SELECT * FROM feedback ORDER BY created_at DESC LIMIT %s;",
-                    (limit,),
-                )
+                where.append("rating IS NULL")
+            if persona:
+                where.append("persona = %s")
+                params.append(persona)
+            sql = "SELECT * FROM feedback"
+            if where:
+                sql += " WHERE " + " AND ".join(where)
+            sql += " ORDER BY created_at DESC LIMIT %s"
+            params.append(limit)
+            cur.execute(sql, tuple(params))
             return list(cur.fetchall())
+
+
+def list_feedback_personas() -> list:
+    """Distinct persona/advisor names that have appeared in the conversation
+    log, for the admin filter dropdown — alphabetical."""
+    if not is_enabled():
+        return []
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT DISTINCT persona FROM feedback
+                WHERE persona IS NOT NULL AND persona != ''
+                ORDER BY persona
+            """)
+            return [r["persona"] for r in cur.fetchall()]
 
 
 def delete_feedback_ids(ids: list) -> int:

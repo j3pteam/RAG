@@ -6450,6 +6450,20 @@ def get_advisor(slug: str):
         conn.close()
 
 
+def active_persona_name() -> str:
+    """The name to log against this interaction — the named advisor this
+    session is with, if any, else the shared default persona name. Used so
+    the conversation log can actually be filtered per advisor; logging the
+    static default name for every row regardless of who was active would
+    make that filter meaningless."""
+    slug = session.get("advisor_slug")
+    if slug:
+        adv = get_advisor(slug)
+        if adv:
+            return adv["name"]
+    return CONFIG["persona_name"]
+
+
 def get_advisor_photo(slug: str):
     conn = _settings_db_conn()
     if not conn:
@@ -8413,7 +8427,7 @@ def chat():
             safety_id = db.log_interaction(
                 user_message=user_input,
                 bot_reply=SAFETY_RESPONSE,
-                persona=CONFIG["persona_name"],
+                persona=active_persona_name(),
                 attachment_info="SAFETY ALERT",
             )
         except Exception as e:
@@ -9116,7 +9130,7 @@ def chat():
         interaction_id = db.log_interaction(
             user_message=user_input,   # raw question, without the inlined document text
             bot_reply=assistant_text,
-            persona=CONFIG["persona_name"],
+            persona=active_persona_name(),
             attachment_info=attachment_note,
         )
         # Resolve city/region/country in the background — never blocks the reply
@@ -9287,12 +9301,12 @@ def feedback():
         if interaction_id:
             updated = db.update_feedback_rating(int(interaction_id), rating, comment)
         if not updated:
-            db.log_feedback(rating, last_user_msg, reply, CONFIG["persona_name"], comment)
+            db.log_feedback(rating, last_user_msg, reply, active_persona_name(), comment)
     except Exception as e:
         app.logger.error(f"DB feedback log failed: {e}")
     app.logger.info(
         "FEEDBACK persona=%s rating=%s interaction_id=%s user_msg=%r reply=%r comment=%r",
-        CONFIG["persona_name"], rating, interaction_id, last_user_msg, reply, comment,
+        active_persona_name(), rating, interaction_id, last_user_msg, reply, comment,
     )
     return jsonify({"ok": True})
 
@@ -11067,6 +11081,14 @@ input[type="file"], input[type="text"] {
             <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
             <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
           </select>
+          <label for="advisor-select" style="font-size: 0.78rem; color: var(--muted); margin-left: 0.6rem;">Advisor:</label>
+          <select id="advisor-select" name="advisor" onchange="this.form.submit()"
+                  style="padding: 0.35rem 0.55rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.8rem; background: white; cursor: pointer;">
+            <option value="" {% if not log_persona %}selected{% endif %}>All advisors</option>
+            {% for p in log_personas %}
+            <option value="{{ p }}" {% if log_persona == p %}selected{% endif %}>{{ p }}</option>
+            {% endfor %}
+          </select>
         </form>
         {% if stats.total > 0 %}
         <button type="button" id="export-csv" class="btn"
@@ -11892,9 +11914,16 @@ def admin_dashboard():
     log_filter = (request.args.get("filter") or "all").lower()
     if log_filter not in ("all", "rated", "up", "down", "unrated"):
         log_filter = "all"
+    # Second, independent filter — which advisor's sessions to show.
+    # "" (All advisors) means no persona filter at all.
+    log_personas = db.list_feedback_personas() if db_ok else []
+    log_persona = request.args.get("advisor") or ""
+    if log_persona not in log_personas:
+        log_persona = ""
     feedback_rows = db.list_feedback(
         limit=100,
         rating=(None if log_filter == "all" else log_filter),
+        persona=(log_persona or None),
     ) if db_ok else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
@@ -11941,6 +11970,8 @@ def admin_dashboard():
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
+        log_personas=log_personas,
+        log_persona=log_persona,
     )
 
 
