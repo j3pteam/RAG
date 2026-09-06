@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..c7635bf 100644
+index 4b5a702..b6cda87 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -221,14 +221,14 @@ index 4b5a702..c7635bf 100644
        padding: 0.7rem 1rem;
 -      background: transparent; color: var(--muted);
 -      border: 1px solid var(--line); border-radius: 2px;
-+      background: rgba(210, 188, 141, 0.22); color: var(--navy);
-+      border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 2px;
++      background: var(--navy); color: var(--gold);
++      border: 1px solid var(--navy); border-radius: 2px;
        font-family: inherit; font-size: 0.72rem;
        letter-spacing: 0.14em; text-transform: uppercase;
        cursor: pointer; transition: all 0.18s ease;
      }
 -    .ack-secondary:hover { border-color: var(--gold); color: var(--navy); }
-+    .ack-secondary:hover { background: rgba(210, 188, 141, 0.4); border-color: var(--gold); }
++    .ack-secondary:hover { background: var(--gold); color: var(--navy); border-color: var(--gold); }
 +
 +    /* Five-question personality gate */
 +    .pq-row {
@@ -692,7 +692,7 @@ index 4b5a702..c7635bf 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,115 +6666,429 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,113 +6666,427 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1035,8 +1035,6 @@ index 4b5a702..c7635bf 100644
 -    (r"\b(vice chair|associate chair)\b", "vice chair"),
 -    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
 -    (r"\b(section chief|section head)\b", "section chief"),
--    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
--    (r"\b(associate program director)\b", "associate program director"),
 +def get_biometric_file(file_id: int):
 +    """(content, mime, title) for download, or None."""
 +    conn = _settings_db_conn()
@@ -1184,11 +1182,9 @@ index 4b5a702..c7635bf 100644
 +    (r"\b(vice chair|associate chair)\b", "vice chair"),
 +    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
 +    (r"\b(section chief|section head)\b", "section chief"),
-+    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
-+    (r"\b(associate program director)\b", "associate program director"),
+     (r"\b(service line (?:director|lead|chief))\b", "service line director"),
+     (r"\b(associate program director)\b", "associate program director"),
      (r"\b(program director)\b", "program director"),
-     (r"\b(fellowship director)\b", "fellowship director"),
-     (r"\b(residency director)\b", "residency director"),
 @@ -6789,12 +7472,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
