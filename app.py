@@ -637,6 +637,43 @@ def personality_summary_tag(scores: dict) -> str:
     return " · ".join(tags) if tags else "Balanced"
 
 
+def personality_interaction_tips(scores: dict) -> list:
+    """Short, human-facing advice on approaching this participant — for
+    whoever's about to review the session or talk with them, not the AI.
+    Distinct from personality_style_block() (private AI tone-steering) and
+    personality_interpretation_lines() (the raw per-trait breakdown): this
+    is the "so what do I do with that" read, one line per trait that stood
+    out."""
+    if not scores:
+        return []
+    b = {trait: _tipi_bucket(scores[trait]) for trait in _PERSONALITY_TRAITS
+         if scores.get(trait)}
+    tips = []
+    if b.get("openness", 3) >= 4:
+        tips.append("Bring fresh ideas and unconventional framing — they'll engage with it.")
+    elif b.get("openness", 3) <= 2:
+        tips.append("Favor concrete, proven approaches over abstract theorizing.")
+    if b.get("conscientiousness", 3) >= 4:
+        tips.append("Come with a clear plan and next steps — structure lands well.")
+    elif b.get("conscientiousness", 3) <= 2:
+        tips.append("Keep plans loose — heavy structure may feel constraining.")
+    if b.get("extraversion", 3) >= 4:
+        tips.append("They likely want to talk it through out loud — make room for that.")
+    elif b.get("extraversion", 3) <= 2:
+        tips.append("Give them space to reflect rather than pushing rapid back-and-forth.")
+    if b.get("agreeableness", 3) >= 4:
+        tips.append("Frame feedback warmly — they value harmony and consensus.")
+    elif b.get("agreeableness", 3) <= 2:
+        tips.append("Direct, blunt feedback is fine here — no need to soften it.")
+    if b.get("stability", 3) >= 4:
+        tips.append("They handle pressure well — setbacks can be discussed plainly.")
+    elif b.get("stability", 3) <= 2:
+        tips.append("Go gently around stress or setbacks — avoid alarming language.")
+    if not tips:
+        tips.append("No strong signals either way — a balanced approach should work.")
+    return tips
+
+
 def _geo_ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("""
@@ -11063,8 +11100,10 @@ input[type="file"], input[type="text"] {
               <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
             {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
           </td>
+          {% set _p_notes = personality_notes.get(f.id) %}
+          {% set _p_tips = personality_tips.get(f.id) %}
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;"
-              title="{{ personality_notes.get(f.id)|join('; ') if personality_notes.get(f.id) else '' }}">
+              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% if _p_tips %} — How to interact: {{ _p_tips|join(' ') }}{% endif %}{% endif %}">
             {{ personality_summary.get(f.id, '—') }}
           </td>
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
@@ -11124,10 +11163,17 @@ input[type="file"], input[type="text"] {
               <div class="feedback-detail-content" style="font-style: normal;">
                 {% for line in personality_notes[f.id] %}{{ line }}<br />{% endfor %}
               </div>
+              {% if personality_tips.get(f.id) %}
+              <div class="feedback-detail-label" style="margin-top: 0.8rem;">How to interact</div>
+              <div class="feedback-detail-content" style="font-style: normal;">
+                {% for tip in personality_tips[f.id] %}{{ tip }}<br />{% endfor %}
+              </div>
+              {% endif %}
               <p class="muted" style="font-size: 0.72rem; margin: 0.4rem 0 0;">
-                From this participant's optional five-question self-report,
-                answered once for this session. Not a validated or clinical
-                assessment.
+                From this participant's optional TIPI self-report, answered
+                once for this session. Not a validated clinical assessment —
+                a published personality measure used for light
+                personalization.
               </p>
             </div>
             {% endif %}
@@ -11851,6 +11897,10 @@ def admin_dashboard():
         },
         personality_summary={
             iid: personality_summary_tag(scores)
+            for iid, scores in _personality_by_interaction.items()
+        },
+        personality_tips={
+            iid: personality_interaction_tips(scores)
             for iid, scores in _personality_by_interaction.items()
         },
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
