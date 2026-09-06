@@ -615,6 +615,28 @@ def personality_interpretation_lines(scores: dict) -> list:
     return lines
 
 
+def personality_summary_tag(scores: dict) -> str:
+    """A compact one-line read for the admin log table's own Personality
+    column — just the traits that stand out (high or low), not the full
+    breakdown, which stays in that row's expanded detail."""
+    if not scores:
+        return "—"
+    short = {"openness": "Open", "conscientiousness": "Consc.",
+             "extraversion": "Extra.", "agreeableness": "Agree.",
+             "stability": "Stable"}
+    tags = []
+    for trait in _PERSONALITY_TRAITS:
+        score = scores.get(trait)
+        if not score:
+            continue
+        bucket = _tipi_bucket(score)
+        if bucket >= 4:
+            tags.append(f"High {short[trait]}")
+        elif bucket <= 2:
+            tags.append(f"Low {short[trait]}")
+    return " · ".join(tags) if tags else "Balanced"
+
+
 def _geo_ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("""
@@ -11012,7 +11034,7 @@ input[type="file"], input[type="text"] {
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>Release</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
@@ -11040,6 +11062,10 @@ input[type="file"], input[type="text"] {
               <span class="tag-ack" title="Release accepted {{ acks[f.id] }}">&#10003;</span>
               <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
             {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
+          </td>
+          <td class="muted" style="font-size: 0.78rem; max-width: 150px;"
+              title="{{ personality_notes.get(f.id)|join('; ') if personality_notes.get(f.id) else '' }}">
+            {{ personality_summary.get(f.id, '—') }}
           </td>
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
             {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
@@ -11790,6 +11816,7 @@ def admin_dashboard():
         rating=(None if log_filter == "all" else log_filter),
     ) if db_ok else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
+    _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
     _advisor_map = document_advisor_map()
     _advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
     _advisor_docs = {}
@@ -11820,7 +11847,11 @@ def admin_dashboard():
         acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
         personality_notes={
             iid: personality_interpretation_lines(scores)
-            for iid, scores in personality_for([r.get("id") for r in feedback_rows]).items()
+            for iid, scores in _personality_by_interaction.items()
+        },
+        personality_summary={
+            iid: personality_summary_tag(scores)
+            for iid, scores in _personality_by_interaction.items()
         },
         base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
