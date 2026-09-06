@@ -7504,10 +7504,35 @@ def build_briefing() -> str:
                        "content": "Conversation:\n\n" + "\n\n".join(lines)}],
         )
         parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
-        return scrub_internal_emails("\n".join(parts).strip())
+        summary = "\n".join(parts).strip()
     except Exception as e:
         app.logger.error(f"[briefing] generation failed: {e}")
         return ""
+    # A separate, deterministic section — not handed to the model, so it's
+    # never paraphrased, garbled, or quietly dropped the way something
+    # folded into the AI's own summary could be.
+    summary += personality_briefing_block()
+    return scrub_internal_emails(summary.strip())
+
+
+def personality_briefing_block() -> str:
+    """The participant's personality self-report, formatted for the
+    pre-call brief — same underlying data as the admin conversation log's
+    Personality column, reused here so the advisor sees it too."""
+    scores = get_personality_scores()
+    if not scores:
+        return ""
+    tag = personality_summary_tag(scores)
+    tips = personality_interaction_tips(scores)
+    parts = ["\n\n## Personality Snapshot (self-reported)", tag]
+    if tips:
+        parts.append("\nHow to interact:")
+        parts.extend(f"- {t}" for t in tips)
+    parts.append(
+        "\n_From this participant's optional TIPI self-report — a published "
+        "personality measure, not a clinical assessment._"
+    )
+    return "\n".join(parts)
 
 
 def email_briefing(advisor_name, participant, summary) -> bool:
