@@ -11096,7 +11096,7 @@ input[type="file"], input[type="text"] {
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>How to interact</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
@@ -11128,8 +11128,13 @@ input[type="file"], input[type="text"] {
           {% set _p_notes = personality_notes.get(f.id) %}
           {% set _p_tips = personality_tips.get(f.id) %}
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;"
-              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% if _p_tips %} — How to interact: {{ _p_tips|join(' ') }}{% endif %}{% endif %}">
+              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% endif %}">
             {{ personality_summary.get(f.id, '—') }}
+          </td>
+          <td class="muted" style="font-size: 0.76rem; max-width: 240px;">
+            {% if _p_tips %}
+              {% for tip in _p_tips %}{{ tip }}<br />{% endfor %}
+            {% else %}—{% endif %}
           </td>
           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
             {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}

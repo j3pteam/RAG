@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..6f906dd 100644
+index 4b5a702..47eb70d 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -2237,24 +2237,29 @@ index 4b5a702..6f906dd 100644
          <tr>
            <th style="width: 28px;"></th>
 -          <th>When</th><th>Rating</th><th>Release</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
-+          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
++          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>How to interact</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11125,12 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11125,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
 +          {% set _p_notes = personality_notes.get(f.id) %}
 +          {% set _p_tips = personality_tips.get(f.id) %}
 +          <td class="muted" style="font-size: 0.78rem; max-width: 150px;"
-+              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% if _p_tips %} — How to interact: {{ _p_tips|join(' ') }}{% endif %}{% endif %}">
++              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% endif %}">
 +            {{ personality_summary.get(f.id, '—') }}
++          </td>
++          <td class="muted" style="font-size: 0.76rem; max-width: 240px;">
++            {% if _p_tips %}
++              {% for tip in _p_tips %}{{ tip }}<br />{% endfor %}
++            {% else %}—{% endif %}
 +          </td>
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11182,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11187,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2282,7 +2287,7 @@ index 4b5a702..6f906dd 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11390,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11395,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2292,7 +2297,7 @@ index 4b5a702..6f906dd 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11411,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11416,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2315,7 +2320,7 @@ index 4b5a702..6f906dd 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11544,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11549,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2326,7 +2331,7 @@ index 4b5a702..6f906dd 100644
  
  </div>
  
-@@ -10478,6 +11775,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11780,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2342,7 +2347,7 @@ index 4b5a702..6f906dd 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11794,59 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11799,59 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2402,7 +2407,7 @@ index 4b5a702..6f906dd 100644
  </body></html>"""
  
  
-@@ -10528,6 +11887,13 @@ def admin_dashboard():
+@@ -10528,6 +11892,13 @@ def admin_dashboard():
          rating=(None if log_filter == "all" else log_filter),
      ) if db_ok else []
      stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
@@ -2416,7 +2421,7 @@ index 4b5a702..6f906dd 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11901,12 @@ def admin_dashboard():
+@@ -10535,7 +11906,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2430,7 +2435,7 @@ index 4b5a702..6f906dd 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,6 +11916,18 @@ def admin_dashboard():
+@@ -10545,6 +11921,18 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2449,7 +2454,7 @@ index 4b5a702..6f906dd 100644
          base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
          stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
          log_filter=log_filter,
-@@ -10631,15 +12014,34 @@ def admin_save_advisor():
+@@ -10631,15 +12019,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2489,7 +2494,7 @@ index 4b5a702..6f906dd 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12074,14 @@ def admin_settings():
+@@ -10672,21 +12079,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2513,7 +2518,7 @@ index 4b5a702..6f906dd 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12555,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12560,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
