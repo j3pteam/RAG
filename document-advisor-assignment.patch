@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..97ef152 100644
+index 4b5a702..3aebd79 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -1932,7 +1932,7 @@ index 4b5a702..97ef152 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9089,15 +10244,63 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +10244,69 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1965,6 +1965,12 @@ index 4b5a702..97ef152 100644
 +  flex-wrap: wrap;
 +}
 +.camera-btn { font-size: 0.66rem; }
++.camera-pending-indicator {
++  display: inline-flex; align-items: center; gap: 0.35rem;
++  font-size: 0.72rem; color: var(--navy); background: rgba(210, 188, 141, 0.28);
++  border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 9px;
++  padding: 0.2rem 0.6rem; margin-top: 0.3rem;
++}
 +
  .group-heading {
    font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
@@ -1972,6 +1978,9 @@ index 4b5a702..97ef152 100644
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
+-.section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
+-.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
+-.stat { flex: 1; }
 +
 +/* Top-level tabs — five groups instead of eight stacked sections */
 +.tabs {
@@ -1990,15 +1999,13 @@ index 4b5a702..97ef152 100644
 +.tab-pane.active { display: block; }
 +.tab-pane .group-heading:first-child { margin-top: 0; }
 +
- .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
--.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
--.stat { flex: 1; }
++.section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
 +.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
 +.stat { flex: 1; min-width: 90px; }
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +10326,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10332,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -2009,7 +2016,7 @@ index 4b5a702..97ef152 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10338,13 @@ form.upload {
+@@ -9133,8 +10344,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -2025,7 +2032,7 @@ index 4b5a702..97ef152 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10380,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10386,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -2045,7 +2052,7 @@ index 4b5a702..97ef152 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10449,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10455,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -2069,7 +2076,7 @@ index 4b5a702..97ef152 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10564,186 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10570,186 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -2257,7 +2264,7 @@ index 4b5a702..97ef152 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10777,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10783,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2310,7 +2317,7 @@ index 4b5a702..97ef152 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10832,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10838,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2333,6 +2340,7 @@ index 4b5a702..97ef152 100644
 +                  style="background: transparent; color: var(--navy); border-color: var(--navy);
 +                         white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
 +        </div>
++        <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
 +        <button type="submit" class="btn">Save advisor</button>
 +        <div class="initials-preview-row" style="grid-column: 1 / -1;">
 +          <span id="initials-preview-new" class="initials-preview">?</span>
@@ -2344,7 +2352,7 @@ index 4b5a702..97ef152 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10868,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10875,48 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2379,6 +2387,7 @@ index 4b5a702..97ef152 100644
 -          <button type="submit" class="btn" style="font-size: 0.66rem;">Upload photo</button>
 +          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
 +                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
++          <span class="camera-pending-indicator" id="camera-pending-default" hidden></span>
 +          <label style="display: flex; align-items: center; gap: 0.4rem;
 +                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
 +                        margin-top: 0.2rem;">
@@ -2403,7 +2412,7 @@ index 4b5a702..97ef152 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10917,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10925,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2414,7 +2423,7 @@ index 4b5a702..97ef152 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10968,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10976,16 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2429,10 +2438,11 @@ index 4b5a702..97ef152 100644
 -          <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
 +          <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}"
 +                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
++          <span class="camera-pending-indicator" id="camera-pending-{{ adv.slug }}" hidden></span>
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10985,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10994,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2477,7 +2487,7 @@ index 4b5a702..97ef152 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11052,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +11061,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2507,7 +2517,7 @@ index 4b5a702..97ef152 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +11115,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +11124,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2538,7 +2548,7 @@ index 4b5a702..97ef152 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +11158,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +11167,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2548,7 +2558,7 @@ index 4b5a702..97ef152 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11323,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11332,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -2563,7 +2573,7 @@ index 4b5a702..97ef152 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11365,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11374,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2572,7 +2582,7 @@ index 4b5a702..97ef152 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11394,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11403,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2590,7 +2600,7 @@ index 4b5a702..97ef152 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11456,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11465,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2618,7 +2628,7 @@ index 4b5a702..97ef152 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11664,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11673,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2628,7 +2638,7 @@ index 4b5a702..97ef152 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11685,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11694,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2651,7 +2661,7 @@ index 4b5a702..97ef152 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11818,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11827,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2662,7 +2672,7 @@ index 4b5a702..97ef152 100644
  
  </div>
  
-@@ -10478,6 +12049,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +12058,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2678,7 +2688,7 @@ index 4b5a702..97ef152 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +12068,184 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +12077,228 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2713,7 +2723,20 @@ index 4b5a702..97ef152 100644
 +      // Camera capture — an alternative to browsing for a file, on any
 +      // device with a camera (a phone's camera, or a laptop's webcam).
 +      // One shared modal, reused by every "Take Photo" button; each button
-+      // says which file input to fill via data-target-input.
++      // says which file input it's standing in for via data-target-input.
++      //
++      // These are native <form> submissions, not a JS-managed upload like
++      // the chat composer has — a real browser form POST reads straight
++      // from input.files, so there's no state to redirect into instead.
++      // Assigning a synthetic FileList to input.files via DataTransfer is
++      // unreliable on some browsers (notably Safari, where it can silently
++      // do nothing instead of throwing), so "Use this photo" no longer
++      // tries that. Instead it remembers the captured photo against the
++      // form itself; when that specific form is actually submitted, a
++      // capture-phase submit listener swaps in the photo and sends the
++      // request over fetch, bypassing input.files entirely. A form with no
++      // pending capture submits exactly as it always has — this only
++      // changes behavior for a form that just had a photo captured on it.
 +      // ---------------------------------------------------------------
 +      (function() {
 +        const overlay = document.getElementById("camera-overlay");
@@ -2731,6 +2754,7 @@ index 4b5a702..97ef152 100644
 +        let targetInput = null;
 +        let capturedBlob = null;
 +        let previewUrl = null;
++        const pendingByForm = new Map();   // form element -> {fieldName, file, indicator}
 +
 +        function showError(msg) {
 +          errorEl.textContent = msg;
@@ -2800,16 +2824,19 @@ index 4b5a702..97ef152 100644
 +
 +        useBtn.addEventListener("click", () => {
 +          if (capturedBlob && targetInput) {
-+            const file = new File([capturedBlob], "photo.jpg", { type: "image/jpeg" });
-+            try {
-+              const dt = new DataTransfer();
-+              dt.items.add(file);
-+              targetInput.files = dt.files;
-+              // Fires the input's own onchange (e.g. unchecking "no photo")
-+              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
-+            } catch (e) {
-+              showError("This browser can't attach the photo automatically — use Choose File instead.");
-+              return;
++            const form = targetInput.form;
++            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
++            const file = new File([capturedBlob], "photo-" + stamp + ".jpg", { type: "image/jpeg" });
++            if (form) {
++              const indicator = document.getElementById("camera-pending-" + targetInput.id.replace("avatar-file-", ""));
++              pendingByForm.set(form, { fieldName: targetInput.name, file: file, indicator: indicator });
++              if (indicator) {
++                indicator.textContent = "Photo captured — click Save to keep it";
++                indicator.hidden = false;
++              }
++              // Unchecks "no photo" the same way choosing a file already does
++              const noPhotoBox = form.querySelector('input[name=no_photo], input[name=avatar_no_photo]');
++              if (noPhotoBox) noPhotoBox.checked = false;
 +            }
 +          }
 +          closeCamera();
@@ -2830,6 +2857,33 @@ index 4b5a702..97ef152 100644
 +            if (input) openCamera(input);
 +          });
 +        });
++
++        // Only forms that actually had a photo captured on them are
++        // intercepted — every other form (including these same forms when
++        // "Choose File" was used instead) submits exactly as it always has.
++        document.addEventListener("submit", function(e) {
++          const pending = pendingByForm.get(e.target);
++          if (!pending) return;
++          e.preventDefault();
++          const form = e.target;
++          const submitBtn = form.querySelector('button[type="submit"]');
++          const originalLabel = submitBtn ? submitBtn.textContent : "";
++          if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving\u2026"; }
++          const fd = new FormData(form);
++          fd.set(pending.fieldName, pending.file);
++          fetch(form.action, { method: "POST", body: fd, credentials: "same-origin" })
++            .then(resp => {
++              if (!resp.ok) throw new Error("Server returned " + resp.status);
++              pendingByForm.delete(form);
++              window.location.reload();
++            })
++            .catch(err => {
++              if (pending.indicator) {
++                pending.indicator.textContent = "Couldn't save the photo (" + err.message + ") — try again";
++              }
++              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
++            });
++        }, true);
 +      })();
 +    </script>
 +
@@ -2863,7 +2917,7 @@ index 4b5a702..97ef152 100644
  </body></html>"""
  
  
-@@ -10523,11 +12281,25 @@ def admin_dashboard():
+@@ -10523,11 +12334,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -2889,7 +2943,7 @@ index 4b5a702..97ef152 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +12307,12 @@ def admin_dashboard():
+@@ -10535,7 +12360,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2903,7 +2957,7 @@ index 4b5a702..97ef152 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +12322,23 @@ def admin_dashboard():
+@@ -10545,9 +12375,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2927,7 +2981,7 @@ index 4b5a702..97ef152 100644
      )
  
  
-@@ -10631,15 +12422,34 @@ def admin_save_advisor():
+@@ -10631,15 +12475,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2967,7 +3021,7 @@ index 4b5a702..97ef152 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12482,14 @@ def admin_settings():
+@@ -10672,21 +12535,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2991,7 +3045,7 @@ index 4b5a702..97ef152 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12963,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +13016,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

@@ -10273,6 +10273,12 @@ header a:hover { color: var(--gold); }
   flex-wrap: wrap;
 }
 .camera-btn { font-size: 0.66rem; }
+.camera-pending-indicator {
+  display: inline-flex; align-items: center; gap: 0.35rem;
+  font-size: 0.72rem; color: var(--navy); background: rgba(210, 188, 141, 0.28);
+  border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 9px;
+  padding: 0.2rem 0.6rem; margin-top: 0.3rem;
+}
 
 .group-heading {
   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
@@ -10851,6 +10857,7 @@ input[type="file"], input[type="text"] {
                   style="background: transparent; color: var(--navy); border-color: var(--navy);
                          white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
         </div>
+        <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
         <button type="submit" class="btn">Save advisor</button>
         <div class="initials-preview-row" style="grid-column: 1 / -1;">
           <span id="initials-preview-new" class="initials-preview">?</span>
@@ -10888,6 +10895,7 @@ input[type="file"], input[type="text"] {
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
                   style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
+          <span class="camera-pending-indicator" id="camera-pending-default" hidden></span>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                         margin-top: 0.2rem;">
@@ -10977,6 +10985,7 @@ input[type="file"], input[type="text"] {
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}"
                   style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
+          <span class="camera-pending-indicator" id="camera-pending-{{ adv.slug }}" hidden></span>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                         margin-top: 0.2rem;">
@@ -12099,7 +12108,20 @@ input[type="file"], input[type="text"] {
       // Camera capture — an alternative to browsing for a file, on any
       // device with a camera (a phone's camera, or a laptop's webcam).
       // One shared modal, reused by every "Take Photo" button; each button
-      // says which file input to fill via data-target-input.
+      // says which file input it's standing in for via data-target-input.
+      //
+      // These are native <form> submissions, not a JS-managed upload like
+      // the chat composer has — a real browser form POST reads straight
+      // from input.files, so there's no state to redirect into instead.
+      // Assigning a synthetic FileList to input.files via DataTransfer is
+      // unreliable on some browsers (notably Safari, where it can silently
+      // do nothing instead of throwing), so "Use this photo" no longer
+      // tries that. Instead it remembers the captured photo against the
+      // form itself; when that specific form is actually submitted, a
+      // capture-phase submit listener swaps in the photo and sends the
+      // request over fetch, bypassing input.files entirely. A form with no
+      // pending capture submits exactly as it always has — this only
+      // changes behavior for a form that just had a photo captured on it.
       // ---------------------------------------------------------------
       (function() {
         const overlay = document.getElementById("camera-overlay");
@@ -12117,6 +12139,7 @@ input[type="file"], input[type="text"] {
         let targetInput = null;
         let capturedBlob = null;
         let previewUrl = null;
+        const pendingByForm = new Map();   // form element -> {fieldName, file, indicator}
 
         function showError(msg) {
           errorEl.textContent = msg;
@@ -12186,16 +12209,19 @@ input[type="file"], input[type="text"] {
 
         useBtn.addEventListener("click", () => {
           if (capturedBlob && targetInput) {
-            const file = new File([capturedBlob], "photo.jpg", { type: "image/jpeg" });
-            try {
-              const dt = new DataTransfer();
-              dt.items.add(file);
-              targetInput.files = dt.files;
-              // Fires the input's own onchange (e.g. unchecking "no photo")
-              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
-            } catch (e) {
-              showError("This browser can't attach the photo automatically — use Choose File instead.");
-              return;
+            const form = targetInput.form;
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const file = new File([capturedBlob], "photo-" + stamp + ".jpg", { type: "image/jpeg" });
+            if (form) {
+              const indicator = document.getElementById("camera-pending-" + targetInput.id.replace("avatar-file-", ""));
+              pendingByForm.set(form, { fieldName: targetInput.name, file: file, indicator: indicator });
+              if (indicator) {
+                indicator.textContent = "Photo captured — click Save to keep it";
+                indicator.hidden = false;
+              }
+              // Unchecks "no photo" the same way choosing a file already does
+              const noPhotoBox = form.querySelector('input[name=no_photo], input[name=avatar_no_photo]');
+              if (noPhotoBox) noPhotoBox.checked = false;
             }
           }
           closeCamera();
@@ -12216,6 +12242,33 @@ input[type="file"], input[type="text"] {
             if (input) openCamera(input);
           });
         });
+
+        // Only forms that actually had a photo captured on them are
+        // intercepted — every other form (including these same forms when
+        // "Choose File" was used instead) submits exactly as it always has.
+        document.addEventListener("submit", function(e) {
+          const pending = pendingByForm.get(e.target);
+          if (!pending) return;
+          e.preventDefault();
+          const form = e.target;
+          const submitBtn = form.querySelector('button[type="submit"]');
+          const originalLabel = submitBtn ? submitBtn.textContent : "";
+          if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving\u2026"; }
+          const fd = new FormData(form);
+          fd.set(pending.fieldName, pending.file);
+          fetch(form.action, { method: "POST", body: fd, credentials: "same-origin" })
+            .then(resp => {
+              if (!resp.ok) throw new Error("Server returned " + resp.status);
+              pendingByForm.delete(form);
+              window.location.reload();
+            })
+            .catch(err => {
+              if (pending.indicator) {
+                pending.indicator.textContent = "Couldn't save the photo (" + err.message + ") — try again";
+              }
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
+            });
+        }, true);
       })();
     </script>
 
