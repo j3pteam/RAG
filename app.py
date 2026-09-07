@@ -2435,8 +2435,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .attach-btn:hover { color: var(--navy); background: var(--paper); }
     .attach-btn svg { width: 18px; height: 18px; }
-    .folder-btn {
+    .camera-input-btn {
       position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
+      background: transparent; border: none;
+      color: var(--muted); cursor: pointer;
+      width: 32px; height: 32px; border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      transition: all 0.2s ease; padding: 0;
+    }
+    .camera-input-btn:hover { color: var(--navy); background: var(--paper); }
+    .camera-input-btn svg { width: 18px; height: 18px; }
+    .camera-input-btn.unsupported { display: none; }
+    .folder-btn {
+      position: absolute; right: 7rem; top: 50%; transform: translateY(-50%);
       background: transparent; border: none;
       color: var(--muted); cursor: pointer;
       width: 32px; height: 32px; border-radius: 50%;
@@ -2465,7 +2476,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .attached-file button:hover { color: var(--rust); }
     .attached-file button svg { width: 14px; height: 14px; }
     input[type="text"] {
-      flex: 1; padding: 0.85rem 7.6rem 0.85rem 1.1rem;
+      flex: 1; padding: 0.85rem 9.6rem 0.85rem 1.1rem;
       border: 1px solid var(--line); border-radius: 2px;
       font-size: 0.95rem; font-family: inherit; outline: none;
       background: var(--paper); color: var(--text); width: 100%;
@@ -2500,12 +2511,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
       border: 5px solid transparent; border-top-color: var(--navy);
     }
     /* Anchored under each button, which sits at a fixed offset from the right */
-    .folder-tip { right: 4.2rem; }
+    .folder-tip { right: 6.2rem; }
     .folder-tip::after { right: 18px; }
+    .camera-tip { right: 4.2rem; }
+    .camera-tip::after { right: 18px; }
     .attach-tip { right: 2.2rem; }
     .attach-tip::after { right: 18px; }
     .folder-btn:hover ~ .folder-tip,
     .folder-btn:focus-visible ~ .folder-tip,
+    .camera-input-btn:hover ~ .camera-tip,
+    .camera-input-btn:focus-visible ~ .camera-tip,
     .attach-btn:hover ~ .attach-tip,
     .attach-btn:focus-visible ~ .attach-tip {
       opacity: 1; visibility: visible; transform: translateY(0);
@@ -2573,6 +2588,34 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .voice-hint.cancel .voice-timer { color: #fff; }
     @media (max-width: 640px) {
       .voice-hint { margin: 0 1rem 0.45rem; font-size: 0.76rem; }
+    }
+
+    /* Camera capture — an alternative to browsing for a file, on any
+       device with a camera (a phone's camera, or a laptop's webcam) */
+    .camera-overlay {
+      position: fixed; inset: 0; background: rgba(39,51,74,0.7);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1100; padding: 1.25rem;
+    }
+    .camera-overlay[hidden] { display: none; }
+    .camera-box {
+      background: #fff; border-radius: 4px; max-width: 480px; width: 100%;
+      box-shadow: 0 20px 60px rgba(39,51,74,0.35); padding: 1.4rem;
+    }
+    .camera-box h3 {
+      margin: 0 0 0.9rem; font-size: 0.82rem; font-weight: 500;
+      letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
+    }
+    .camera-frame {
+      background: var(--navy); border-radius: 3px; overflow: hidden;
+      aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center;
+    }
+    .camera-frame video, .camera-frame img {
+      width: 100%; height: 100%; object-fit: cover; display: block;
+    }
+    .camera-actions {
+      display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem;
+      flex-wrap: wrap;
     }
 
     @keyframes pulse {
@@ -2766,6 +2809,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </div>
   {% endif %}
 
+  <div id="camera-overlay" class="camera-overlay" hidden>
+    <div class="camera-box">
+      <h3>Take a photo</h3>
+      <p class="muted" id="camera-error" style="display: none; color: var(--rust);"></p>
+      <div class="camera-frame">
+        <video id="camera-video" autoplay playsinline muted></video>
+        <img id="camera-preview-img" alt="" hidden />
+      </div>
+      <canvas id="camera-canvas" hidden></canvas>
+      <div class="camera-actions">
+        <button type="button" id="camera-cancel-btn" class="ack-secondary" style="width: auto; margin-top: 0;">Cancel</button>
+        <button type="button" id="camera-capture-btn" class="cta-btn" role="button" style="position: static;">Capture</button>
+        <button type="button" id="camera-retake-btn" class="ack-secondary" hidden style="width: auto; margin-top: 0;">Retake</button>
+        <button type="button" id="camera-use-btn" class="cta-btn" role="button" hidden style="position: static;">Use this photo</button>
+      </div>
+    </div>
+  </div>
+
   <header>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
@@ -2851,6 +2912,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
           </svg>
         </button>
         <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
+        <button type="button" id="camera-input-btn" class="camera-input-btn" aria-label="Take a photo" title="Take a photo with your camera">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+            <circle cx="12" cy="13" r="4"/>
+          </svg>
+        </button>
+        <span class="input-tip camera-tip" id="camera-tip" role="tooltip">Take a photo with your camera</span>
         <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
@@ -5740,6 +5808,126 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
     }
   </script>
+
+    <script>
+      // ---------------------------------------------------------------
+      // Camera capture for the composer — an alternative to browsing for
+      // a file, on any device with a camera. Captured photos feed into
+      // the exact same #file-input the paperclip button already uses, so
+      // every existing validation/attachment rule applies unchanged —
+      // this only ever supplies a normal image file, nothing bypasses
+      // the size checks, the format checks, or the attachment pill UI.
+      // ---------------------------------------------------------------
+      (function() {
+        const cameraBtn = document.getElementById("camera-input-btn");
+        const overlay = document.getElementById("camera-overlay");
+        if (!cameraBtn || !overlay) return;
+        const video = document.getElementById("camera-video");
+        const previewImg = document.getElementById("camera-preview-img");
+        const canvas = document.getElementById("camera-canvas");
+        const errorEl = document.getElementById("camera-error");
+        const captureBtn = document.getElementById("camera-capture-btn");
+        const retakeBtn = document.getElementById("camera-retake-btn");
+        const useBtn = document.getElementById("camera-use-btn");
+        const cancelBtn = document.getElementById("camera-cancel-btn");
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          // No camera API at all (very old browser, or a non-HTTPS context)
+          // — hide the option rather than offer a button that can't work.
+          cameraBtn.classList.add("unsupported");
+          return;
+        }
+
+        let stream = null;
+        let capturedBlob = null;
+        let previewUrl = null;
+
+        function showError(msg) {
+          errorEl.textContent = msg;
+          errorEl.style.display = "block";
+        }
+
+        function resetToLive() {
+          video.hidden = false;
+          previewImg.hidden = true;
+          captureBtn.hidden = false;
+          retakeBtn.hidden = true;
+          useBtn.hidden = true;
+          capturedBlob = null;
+          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+        }
+
+        function closeCamera() {
+          if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+          }
+          video.srcObject = null;
+          overlay.hidden = true;
+          errorEl.style.display = "none";
+          resetToLive();
+        }
+
+        function openCamera() {
+          overlay.hidden = false;
+          resetToLive();
+          errorEl.style.display = "none";
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+            .then(s => { stream = s; video.srcObject = s; })
+            .catch(err => {
+              showError("Couldn't access the camera (" + (err.message || err.name)
+                       + "). Check the browser's camera permission, or attach a photo instead.");
+              captureBtn.hidden = true;
+            });
+        }
+
+        cameraBtn.addEventListener("click", openCamera);
+
+        captureBtn.addEventListener("click", () => {
+          if (!video.videoWidth) return;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.getContext("2d").drawImage(video, 0, 0);
+          canvas.toBlob(blob => {
+            if (!blob) return;
+            capturedBlob = blob;
+            previewUrl = URL.createObjectURL(blob);
+            previewImg.src = previewUrl;
+            video.hidden = true;
+            previewImg.hidden = false;
+            captureBtn.hidden = true;
+            retakeBtn.hidden = false;
+            useBtn.hidden = false;
+          }, "image/jpeg", 0.92);
+        });
+
+        retakeBtn.addEventListener("click", resetToLive);
+
+        useBtn.addEventListener("click", () => {
+          if (capturedBlob) {
+            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+            const file = new File([capturedBlob], "photo-" + stamp + ".jpg", { type: "image/jpeg" });
+            const targetInput = document.getElementById("file-input");
+            try {
+              const dt = new DataTransfer();
+              dt.items.add(file);
+              targetInput.files = dt.files;
+              // Fires #file-input's own change handler — the same one the
+              // paperclip button uses — so validation and the attachment
+              // pill work exactly as they already do for a browsed file.
+              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
+            } catch (e) {
+              showError("This browser can't attach the photo automatically — attach a photo the usual way instead.");
+              return;
+            }
+          }
+          closeCamera();
+        });
+
+        cancelBtn.addEventListener("click", closeCamera);
+        overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
+      })();
+    </script>
 </body>
 </html>
 """
