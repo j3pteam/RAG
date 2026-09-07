@@ -5488,6 +5488,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         errorEl.textContent = msg;
         errorEl.style.display = "block";
       }
+      function dataURLToBlob(dataUrl) {
+        const parts = dataUrl.split(",");
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+        const binary = atob(parts[1]);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+        return new Blob([bytes], { type: mime });
+      }
       function resetToLive() {
         video.hidden = false;
         previewImg.hidden = true;
@@ -5496,7 +5505,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         retakeBtn.hidden = true;
         useBtn.hidden = true;
         capturedBlob = null;
-        if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+        previewUrl = null;
       }
       function closeCamera() {
         if (camStream) {
@@ -5531,6 +5540,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cameraBtn.addEventListener("click", openCamera);
 
       captureBtn.addEventListener("click", () => {
+        // Fully synchronous, start to finish (toDataURL, not toBlob) so
+        // nothing here can fail silently in an async callback outside
+        // this try/catch — that was the actual bug: toBlob's callback
+        // runs later, on its own, where an error here had nowhere to go.
         try {
           if (!video.videoWidth || !video.videoHeight) {
             showCamError("The camera preview isn't ready yet — give it a second and try Capture again.");
@@ -5544,21 +5557,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
             return;
           }
           ctx.drawImage(video, 0, 0);
-          canvas.toBlob(blob => {
-            if (!blob) {
-              showCamError("Couldn't capture that photo — try again, or attach a saved photo instead.");
-              return;
-            }
-            capturedBlob = blob;
-            previewUrl = URL.createObjectURL(blob);
-            previewImg.src = previewUrl;
-            video.hidden = true;
-            previewImg.hidden = false;
-            if (confirmText) confirmText.hidden = false;
-            captureBtn.hidden = true;
-            retakeBtn.hidden = false;
-            useBtn.hidden = false;
-          }, "image/jpeg", 0.92);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+          if (!dataUrl || dataUrl === "data:,") {
+            showCamError("Couldn't capture that photo — try again, or attach a saved photo instead.");
+            return;
+          }
+          capturedBlob = dataURLToBlob(dataUrl);
+          previewUrl = dataUrl;
+          previewImg.src = previewUrl;
+          video.hidden = true;
+          previewImg.hidden = false;
+          if (confirmText) confirmText.hidden = false;
+          captureBtn.hidden = true;
+          retakeBtn.hidden = false;
+          useBtn.hidden = false;
         } catch (err) {
           showCamError("Couldn't capture that photo (" + (err.message || err.name)
                    + ") — try again, or attach a saved photo instead.");
@@ -12184,6 +12196,15 @@ input[type="file"], input[type="text"] {
           errorEl.textContent = msg;
           errorEl.style.display = "block";
         }
+        function dataURLToBlob(dataUrl) {
+          const parts = dataUrl.split(",");
+          const mimeMatch = parts[0].match(/:(.*?);/);
+          const mime = mimeMatch ? mimeMatch[1] : "image/jpeg";
+          const binary = atob(parts[1]);
+          const bytes = new Uint8Array(binary.length);
+          for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          return new Blob([bytes], { type: mime });
+        }
 
         function resetToLive() {
           video.hidden = false;
@@ -12193,7 +12214,7 @@ input[type="file"], input[type="text"] {
           retakeBtn.hidden = true;
           useBtn.hidden = true;
           capturedBlob = null;
-          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+          previewUrl = null;
         }
 
         function closeCamera() {
@@ -12235,6 +12256,10 @@ input[type="file"], input[type="text"] {
         }
 
         captureBtn.addEventListener("click", () => {
+          // Fully synchronous, start to finish (toDataURL, not toBlob) so
+          // nothing here can fail silently in an async callback outside
+          // this try/catch — that was the actual bug: toBlob's callback
+          // runs later, on its own, where an error here had nowhere to go.
           try {
             if (!video.videoWidth || !video.videoHeight) {
               showError("The camera preview isn't ready yet — give it a second and try Capture again.");
@@ -12248,21 +12273,20 @@ input[type="file"], input[type="text"] {
               return;
             }
             ctx.drawImage(video, 0, 0);
-            canvas.toBlob(blob => {
-              if (!blob) {
-                showError("Couldn't capture that photo — try again, or use Choose File instead.");
-                return;
-              }
-              capturedBlob = blob;
-              previewUrl = URL.createObjectURL(blob);
-              previewImg.src = previewUrl;
-              video.hidden = true;
-              previewImg.hidden = false;
-              if (confirmText) confirmText.hidden = false;
-              captureBtn.hidden = true;
-              retakeBtn.hidden = false;
-              useBtn.hidden = false;
-            }, "image/jpeg", 0.92);
+            const dataUrl = canvas.toDataURL("image/jpeg", 0.92);
+            if (!dataUrl || dataUrl === "data:,") {
+              showError("Couldn't capture that photo — try again, or use Choose File instead.");
+              return;
+            }
+            capturedBlob = dataURLToBlob(dataUrl);
+            previewUrl = dataUrl;
+            previewImg.src = previewUrl;
+            video.hidden = true;
+            previewImg.hidden = false;
+            if (confirmText) confirmText.hidden = false;
+            captureBtn.hidden = true;
+            retakeBtn.hidden = false;
+            useBtn.hidden = false;
           } catch (err) {
             showError("Couldn't capture that photo (" + (err.message || err.name)
                      + ") — try again, or use Choose File instead.");
