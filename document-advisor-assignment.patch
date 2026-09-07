@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..090e645 100644
+index 4b5a702..47f36cd 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -681,7 +681,7 @@ index 4b5a702..090e645 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -5028,6 +5445,120 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5445,143 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -745,7 +745,14 @@ index 4b5a702..090e645 100644
 +        resetToLive();
 +        errorEl.style.display = "none";
 +        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-+          .then(s => { camStream = s; video.srcObject = s; })
++          .then(s => {
++            camStream = s;
++            video.srcObject = s;
++            // Some browsers report videoWidth as 0 until playback actually
++            // starts, even though getUserMedia already resolved — wait for
++            // that instead of assuming the stream is immediately readable.
++            video.onloadedmetadata = () => { video.play().catch(() => {}); };
++          })
 +          .catch(err => {
 +            showCamError("Couldn't access the camera (" + (err.message || err.name)
 +                     + "). Check the browser's camera permission, or attach a photo instead.");
@@ -756,21 +763,37 @@ index 4b5a702..090e645 100644
 +      cameraBtn.addEventListener("click", openCamera);
 +
 +      captureBtn.addEventListener("click", () => {
-+        if (!video.videoWidth) return;
-+        canvas.width = video.videoWidth;
-+        canvas.height = video.videoHeight;
-+        canvas.getContext("2d").drawImage(video, 0, 0);
-+        canvas.toBlob(blob => {
-+          if (!blob) return;
-+          capturedBlob = blob;
-+          previewUrl = URL.createObjectURL(blob);
-+          previewImg.src = previewUrl;
-+          video.hidden = true;
-+          previewImg.hidden = false;
-+          captureBtn.hidden = true;
-+          retakeBtn.hidden = false;
-+          useBtn.hidden = false;
-+        }, "image/jpeg", 0.92);
++        try {
++          if (!video.videoWidth || !video.videoHeight) {
++            showCamError("The camera preview isn't ready yet — give it a second and try Capture again.");
++            return;
++          }
++          canvas.width = video.videoWidth;
++          canvas.height = video.videoHeight;
++          const ctx = canvas.getContext("2d");
++          if (!ctx) {
++            showCamError("This browser can't process the photo — attach a saved photo instead.");
++            return;
++          }
++          ctx.drawImage(video, 0, 0);
++          canvas.toBlob(blob => {
++            if (!blob) {
++              showCamError("Couldn't capture that photo — try again, or attach a saved photo instead.");
++              return;
++            }
++            capturedBlob = blob;
++            previewUrl = URL.createObjectURL(blob);
++            previewImg.src = previewUrl;
++            video.hidden = true;
++            previewImg.hidden = false;
++            captureBtn.hidden = true;
++            retakeBtn.hidden = false;
++            useBtn.hidden = false;
++          }, "image/jpeg", 0.92);
++        } catch (err) {
++          showCamError("Couldn't capture that photo (" + (err.message || err.name)
++                   + ") — try again, or attach a saved photo instead.");
++        }
 +      });
 +
 +      retakeBtn.addEventListener("click", resetToLive);
@@ -802,7 +825,7 @@ index 4b5a702..090e645 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5823,7 +6354,7 @@ def _did_request(text: str):
+@@ -5823,7 +6377,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -811,7 +834,7 @@ index 4b5a702..090e645 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6461,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6484,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -853,7 +876,7 @@ index 4b5a702..090e645 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6502,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6525,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -862,7 +885,7 @@ index 4b5a702..090e645 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6533,23 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6556,23 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -886,7 +909,7 @@ index 4b5a702..090e645 100644
      conn.commit()
  
  
-@@ -5993,8 +6564,8 @@ def advisors_with_detail():
+@@ -5993,8 +6587,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -897,7 +920,7 @@ index 4b5a702..090e645 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6580,23 @@ def list_advisors():
+@@ -6009,13 +6603,23 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -924,7 +947,7 @@ index 4b5a702..090e645 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6613,18 @@ def get_advisor(slug: str):
+@@ -6032,11 +6636,18 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -946,7 +969,7 @@ index 4b5a702..090e645 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,6 +6632,20 @@ def get_advisor(slug: str):
+@@ -6044,6 +6655,20 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -967,7 +990,7 @@ index 4b5a702..090e645 100644
  def get_advisor_photo(slug: str):
      conn = _settings_db_conn()
      if not conn:
-@@ -6065,7 +6667,15 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6690,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -984,7 +1007,7 @@ index 4b5a702..090e645 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6702,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6725,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -1005,7 +1028,7 @@ index 4b5a702..090e645 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +6872,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +6895,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1014,7 +1037,7 @@ index 4b5a702..090e645 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,77 +6921,396 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,65 +6944,384 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1196,20 +1219,10 @@ index 4b5a702..090e645 100644
 -        cur = dict(session.get("profile_fallback") or {})
 -        cur.update(fields)
 -        session["profile_fallback"] = cur
--        return True
 +        return session.get("personality") or {}
-     try:
--        _profile_ensure_table(conn)
--        cols = ", ".join(fields.keys())
--        marks = ", ".join(["%s"] * len(fields))
--        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
++    try:
 +        _personality_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute(f"""
--                INSERT INTO participant_profile (token, {cols})
--                VALUES (%s, {marks})
--                ON CONFLICT (token) DO UPDATE
--                SET {updates}, updated_at = NOW()
++        with conn.cursor() as cur:
 +            cur.execute("""
 +                SELECT openness, conscientiousness, extraversion,
 +                       agreeableness, stability
@@ -1443,22 +1456,10 @@ index 4b5a702..090e645 100644
 +        cur = dict(session.get("profile_fallback") or {})
 +        cur.update(fields)
 +        session["profile_fallback"] = cur
-+        return True
-+    try:
-+        _profile_ensure_table(conn)
-+        cols = ", ".join(fields.keys())
-+        marks = ", ".join(["%s"] * len(fields))
-+        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)
-+        with conn.cursor() as cur:
-+            cur.execute(f"""
-+                INSERT INTO participant_profile (token, {cols})
-+                VALUES (%s, {marks})
-+                ON CONFLICT (token) DO UPDATE
-+                SET {updates}, updated_at = NOW()
-             """, (participant_token(), *fields.values()))
-         conn.commit()
          return True
-@@ -6762,10 +7705,35 @@ def build_briefing() -> str:
+     try:
+         _profile_ensure_table(conn)
+@@ -6762,10 +7728,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -1495,7 +1496,7 @@ index 4b5a702..090e645 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,12 +7757,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7780,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -1517,7 +1518,7 @@ index 4b5a702..090e645 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7826,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7849,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -1638,7 +1639,7 @@ index 4b5a702..090e645 100644
              keep.append(r)
      return keep
  
-@@ -7107,14 +8175,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +8198,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -1677,7 +1678,7 @@ index 4b5a702..090e645 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8214,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8237,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -1689,7 +1690,7 @@ index 4b5a702..090e645 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8231,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8254,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -1698,7 +1699,7 @@ index 4b5a702..090e645 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7154,17 +8240,26 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,17 +8263,26 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -1727,7 +1728,7 @@ index 4b5a702..090e645 100644
      )
  
  
-@@ -7173,6 +8268,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8291,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -1740,7 +1741,7 @@ index 4b5a702..090e645 100644
      return _render_chat()
  
  
-@@ -7182,6 +8283,7 @@ def index():
+@@ -7182,6 +8306,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -1748,7 +1749,7 @@ index 4b5a702..090e645 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8377,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8400,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -1756,7 +1757,7 @@ index 4b5a702..090e645 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7506,7 +8609,7 @@ def chat():
+@@ -7506,7 +8632,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -1765,7 +1766,7 @@ index 4b5a702..090e645 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7918,12 +9021,14 @@ def chat():
+@@ -7918,12 +9044,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -1780,7 +1781,7 @@ index 4b5a702..090e645 100644
          )
  
      try:
-@@ -8207,12 +9312,13 @@ def chat():
+@@ -8207,12 +9335,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -1795,7 +1796,7 @@ index 4b5a702..090e645 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9383,28 @@ def acknowledge_release():
+@@ -8277,6 +9406,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -1824,7 +1825,7 @@ index 4b5a702..090e645 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +9483,12 @@ def feedback():
+@@ -8355,12 +9506,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -1839,7 +1840,7 @@ index 4b5a702..090e645 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +9742,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +9765,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -1850,7 +1851,7 @@ index 4b5a702..090e645 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +9950,23 @@ def advisor_avatar():
+@@ -8820,8 +9973,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -1875,7 +1876,7 @@ index 4b5a702..090e645 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +9984,38 @@ def advisor_avatar():
+@@ -8839,28 +10007,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -1932,7 +1933,7 @@ index 4b5a702..090e645 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9089,15 +10244,70 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +10267,70 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1979,9 +1980,6 @@ index 4b5a702..090e645 100644
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
--.section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
--.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
--.stat { flex: 1; }
 +
 +/* Top-level tabs — five groups instead of eight stacked sections */
 +.tabs {
@@ -2000,13 +1998,15 @@ index 4b5a702..090e645 100644
 +.tab-pane.active { display: block; }
 +.tab-pane .group-heading:first-child { margin-top: 0; }
 +
-+.section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
+ .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
+-.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; }
+-.stat { flex: 1; }
 +.stats { display: flex; gap: 2rem; margin-bottom: 0.5rem; flex-wrap: wrap; }
 +.stat { flex: 1; min-width: 90px; }
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +10333,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10356,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -2017,7 +2017,7 @@ index 4b5a702..090e645 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10345,13 @@ form.upload {
+@@ -9133,8 +10368,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -2033,7 +2033,7 @@ index 4b5a702..090e645 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10387,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10410,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -2053,10 +2053,12 @@ index 4b5a702..090e645 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10456,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,8 +10479,25 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
+-.truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+-    .expand-btn {
 +
 +/* Per-document advisor assignment — click the "Base" label to reassign */
 +.btn-small { padding: 0.25rem 0.6rem; font-size: 0.68rem; margin-top: 0.5rem; }
@@ -2074,10 +2076,12 @@ index 4b5a702..090e645 100644
 +.kb-owner-option {
 +  display: block; font-size: 0.78rem; padding: 0.15rem 0; cursor: pointer;
 +}
- .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-     .expand-btn {
++.truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
++    .expand-btn {
        background: transparent;
-@@ -9324,13 +10571,186 @@ input[type="file"], input[type="text"] {
+       border: 1px solid var(--line);
+       color: var(--navy);
+@@ -9324,13 +10594,186 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -2265,7 +2269,7 @@ index 4b5a702..090e645 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10784,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10807,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2318,7 +2322,7 @@ index 4b5a702..090e645 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10839,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10862,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2353,7 +2357,7 @@ index 4b5a702..090e645 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10876,48 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10899,48 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2413,7 +2417,7 @@ index 4b5a702..090e645 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10926,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10949,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2424,7 +2428,7 @@ index 4b5a702..090e645 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10977,16 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +11000,16 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2443,7 +2447,7 @@ index 4b5a702..090e645 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10995,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +11018,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2488,7 +2492,7 @@ index 4b5a702..090e645 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11062,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +11085,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2518,7 +2522,7 @@ index 4b5a702..090e645 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +11125,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +11148,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2549,7 +2553,7 @@ index 4b5a702..090e645 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +11168,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +11191,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2559,7 +2563,7 @@ index 4b5a702..090e645 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11333,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11356,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -2574,7 +2578,7 @@ index 4b5a702..090e645 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11375,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11398,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2583,7 +2587,7 @@ index 4b5a702..090e645 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11404,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11427,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2601,7 +2605,7 @@ index 4b5a702..090e645 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11466,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11489,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2629,7 +2633,7 @@ index 4b5a702..090e645 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11674,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11697,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2639,7 +2643,7 @@ index 4b5a702..090e645 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11695,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11718,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2662,7 +2666,7 @@ index 4b5a702..090e645 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11828,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11851,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2673,7 +2677,7 @@ index 4b5a702..090e645 100644
  
  </div>
  
-@@ -10478,6 +12059,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +12082,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2689,7 +2693,7 @@ index 4b5a702..090e645 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +12078,228 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +12101,251 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2795,7 +2799,14 @@ index 4b5a702..090e645 100644
 +            return;
 +          }
 +          navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-+            .then(s => { stream = s; video.srcObject = s; })
++            .then(s => {
++              stream = s;
++              video.srcObject = s;
++              // Some browsers report videoWidth as 0 until playback actually
++              // starts, even though getUserMedia already resolved — wait for
++              // that instead of assuming the stream is immediately readable.
++              video.onloadedmetadata = () => { video.play().catch(() => {}); };
++            })
 +            .catch(err => {
 +              showError("Couldn't access the camera (" + (err.message || err.name)
 +                       + "). Check the browser's camera permission, or use Choose File instead.");
@@ -2804,21 +2815,37 @@ index 4b5a702..090e645 100644
 +        }
 +
 +        captureBtn.addEventListener("click", () => {
-+          if (!video.videoWidth) return;
-+          canvas.width = video.videoWidth;
-+          canvas.height = video.videoHeight;
-+          canvas.getContext("2d").drawImage(video, 0, 0);
-+          canvas.toBlob(blob => {
-+            if (!blob) return;
-+            capturedBlob = blob;
-+            previewUrl = URL.createObjectURL(blob);
-+            previewImg.src = previewUrl;
-+            video.hidden = true;
-+            previewImg.hidden = false;
-+            captureBtn.hidden = true;
-+            retakeBtn.hidden = false;
-+            useBtn.hidden = false;
-+          }, "image/jpeg", 0.92);
++          try {
++            if (!video.videoWidth || !video.videoHeight) {
++              showError("The camera preview isn't ready yet — give it a second and try Capture again.");
++              return;
++            }
++            canvas.width = video.videoWidth;
++            canvas.height = video.videoHeight;
++            const ctx = canvas.getContext("2d");
++            if (!ctx) {
++              showError("This browser can't process the photo — use Choose File instead.");
++              return;
++            }
++            ctx.drawImage(video, 0, 0);
++            canvas.toBlob(blob => {
++              if (!blob) {
++                showError("Couldn't capture that photo — try again, or use Choose File instead.");
++                return;
++              }
++              capturedBlob = blob;
++              previewUrl = URL.createObjectURL(blob);
++              previewImg.src = previewUrl;
++              video.hidden = true;
++              previewImg.hidden = false;
++              captureBtn.hidden = true;
++              retakeBtn.hidden = false;
++              useBtn.hidden = false;
++            }, "image/jpeg", 0.92);
++          } catch (err) {
++            showError("Couldn't capture that photo (" + (err.message || err.name)
++                     + ") — try again, or use Choose File instead.");
++          }
 +        });
 +
 +        retakeBtn.addEventListener("click", resetToLive);
@@ -2918,7 +2945,7 @@ index 4b5a702..090e645 100644
  </body></html>"""
  
  
-@@ -10523,11 +12335,25 @@ def admin_dashboard():
+@@ -10523,11 +12381,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -2944,7 +2971,7 @@ index 4b5a702..090e645 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +12361,12 @@ def admin_dashboard():
+@@ -10535,7 +12407,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2958,7 +2985,7 @@ index 4b5a702..090e645 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +12376,23 @@ def admin_dashboard():
+@@ -10545,9 +12422,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2982,7 +3009,7 @@ index 4b5a702..090e645 100644
      )
  
  
-@@ -10631,15 +12476,34 @@ def admin_save_advisor():
+@@ -10631,15 +12522,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -3022,7 +3049,7 @@ index 4b5a702..090e645 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12536,14 @@ def admin_settings():
+@@ -10672,21 +12582,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -3046,7 +3073,7 @@ index 4b5a702..090e645 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +13017,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +13063,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

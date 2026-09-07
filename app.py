@@ -5505,7 +5505,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
         resetToLive();
         errorEl.style.display = "none";
         navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-          .then(s => { camStream = s; video.srcObject = s; })
+          .then(s => {
+            camStream = s;
+            video.srcObject = s;
+            // Some browsers report videoWidth as 0 until playback actually
+            // starts, even though getUserMedia already resolved — wait for
+            // that instead of assuming the stream is immediately readable.
+            video.onloadedmetadata = () => { video.play().catch(() => {}); };
+          })
           .catch(err => {
             showCamError("Couldn't access the camera (" + (err.message || err.name)
                      + "). Check the browser's camera permission, or attach a photo instead.");
@@ -5516,21 +5523,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cameraBtn.addEventListener("click", openCamera);
 
       captureBtn.addEventListener("click", () => {
-        if (!video.videoWidth) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext("2d").drawImage(video, 0, 0);
-        canvas.toBlob(blob => {
-          if (!blob) return;
-          capturedBlob = blob;
-          previewUrl = URL.createObjectURL(blob);
-          previewImg.src = previewUrl;
-          video.hidden = true;
-          previewImg.hidden = false;
-          captureBtn.hidden = true;
-          retakeBtn.hidden = false;
-          useBtn.hidden = false;
-        }, "image/jpeg", 0.92);
+        try {
+          if (!video.videoWidth || !video.videoHeight) {
+            showCamError("The camera preview isn't ready yet — give it a second and try Capture again.");
+            return;
+          }
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            showCamError("This browser can't process the photo — attach a saved photo instead.");
+            return;
+          }
+          ctx.drawImage(video, 0, 0);
+          canvas.toBlob(blob => {
+            if (!blob) {
+              showCamError("Couldn't capture that photo — try again, or attach a saved photo instead.");
+              return;
+            }
+            capturedBlob = blob;
+            previewUrl = URL.createObjectURL(blob);
+            previewImg.src = previewUrl;
+            video.hidden = true;
+            previewImg.hidden = false;
+            captureBtn.hidden = true;
+            retakeBtn.hidden = false;
+            useBtn.hidden = false;
+          }, "image/jpeg", 0.92);
+        } catch (err) {
+          showCamError("Couldn't capture that photo (" + (err.message || err.name)
+                   + ") — try again, or attach a saved photo instead.");
+        }
       });
 
       retakeBtn.addEventListener("click", resetToLive);
@@ -12180,7 +12203,14 @@ input[type="file"], input[type="text"] {
             return;
           }
           navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-            .then(s => { stream = s; video.srcObject = s; })
+            .then(s => {
+              stream = s;
+              video.srcObject = s;
+              // Some browsers report videoWidth as 0 until playback actually
+              // starts, even though getUserMedia already resolved — wait for
+              // that instead of assuming the stream is immediately readable.
+              video.onloadedmetadata = () => { video.play().catch(() => {}); };
+            })
             .catch(err => {
               showError("Couldn't access the camera (" + (err.message || err.name)
                        + "). Check the browser's camera permission, or use Choose File instead.");
@@ -12189,21 +12219,37 @@ input[type="file"], input[type="text"] {
         }
 
         captureBtn.addEventListener("click", () => {
-          if (!video.videoWidth) return;
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          canvas.getContext("2d").drawImage(video, 0, 0);
-          canvas.toBlob(blob => {
-            if (!blob) return;
-            capturedBlob = blob;
-            previewUrl = URL.createObjectURL(blob);
-            previewImg.src = previewUrl;
-            video.hidden = true;
-            previewImg.hidden = false;
-            captureBtn.hidden = true;
-            retakeBtn.hidden = false;
-            useBtn.hidden = false;
-          }, "image/jpeg", 0.92);
+          try {
+            if (!video.videoWidth || !video.videoHeight) {
+              showError("The camera preview isn't ready yet — give it a second and try Capture again.");
+              return;
+            }
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            const ctx = canvas.getContext("2d");
+            if (!ctx) {
+              showError("This browser can't process the photo — use Choose File instead.");
+              return;
+            }
+            ctx.drawImage(video, 0, 0);
+            canvas.toBlob(blob => {
+              if (!blob) {
+                showError("Couldn't capture that photo — try again, or use Choose File instead.");
+                return;
+              }
+              capturedBlob = blob;
+              previewUrl = URL.createObjectURL(blob);
+              previewImg.src = previewUrl;
+              video.hidden = true;
+              previewImg.hidden = false;
+              captureBtn.hidden = true;
+              retakeBtn.hidden = false;
+              useBtn.hidden = false;
+            }, "image/jpeg", 0.92);
+          } catch (err) {
+            showError("Couldn't capture that photo (" + (err.message || err.name)
+                     + ") — try again, or use Choose File instead.");
+          }
         });
 
         retakeBtn.addEventListener("click", resetToLive);
