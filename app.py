@@ -10855,7 +10855,7 @@ input[type="file"], input[type="text"] {
                  style="flex: 1 1 auto; min-width: 0;" />
           <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
                   style="background: transparent; color: var(--navy); border-color: var(--navy);
-                         white-space: nowrap; flex-shrink: 0;">Take Photo</button>
+                         white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
         </div>
         <button type="submit" class="btn">Save advisor</button>
         <div class="initials-preview-row" style="grid-column: 1 / -1;">
