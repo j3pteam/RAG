@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..3aebd79 100644
+index 4b5a702..090e645 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -1932,7 +1932,7 @@ index 4b5a702..3aebd79 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9089,15 +10244,69 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +10244,70 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -1971,6 +1971,7 @@ index 4b5a702..3aebd79 100644
 +  border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 9px;
 +  padding: 0.2rem 0.6rem; margin-top: 0.3rem;
 +}
++.camera-pending-indicator[hidden] { display: none; }
 +
  .group-heading {
    font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
@@ -2005,7 +2006,7 @@ index 4b5a702..3aebd79 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +10332,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10333,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -2016,7 +2017,7 @@ index 4b5a702..3aebd79 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10344,13 @@ form.upload {
+@@ -9133,8 +10345,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -2032,7 +2033,7 @@ index 4b5a702..3aebd79 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10386,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10387,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -2052,7 +2053,7 @@ index 4b5a702..3aebd79 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10455,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10456,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -2076,7 +2077,7 @@ index 4b5a702..3aebd79 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10570,186 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10571,186 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -2264,7 +2265,7 @@ index 4b5a702..3aebd79 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10783,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10784,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2317,7 +2318,7 @@ index 4b5a702..3aebd79 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10838,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10839,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2352,7 +2353,7 @@ index 4b5a702..3aebd79 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10875,48 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10876,48 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2412,7 +2413,7 @@ index 4b5a702..3aebd79 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10925,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10926,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2423,7 +2424,7 @@ index 4b5a702..3aebd79 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10976,16 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10977,16 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2442,7 +2443,7 @@ index 4b5a702..3aebd79 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10994,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10995,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2487,7 +2488,7 @@ index 4b5a702..3aebd79 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11061,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +11062,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2517,7 +2518,7 @@ index 4b5a702..3aebd79 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +11124,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +11125,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2548,7 +2549,7 @@ index 4b5a702..3aebd79 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +11167,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +11168,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2558,7 +2559,7 @@ index 4b5a702..3aebd79 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11332,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11333,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -2573,7 +2574,7 @@ index 4b5a702..3aebd79 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11374,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11375,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2582,7 +2583,7 @@ index 4b5a702..3aebd79 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11403,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11404,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2600,7 +2601,7 @@ index 4b5a702..3aebd79 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11465,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11466,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2628,7 +2629,7 @@ index 4b5a702..3aebd79 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11673,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11674,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2638,7 +2639,7 @@ index 4b5a702..3aebd79 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11694,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11695,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2661,7 +2662,7 @@ index 4b5a702..3aebd79 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11827,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11828,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2672,7 +2673,7 @@ index 4b5a702..3aebd79 100644
  
  </div>
  
-@@ -10478,6 +12058,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +12059,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2688,7 +2689,7 @@ index 4b5a702..3aebd79 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +12077,228 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +12078,228 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2917,7 +2918,7 @@ index 4b5a702..3aebd79 100644
  </body></html>"""
  
  
-@@ -10523,11 +12334,25 @@ def admin_dashboard():
+@@ -10523,11 +12335,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -2943,7 +2944,7 @@ index 4b5a702..3aebd79 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +12360,12 @@ def admin_dashboard():
+@@ -10535,7 +12361,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2957,7 +2958,7 @@ index 4b5a702..3aebd79 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +12375,23 @@ def admin_dashboard():
+@@ -10545,9 +12376,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2981,7 +2982,7 @@ index 4b5a702..3aebd79 100644
      )
  
  
-@@ -10631,15 +12475,34 @@ def admin_save_advisor():
+@@ -10631,15 +12476,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -3021,7 +3022,7 @@ index 4b5a702..3aebd79 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12535,14 @@ def admin_settings():
+@@ -10672,21 +12536,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -3045,7 +3046,7 @@ index 4b5a702..3aebd79 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +13016,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +13017,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

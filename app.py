@@ -10279,6 +10279,7 @@ header a:hover { color: var(--gold); }
   border: 1px solid rgba(210, 188, 141, 0.6); border-radius: 9px;
   padding: 0.2rem 0.6rem; margin-top: 0.3rem;
 }
+.camera-pending-indicator[hidden] { display: none; }
 
 .group-heading {
   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
