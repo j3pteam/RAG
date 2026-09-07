@@ -1953,6 +1953,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer; transition: all 0.18s ease;
     }
     .ack-secondary:hover { background: var(--gold); color: var(--navy); border-color: var(--gold); }
+    .ack-secondary[hidden] { display: none; }
 
     /* Five-question personality gate */
     .pq-row {
@@ -2613,6 +2614,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .camera-frame video, .camera-frame img {
       width: 100%; height: 100%; object-fit: cover; display: block;
     }
+    .camera-frame video[hidden], .camera-frame img[hidden] { display: none; }
     .camera-actions {
       display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem;
       flex-wrap: wrap;
@@ -2649,6 +2651,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                   box-shadow 0.2s ease, transform 0.12s ease;
     }
     .cta-btn { cursor: pointer; user-select: none; }
+    .cta-btn[hidden] { display: none; }
     .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
     .cta-btn:hover {
       background: var(--navy); color: var(--gold);
@@ -2817,6 +2820,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <video id="camera-video" autoplay playsinline muted></video>
         <img id="camera-preview-img" alt="" hidden />
       </div>
+      <p class="muted" id="camera-confirm-text" hidden style="margin: 0.6rem 0 0; font-size: 0.8rem;">
+        This photo will be attached to your message — Retake if you'd rather try again.
+      </p>
       <canvas id="camera-canvas" hidden></canvas>
       <div class="camera-actions">
         <button type="button" id="camera-cancel-btn" class="ack-secondary" style="width: auto; margin-top: 0;">Cancel</button>
@@ -5459,6 +5465,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       if (!cameraBtn || !overlay) return;
       const video = document.getElementById("camera-video");
       const previewImg = document.getElementById("camera-preview-img");
+      const confirmText = document.getElementById("camera-confirm-text");
       const canvas = document.getElementById("camera-canvas");
       const errorEl = document.getElementById("camera-error");
       const captureBtn = document.getElementById("camera-capture-btn");
@@ -5484,6 +5491,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       function resetToLive() {
         video.hidden = false;
         previewImg.hidden = true;
+        if (confirmText) confirmText.hidden = true;
         captureBtn.hidden = false;
         retakeBtn.hidden = true;
         useBtn.hidden = true;
@@ -5546,6 +5554,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             previewImg.src = previewUrl;
             video.hidden = true;
             previewImg.hidden = false;
+            if (confirmText) confirmText.hidden = false;
             captureBtn.hidden = true;
             retakeBtn.hidden = false;
             useBtn.hidden = false;
@@ -10291,6 +10300,7 @@ header a:hover { color: var(--gold); }
 .camera-frame video, .camera-frame img {
   width: 100%; height: 100%; object-fit: cover; display: block;
 }
+.camera-frame video[hidden], .camera-frame img[hidden] { display: none; }
 .camera-actions {
   display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem;
   flex-wrap: wrap;
@@ -10352,6 +10362,7 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
               margin-left: 0.3rem; letter-spacing: 0.05em; }
 .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
+.btn[hidden] { display: none; }
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
@@ -10602,6 +10613,9 @@ input[type="file"], input[type="text"] {
         <video id="camera-video" autoplay playsinline muted></video>
         <img id="camera-preview-img" alt="" hidden />
       </div>
+      <p class="muted" id="camera-confirm-text" hidden style="margin: 0.6rem 0 0; font-size: 0.8rem;">
+        This will replace the current photo once you click Save — Retake if you'd rather try again.
+      </p>
       <canvas id="camera-canvas" hidden></canvas>
       <div class="camera-actions">
         <button type="button" id="camera-cancel-btn" class="btn"
@@ -12152,6 +12166,7 @@ input[type="file"], input[type="text"] {
         if (!overlay) return;
         const video = document.getElementById("camera-video");
         const previewImg = document.getElementById("camera-preview-img");
+        const confirmText = document.getElementById("camera-confirm-text");
         const canvas = document.getElementById("camera-canvas");
         const errorEl = document.getElementById("camera-error");
         const captureBtn = document.getElementById("camera-capture-btn");
@@ -12173,6 +12188,7 @@ input[type="file"], input[type="text"] {
         function resetToLive() {
           video.hidden = false;
           previewImg.hidden = true;
+          if (confirmText) confirmText.hidden = true;
           captureBtn.hidden = false;
           retakeBtn.hidden = true;
           useBtn.hidden = true;
@@ -12242,6 +12258,7 @@ input[type="file"], input[type="text"] {
               previewImg.src = previewUrl;
               video.hidden = true;
               previewImg.hidden = false;
+              if (confirmText) confirmText.hidden = false;
               captureBtn.hidden = true;
               retakeBtn.hidden = false;
               useBtn.hidden = false;
