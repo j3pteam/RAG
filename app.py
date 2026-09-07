@@ -5445,6 +5445,120 @@ INDEX_HTML = r"""<!DOCTYPE html>
       refreshAttachmentChip();
     });
 
+    // -------------------------------------------------------------
+    // Camera capture — feeds directly into the same attachedFiles state
+    // the paperclip button above uses. Deliberately does NOT try to
+    // assign a synthetic FileList to fileInput.files via DataTransfer —
+    // that trick is unreliable on some browsers (notably Safari, where it
+    // can silently do nothing instead of throwing), which is exactly what
+    // made a captured photo appear to work but never actually attach.
+    // -------------------------------------------------------------
+    (function() {
+      const cameraBtn = document.getElementById("camera-input-btn");
+      const overlay = document.getElementById("camera-overlay");
+      if (!cameraBtn || !overlay) return;
+      const video = document.getElementById("camera-video");
+      const previewImg = document.getElementById("camera-preview-img");
+      const canvas = document.getElementById("camera-canvas");
+      const errorEl = document.getElementById("camera-error");
+      const captureBtn = document.getElementById("camera-capture-btn");
+      const retakeBtn = document.getElementById("camera-retake-btn");
+      const useBtn = document.getElementById("camera-use-btn");
+      const cancelBtn = document.getElementById("camera-cancel-btn");
+
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        // No camera API at all (very old browser, or a non-HTTPS context)
+        // — hide the option rather than offer a button that can't work.
+        cameraBtn.classList.add("unsupported");
+        return;
+      }
+
+      let camStream = null;
+      let capturedBlob = null;
+      let previewUrl = null;
+
+      function showCamError(msg) {
+        errorEl.textContent = msg;
+        errorEl.style.display = "block";
+      }
+      function resetToLive() {
+        video.hidden = false;
+        previewImg.hidden = true;
+        captureBtn.hidden = false;
+        retakeBtn.hidden = true;
+        useBtn.hidden = true;
+        capturedBlob = null;
+        if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+      }
+      function closeCamera() {
+        if (camStream) {
+          camStream.getTracks().forEach(t => t.stop());
+          camStream = null;
+        }
+        video.srcObject = null;
+        overlay.hidden = true;
+        errorEl.style.display = "none";
+        resetToLive();
+      }
+      function openCamera() {
+        overlay.hidden = false;
+        resetToLive();
+        errorEl.style.display = "none";
+        navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+          .then(s => { camStream = s; video.srcObject = s; })
+          .catch(err => {
+            showCamError("Couldn't access the camera (" + (err.message || err.name)
+                     + "). Check the browser's camera permission, or attach a photo instead.");
+            captureBtn.hidden = true;
+          });
+      }
+
+      cameraBtn.addEventListener("click", openCamera);
+
+      captureBtn.addEventListener("click", () => {
+        if (!video.videoWidth) return;
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        canvas.getContext("2d").drawImage(video, 0, 0);
+        canvas.toBlob(blob => {
+          if (!blob) return;
+          capturedBlob = blob;
+          previewUrl = URL.createObjectURL(blob);
+          previewImg.src = previewUrl;
+          video.hidden = true;
+          previewImg.hidden = false;
+          captureBtn.hidden = true;
+          retakeBtn.hidden = false;
+          useBtn.hidden = false;
+        }, "image/jpeg", 0.92);
+      });
+
+      retakeBtn.addEventListener("click", resetToLive);
+
+      useBtn.addEventListener("click", () => {
+        if (capturedBlob) {
+          if (capturedBlob.size > MAX_IMAGE_MB * 1024 * 1024) {
+            showCamError(`That photo is too large (over ${MAX_IMAGE_MB} MB) — try again with `
+                       + `more light, or attach a saved photo instead.`);
+            return;
+          }
+          const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+          const file = new File([capturedBlob], "photo-" + stamp + ".jpg", { type: "image/jpeg" });
+          // Straight into the same state the paperclip flow feeds — no
+          // dependency on the file input's own FileList at all.
+          attachedFiles = attachedFiles.concat([file]);
+          if (attachedFiles.length > MAX_ATTACHMENTS) {
+            attachedFiles = attachedFiles.slice(0, MAX_ATTACHMENTS);
+          }
+          refreshAttachmentChip();
+        }
+        closeCamera();
+      });
+
+      cancelBtn.addEventListener("click", closeCamera);
+      overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
+    })();
+
     folderInput.addEventListener("change", () => {
       const all = Array.from(folderInput.files || []);
       // Filter to documents only (images not supported in folder-attach mode)
@@ -5808,126 +5922,6 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
     }
   </script>
-
-    <script>
-      // ---------------------------------------------------------------
-      // Camera capture for the composer — an alternative to browsing for
-      // a file, on any device with a camera. Captured photos feed into
-      // the exact same #file-input the paperclip button already uses, so
-      // every existing validation/attachment rule applies unchanged —
-      // this only ever supplies a normal image file, nothing bypasses
-      // the size checks, the format checks, or the attachment pill UI.
-      // ---------------------------------------------------------------
-      (function() {
-        const cameraBtn = document.getElementById("camera-input-btn");
-        const overlay = document.getElementById("camera-overlay");
-        if (!cameraBtn || !overlay) return;
-        const video = document.getElementById("camera-video");
-        const previewImg = document.getElementById("camera-preview-img");
-        const canvas = document.getElementById("camera-canvas");
-        const errorEl = document.getElementById("camera-error");
-        const captureBtn = document.getElementById("camera-capture-btn");
-        const retakeBtn = document.getElementById("camera-retake-btn");
-        const useBtn = document.getElementById("camera-use-btn");
-        const cancelBtn = document.getElementById("camera-cancel-btn");
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          // No camera API at all (very old browser, or a non-HTTPS context)
-          // — hide the option rather than offer a button that can't work.
-          cameraBtn.classList.add("unsupported");
-          return;
-        }
-
-        let stream = null;
-        let capturedBlob = null;
-        let previewUrl = null;
-
-        function showError(msg) {
-          errorEl.textContent = msg;
-          errorEl.style.display = "block";
-        }
-
-        function resetToLive() {
-          video.hidden = false;
-          previewImg.hidden = true;
-          captureBtn.hidden = false;
-          retakeBtn.hidden = true;
-          useBtn.hidden = true;
-          capturedBlob = null;
-          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
-        }
-
-        function closeCamera() {
-          if (stream) {
-            stream.getTracks().forEach(t => t.stop());
-            stream = null;
-          }
-          video.srcObject = null;
-          overlay.hidden = true;
-          errorEl.style.display = "none";
-          resetToLive();
-        }
-
-        function openCamera() {
-          overlay.hidden = false;
-          resetToLive();
-          errorEl.style.display = "none";
-          navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
-            .then(s => { stream = s; video.srcObject = s; })
-            .catch(err => {
-              showError("Couldn't access the camera (" + (err.message || err.name)
-                       + "). Check the browser's camera permission, or attach a photo instead.");
-              captureBtn.hidden = true;
-            });
-        }
-
-        cameraBtn.addEventListener("click", openCamera);
-
-        captureBtn.addEventListener("click", () => {
-          if (!video.videoWidth) return;
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
-          canvas.getContext("2d").drawImage(video, 0, 0);
-          canvas.toBlob(blob => {
-            if (!blob) return;
-            capturedBlob = blob;
-            previewUrl = URL.createObjectURL(blob);
-            previewImg.src = previewUrl;
-            video.hidden = true;
-            previewImg.hidden = false;
-            captureBtn.hidden = true;
-            retakeBtn.hidden = false;
-            useBtn.hidden = false;
-          }, "image/jpeg", 0.92);
-        });
-
-        retakeBtn.addEventListener("click", resetToLive);
-
-        useBtn.addEventListener("click", () => {
-          if (capturedBlob) {
-            const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-            const file = new File([capturedBlob], "photo-" + stamp + ".jpg", { type: "image/jpeg" });
-            const targetInput = document.getElementById("file-input");
-            try {
-              const dt = new DataTransfer();
-              dt.items.add(file);
-              targetInput.files = dt.files;
-              // Fires #file-input's own change handler — the same one the
-              // paperclip button uses — so validation and the attachment
-              // pill work exactly as they already do for a browsed file.
-              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
-            } catch (e) {
-              showError("This browser can't attach the photo automatically — attach a photo the usual way instead.");
-              return;
-            }
-          }
-          closeCamera();
-        });
-
-        cancelBtn.addEventListener("click", closeCamera);
-        overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
-      })();
-    </script>
 </body>
 </html>
 """
