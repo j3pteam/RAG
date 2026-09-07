@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..98bd162 100644
+index 4b5a702..8e770e6 100644
 --- a/app.py
 +++ b/app.py
 @@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
@@ -1738,7 +1738,43 @@ index 4b5a702..98bd162 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9095,9 +10068,27 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +10062,63 @@ header a:hover { color: var(--gold); }
+ }
+ .confirm-cancel { background: transparent; color: var(--navy); }
+ #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
++
++/* Camera capture — takes a photo with the device's camera as an
++   alternative to browsing for a file */
++.camera-overlay {
++  position: fixed; inset: 0; background: rgba(39,51,74,0.7);
++  display: flex; align-items: center; justify-content: center;
++  z-index: 1100; padding: 1.25rem;
++}
++.camera-overlay[hidden] { display: none; }
++.camera-box {
++  background: #fff; border-radius: 4px; max-width: 480px; width: 100%;
++  box-shadow: 0 20px 60px rgba(39,51,74,0.35); padding: 1.4rem;
++}
++.camera-box h3 {
++  margin: 0 0 0.9rem; font-size: 0.82rem; font-weight: 500;
++  letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
++}
++.camera-frame {
++  background: var(--navy); border-radius: 3px; overflow: hidden;
++  aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center;
++}
++.camera-frame video, .camera-frame img {
++  width: 100%; height: 100%; object-fit: cover; display: block;
++}
++.camera-actions {
++  display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem;
++  flex-wrap: wrap;
++}
++.camera-btn { font-size: 0.66rem; }
++
+ .group-heading {
+   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
+   color: var(--navy); font-weight: 500;
    margin: 2.25rem 0 0.9rem; padding-bottom: 0.5rem;
    border-bottom: 2px solid var(--gold);
  }
@@ -1768,7 +1804,7 @@ index 4b5a702..98bd162 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9123,7 +10114,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9123,7 +10144,9 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
  .btn-danger:hover { background: #fff; color: var(--rust); }
  /* All three upload rows share one grid, so the field and the button line up
@@ -1779,7 +1815,7 @@ index 4b5a702..98bd162 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10126,13 @@ form.upload {
+@@ -9133,8 +10156,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -1795,7 +1831,7 @@ index 4b5a702..98bd162 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10168,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10198,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -1815,7 +1851,7 @@ index 4b5a702..98bd162 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10237,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10267,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -1839,10 +1875,30 @@ index 4b5a702..98bd162 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10352,166 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10382,186 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
++  <div id="camera-overlay" class="camera-overlay" hidden>
++    <div class="camera-box">
++      <h3>Take a photo</h3>
++      <p class="muted" id="camera-error" style="display: none; color: var(--rust);"></p>
++      <div class="camera-frame">
++        <video id="camera-video" autoplay playsinline muted></video>
++        <img id="camera-preview-img" alt="" hidden />
++      </div>
++      <canvas id="camera-canvas" hidden></canvas>
++      <div class="camera-actions">
++        <button type="button" id="camera-cancel-btn" class="btn"
++                style="background: transparent; color: var(--muted); border-color: var(--line);">Cancel</button>
++        <button type="button" id="camera-capture-btn" class="btn">Capture</button>
++        <button type="button" id="camera-retake-btn" class="btn" hidden
++                style="background: transparent; color: var(--navy); border-color: var(--navy);">Retake</button>
++        <button type="button" id="camera-use-btn" class="btn" hidden>Use this photo</button>
++      </div>
++    </div>
++  </div>
++
 +  {% macro doc_row(d, id_prefix="") %}
 +  <tr id="{{ id_prefix }}doc-row-{{ d.id }}">
 +    <td class="kb-title">{{ d.title }}</td>
@@ -2007,7 +2063,7 @@ index 4b5a702..98bd162 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10545,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +10595,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2060,7 +2116,7 @@ index 4b5a702..98bd162 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10600,27 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +10650,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2076,7 +2132,13 @@ index 4b5a702..98bd162 100644
 +            class="upload">
 +        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
 +               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-+        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
++        <div style="display: flex; gap: 0.4rem; align-items: center;">
++          <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
++                 style="flex: 1 1 auto; min-width: 0;" />
++          <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
++                  style="background: transparent; color: var(--navy); border-color: var(--navy);
++                         white-space: nowrap; flex-shrink: 0;">Take Photo</button>
++        </div>
 +        <button type="submit" class="btn">Save advisor</button>
 +        <div class="initials-preview-row" style="grid-column: 1 / -1;">
 +          <span id="initials-preview-new" class="initials-preview">?</span>
@@ -2088,7 +2150,7 @@ index 4b5a702..98bd162 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10630,45 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +10686,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2116,11 +2178,13 @@ index 4b5a702..98bd162 100644
 -              style="display: flex; gap: 0.5rem; align-items: center;
 -                     flex-wrap: wrap; margin-top: 0.5rem;">
 -          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif" required
-+          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
++          <input type="file" name="avatar" id="avatar-file-default" accept=".jpg,.jpeg,.png,.webp,.gif"
 +                 onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
 -          <button type="submit" class="btn" style="font-size: 0.66rem;">Upload photo</button>
++          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
++                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
 +          <label style="display: flex; align-items: center; gap: 0.4rem;
 +                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
 +                        margin-top: 0.2rem;">
@@ -2145,7 +2209,7 @@ index 4b5a702..98bd162 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10677,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +10735,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2156,22 +2220,25 @@ index 4b5a702..98bd162 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +10728,13 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +10786,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
 +                 oninput="document.getElementById('initials-preview-{{ adv.slug }}').textContent = initialsForPreview(this.value)"
                   style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-           <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
+-          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
++          <input type="file" name="photo" id="avatar-file-{{ adv.slug }}" accept=".jpg,.jpeg,.png,.webp,.gif"
 +                 onchange="if (this.files.length) this.form.querySelector('input[name=no_photo]').checked=false"
                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
 -          <button type="submit" class="btn" style="font-size: 0.66rem;">Save</button>
++          <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}"
++                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +10743,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +10803,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2216,7 +2283,7 @@ index 4b5a702..98bd162 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +10810,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +10870,23 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2246,7 +2313,7 @@ index 4b5a702..98bd162 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +10873,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +10933,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2277,7 +2344,7 @@ index 4b5a702..98bd162 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +10916,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +10976,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2287,7 +2354,7 @@ index 4b5a702..98bd162 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11081,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11141,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -2302,7 +2369,7 @@ index 4b5a702..98bd162 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11123,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11183,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2311,7 +2378,7 @@ index 4b5a702..98bd162 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11152,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11212,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2329,7 +2396,7 @@ index 4b5a702..98bd162 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11214,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11274,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2357,7 +2424,7 @@ index 4b5a702..98bd162 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11422,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +11482,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2367,7 +2434,7 @@ index 4b5a702..98bd162 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11443,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +11503,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2390,7 +2457,7 @@ index 4b5a702..98bd162 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11576,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +11636,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2401,7 +2468,7 @@ index 4b5a702..98bd162 100644
  
  </div>
  
-@@ -10478,6 +11807,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +11867,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2417,7 +2484,7 @@ index 4b5a702..98bd162 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +11826,59 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +11886,184 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -2445,6 +2512,131 @@ index 4b5a702..98bd162 100644
 +        if (core.length === 1) return core[0].slice(0, 3).toUpperCase();
 +        return (core[0][0] + core[core.length - 1][0]).toUpperCase();
 +      }
++    </script>
++
++    <script>
++      // ---------------------------------------------------------------
++      // Camera capture — an alternative to browsing for a file, on any
++      // device with a camera (a phone's camera, or a laptop's webcam).
++      // One shared modal, reused by every "Take Photo" button; each button
++      // says which file input to fill via data-target-input.
++      // ---------------------------------------------------------------
++      (function() {
++        const overlay = document.getElementById("camera-overlay");
++        if (!overlay) return;
++        const video = document.getElementById("camera-video");
++        const previewImg = document.getElementById("camera-preview-img");
++        const canvas = document.getElementById("camera-canvas");
++        const errorEl = document.getElementById("camera-error");
++        const captureBtn = document.getElementById("camera-capture-btn");
++        const retakeBtn = document.getElementById("camera-retake-btn");
++        const useBtn = document.getElementById("camera-use-btn");
++        const cancelBtn = document.getElementById("camera-cancel-btn");
++
++        let stream = null;
++        let targetInput = null;
++        let capturedBlob = null;
++        let previewUrl = null;
++
++        function showError(msg) {
++          errorEl.textContent = msg;
++          errorEl.style.display = "block";
++        }
++
++        function resetToLive() {
++          video.hidden = false;
++          previewImg.hidden = true;
++          captureBtn.hidden = false;
++          retakeBtn.hidden = true;
++          useBtn.hidden = true;
++          capturedBlob = null;
++          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
++        }
++
++        function closeCamera() {
++          if (stream) {
++            stream.getTracks().forEach(t => t.stop());
++            stream = null;
++          }
++          video.srcObject = null;
++          overlay.hidden = true;
++          targetInput = null;
++          errorEl.style.display = "none";
++          resetToLive();
++        }
++
++        function openCamera(inputEl) {
++          targetInput = inputEl;
++          overlay.hidden = false;
++          resetToLive();
++          errorEl.style.display = "none";
++          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
++            showError("This browser can't access the camera here. Use Choose File instead.");
++            captureBtn.hidden = true;
++            return;
++          }
++          navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
++            .then(s => { stream = s; video.srcObject = s; })
++            .catch(err => {
++              showError("Couldn't access the camera (" + (err.message || err.name)
++                       + "). Check the browser's camera permission, or use Choose File instead.");
++              captureBtn.hidden = true;
++            });
++        }
++
++        captureBtn.addEventListener("click", () => {
++          if (!video.videoWidth) return;
++          canvas.width = video.videoWidth;
++          canvas.height = video.videoHeight;
++          canvas.getContext("2d").drawImage(video, 0, 0);
++          canvas.toBlob(blob => {
++            if (!blob) return;
++            capturedBlob = blob;
++            previewUrl = URL.createObjectURL(blob);
++            previewImg.src = previewUrl;
++            video.hidden = true;
++            previewImg.hidden = false;
++            captureBtn.hidden = true;
++            retakeBtn.hidden = false;
++            useBtn.hidden = false;
++          }, "image/jpeg", 0.92);
++        });
++
++        retakeBtn.addEventListener("click", resetToLive);
++
++        useBtn.addEventListener("click", () => {
++          if (capturedBlob && targetInput) {
++            const file = new File([capturedBlob], "photo.jpg", { type: "image/jpeg" });
++            try {
++              const dt = new DataTransfer();
++              dt.items.add(file);
++              targetInput.files = dt.files;
++              // Fires the input's own onchange (e.g. unchecking "no photo")
++              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
++            } catch (e) {
++              showError("This browser can't attach the photo automatically — use Choose File instead.");
++              return;
++            }
++          }
++          closeCamera();
++        });
++
++        cancelBtn.addEventListener("click", closeCamera);
++        overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
++
++        document.querySelectorAll(".camera-btn").forEach(btn => {
++          // No camera API at all (very old browser, or non-secure context) —
++          // hide the option rather than offer a button that can't work.
++          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
++            btn.style.display = "none";
++            return;
++          }
++          btn.addEventListener("click", () => {
++            const input = document.getElementById(btn.dataset.targetInput);
++            if (input) openCamera(input);
++          });
++        });
++      })();
 +    </script>
 +
 +    <script>
@@ -2477,7 +2669,7 @@ index 4b5a702..98bd162 100644
  </body></html>"""
  
  
-@@ -10523,11 +11914,25 @@ def admin_dashboard():
+@@ -10523,11 +12099,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -2503,7 +2695,7 @@ index 4b5a702..98bd162 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +11940,12 @@ def admin_dashboard():
+@@ -10535,7 +12125,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -2517,7 +2709,7 @@ index 4b5a702..98bd162 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +11955,23 @@ def admin_dashboard():
+@@ -10545,9 +12140,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -2541,7 +2733,7 @@ index 4b5a702..98bd162 100644
      )
  
  
-@@ -10631,15 +12055,34 @@ def admin_save_advisor():
+@@ -10631,15 +12240,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -2581,7 +2773,7 @@ index 4b5a702..98bd162 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12115,14 @@ def admin_settings():
+@@ -10672,21 +12300,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -2605,7 +2797,7 @@ index 4b5a702..98bd162 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +12596,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +12781,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

@@ -10062,6 +10062,36 @@ header a:hover { color: var(--gold); }
 }
 .confirm-cancel { background: transparent; color: var(--navy); }
 #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
+
+/* Camera capture — takes a photo with the device's camera as an
+   alternative to browsing for a file */
+.camera-overlay {
+  position: fixed; inset: 0; background: rgba(39,51,74,0.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 1100; padding: 1.25rem;
+}
+.camera-overlay[hidden] { display: none; }
+.camera-box {
+  background: #fff; border-radius: 4px; max-width: 480px; width: 100%;
+  box-shadow: 0 20px 60px rgba(39,51,74,0.35); padding: 1.4rem;
+}
+.camera-box h3 {
+  margin: 0 0 0.9rem; font-size: 0.82rem; font-weight: 500;
+  letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
+}
+.camera-frame {
+  background: var(--navy); border-radius: 3px; overflow: hidden;
+  aspect-ratio: 4 / 3; display: flex; align-items: center; justify-content: center;
+}
+.camera-frame video, .camera-frame img {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+}
+.camera-actions {
+  display: flex; justify-content: flex-end; gap: 0.6rem; margin-top: 1rem;
+  flex-wrap: wrap;
+}
+.camera-btn { font-size: 0.66rem; }
+
 .group-heading {
   font-size: 1.35rem; letter-spacing: 0.1em; text-transform: uppercase;
   color: var(--navy); font-weight: 500;
@@ -10352,6 +10382,26 @@ input[type="file"], input[type="text"] {
     </div>
   </div>
 
+  <div id="camera-overlay" class="camera-overlay" hidden>
+    <div class="camera-box">
+      <h3>Take a photo</h3>
+      <p class="muted" id="camera-error" style="display: none; color: var(--rust);"></p>
+      <div class="camera-frame">
+        <video id="camera-video" autoplay playsinline muted></video>
+        <img id="camera-preview-img" alt="" hidden />
+      </div>
+      <canvas id="camera-canvas" hidden></canvas>
+      <div class="camera-actions">
+        <button type="button" id="camera-cancel-btn" class="btn"
+                style="background: transparent; color: var(--muted); border-color: var(--line);">Cancel</button>
+        <button type="button" id="camera-capture-btn" class="btn">Capture</button>
+        <button type="button" id="camera-retake-btn" class="btn" hidden
+                style="background: transparent; color: var(--navy); border-color: var(--navy);">Retake</button>
+        <button type="button" id="camera-use-btn" class="btn" hidden>Use this photo</button>
+      </div>
+    </div>
+  </div>
+
   {% macro doc_row(d, id_prefix="") %}
   <tr id="{{ id_prefix }}doc-row-{{ d.id }}">
     <td class="kb-title">{{ d.title }}</td>
@@ -10612,7 +10662,13 @@ input[type="file"], input[type="text"] {
             class="upload">
         <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
                oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-        <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+        <div style="display: flex; gap: 0.4rem; align-items: center;">
+          <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
+                 style="flex: 1 1 auto; min-width: 0;" />
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
+                  style="background: transparent; color: var(--navy); border-color: var(--navy);
+                         white-space: nowrap; flex-shrink: 0;">Take Photo</button>
+        </div>
         <button type="submit" class="btn">Save advisor</button>
         <div class="initials-preview-row" style="grid-column: 1 / -1;">
           <span id="initials-preview-new" class="initials-preview">?</span>
@@ -10644,10 +10700,12 @@ input[type="file"], input[type="text"] {
                  oninput="document.getElementById('initials-preview-default').textContent = initialsForPreview(this.value)"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-          <input type="file" name="avatar" accept=".jpg,.jpeg,.png,.webp,.gif"
+          <input type="file" name="avatar" id="avatar-file-default" accept=".jpg,.jpeg,.png,.webp,.gif"
                  onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
+                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                         margin-top: 0.2rem;">
@@ -10731,10 +10789,12 @@ input[type="file"], input[type="text"] {
                  oninput="document.getElementById('initials-preview-{{ adv.slug }}').textContent = initialsForPreview(this.value)"
                  style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif"
+          <input type="file" name="photo" id="avatar-file-{{ adv.slug }}" accept=".jpg,.jpeg,.png,.webp,.gif"
                  onchange="if (this.files.length) this.form.querySelector('input[name=no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}"
+                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                         margin-top: 0.2rem;">
@@ -11850,6 +11910,131 @@ input[type="file"], input[type="text"] {
         if (core.length === 1) return core[0].slice(0, 3).toUpperCase();
         return (core[0][0] + core[core.length - 1][0]).toUpperCase();
       }
+    </script>
+
+    <script>
+      // ---------------------------------------------------------------
+      // Camera capture — an alternative to browsing for a file, on any
+      // device with a camera (a phone's camera, or a laptop's webcam).
+      // One shared modal, reused by every "Take Photo" button; each button
+      // says which file input to fill via data-target-input.
+      // ---------------------------------------------------------------
+      (function() {
+        const overlay = document.getElementById("camera-overlay");
+        if (!overlay) return;
+        const video = document.getElementById("camera-video");
+        const previewImg = document.getElementById("camera-preview-img");
+        const canvas = document.getElementById("camera-canvas");
+        const errorEl = document.getElementById("camera-error");
+        const captureBtn = document.getElementById("camera-capture-btn");
+        const retakeBtn = document.getElementById("camera-retake-btn");
+        const useBtn = document.getElementById("camera-use-btn");
+        const cancelBtn = document.getElementById("camera-cancel-btn");
+
+        let stream = null;
+        let targetInput = null;
+        let capturedBlob = null;
+        let previewUrl = null;
+
+        function showError(msg) {
+          errorEl.textContent = msg;
+          errorEl.style.display = "block";
+        }
+
+        function resetToLive() {
+          video.hidden = false;
+          previewImg.hidden = true;
+          captureBtn.hidden = false;
+          retakeBtn.hidden = true;
+          useBtn.hidden = true;
+          capturedBlob = null;
+          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+        }
+
+        function closeCamera() {
+          if (stream) {
+            stream.getTracks().forEach(t => t.stop());
+            stream = null;
+          }
+          video.srcObject = null;
+          overlay.hidden = true;
+          targetInput = null;
+          errorEl.style.display = "none";
+          resetToLive();
+        }
+
+        function openCamera(inputEl) {
+          targetInput = inputEl;
+          overlay.hidden = false;
+          resetToLive();
+          errorEl.style.display = "none";
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showError("This browser can't access the camera here. Use Choose File instead.");
+            captureBtn.hidden = true;
+            return;
+          }
+          navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+            .then(s => { stream = s; video.srcObject = s; })
+            .catch(err => {
+              showError("Couldn't access the camera (" + (err.message || err.name)
+                       + "). Check the browser's camera permission, or use Choose File instead.");
+              captureBtn.hidden = true;
+            });
+        }
+
+        captureBtn.addEventListener("click", () => {
+          if (!video.videoWidth) return;
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          canvas.getContext("2d").drawImage(video, 0, 0);
+          canvas.toBlob(blob => {
+            if (!blob) return;
+            capturedBlob = blob;
+            previewUrl = URL.createObjectURL(blob);
+            previewImg.src = previewUrl;
+            video.hidden = true;
+            previewImg.hidden = false;
+            captureBtn.hidden = true;
+            retakeBtn.hidden = false;
+            useBtn.hidden = false;
+          }, "image/jpeg", 0.92);
+        });
+
+        retakeBtn.addEventListener("click", resetToLive);
+
+        useBtn.addEventListener("click", () => {
+          if (capturedBlob && targetInput) {
+            const file = new File([capturedBlob], "photo.jpg", { type: "image/jpeg" });
+            try {
+              const dt = new DataTransfer();
+              dt.items.add(file);
+              targetInput.files = dt.files;
+              // Fires the input's own onchange (e.g. unchecking "no photo")
+              targetInput.dispatchEvent(new Event("change", { bubbles: true }));
+            } catch (e) {
+              showError("This browser can't attach the photo automatically — use Choose File instead.");
+              return;
+            }
+          }
+          closeCamera();
+        });
+
+        cancelBtn.addEventListener("click", closeCamera);
+        overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
+
+        document.querySelectorAll(".camera-btn").forEach(btn => {
+          // No camera API at all (very old browser, or non-secure context) —
+          // hide the option rather than offer a button that can't work.
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            btn.style.display = "none";
+            return;
+          }
+          btn.addEventListener("click", () => {
+            const input = document.getElementById(btn.dataset.targetInput);
+            if (input) openCamera(input);
+          });
+        });
+      })();
     </script>
 
     <script>
