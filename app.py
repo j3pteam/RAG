@@ -2129,7 +2129,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     /* Persistent avatar presence — always on screen, always animating */
     .presence {
-      position: fixed; right: 1.5rem; bottom: 8.5rem; z-index: 400;
+      position: fixed; right: 1.5rem; bottom: 8.5rem; z-index: 50;
       width: 104px; text-align: center; user-select: none;
     }
     .presence-frame {
@@ -5472,6 +5472,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
       const retakeBtn = document.getElementById("camera-retake-btn");
       const useBtn = document.getElementById("camera-use-btn");
       const cancelBtn = document.getElementById("camera-cancel-btn");
+
+      // Defensive: if any required element failed to resolve, registering
+      // a listener on it (e.g. captureBtn.addEventListener(...)) would
+      // throw immediately and *uncaught* — since that's the registration
+      // call itself, not inside a callback's try/catch — silently
+      // aborting every listener registered after it in this IIFE. Fail
+      // loudly here instead of letting that happen invisibly.
+      const required = { video, previewImg, canvas, errorEl, captureBtn, retakeBtn, useBtn, cancelBtn };
+      const missing = Object.keys(required).filter(k => !required[k]);
+      if (missing.length) {
+        console.error("[camera] missing element(s), capture UI not wired up:", missing.join(", "));
+        cameraBtn.classList.add("unsupported");
+        return;
+      }
 
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         // No camera API at all (very old browser, or a non-HTTPS context)
@@ -12185,6 +12199,20 @@ input[type="file"], input[type="text"] {
         const retakeBtn = document.getElementById("camera-retake-btn");
         const useBtn = document.getElementById("camera-use-btn");
         const cancelBtn = document.getElementById("camera-cancel-btn");
+
+        // Defensive: if any required element failed to resolve, registering
+        // a listener on it would throw immediately and *uncaught* — since
+        // that's the registration call itself, not inside a callback's
+        // try/catch — silently aborting every listener registered after it
+        // in this IIFE, including every "Take Photo" button below. Fail
+        // loudly here instead of letting that happen invisibly.
+        const required = { video, previewImg, canvas, errorEl, captureBtn, retakeBtn, useBtn, cancelBtn };
+        const missing = Object.keys(required).filter(k => !required[k]);
+        if (missing.length) {
+          console.error("[camera] missing element(s), capture UI not wired up:", missing.join(", "));
+          document.querySelectorAll(".camera-btn").forEach(btn => btn.style.display = "none");
+          return;
+        }
 
         let stream = null;
         let targetInput = null;
