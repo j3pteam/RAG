@@ -10918,8 +10918,7 @@ input[type="file"], input[type="text"] {
           <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
                  style="flex: 1 1 auto; min-width: 0;" />
           <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
-                  style="background: transparent; color: var(--navy); border-color: var(--navy);
-                         white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
+                  style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
         </div>
         <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
         <button type="submit" class="btn">Save advisor</button>
@@ -10957,8 +10956,7 @@ input[type="file"], input[type="text"] {
                  onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
-                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default">Take Photo</button>
           <span class="camera-pending-indicator" id="camera-pending-default" hidden></span>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
@@ -11047,8 +11045,7 @@ input[type="file"], input[type="text"] {
                  onchange="if (this.files.length) this.form.querySelector('input[name=no_photo]').checked=false"
                  style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}"
-                  style="background: transparent; color: var(--navy); border-color: var(--navy);">Take Photo</button>
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-{{ adv.slug }}">Take Photo</button>
           <span class="camera-pending-indicator" id="camera-pending-{{ adv.slug }}" hidden></span>
           <label style="display: flex; align-items: center; gap: 0.4rem;
                         font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
