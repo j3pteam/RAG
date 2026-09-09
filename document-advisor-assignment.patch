@@ -1,8 +1,16 @@
 diff --git a/app.py b/app.py
-index 4b5a702..0f1dc76 100644
+index 4b5a702..95337b2 100644
 --- a/app.py
 +++ b/app.py
-@@ -209,10 +209,17 @@ _SETTINGS_DEFAULTS = {
+@@ -16,6 +16,7 @@ NEW environment variables:
+ All other env vars from the persona template still apply.
+ """
+ import os
++import secrets
+ import tempfile
+ import re
+ import threading
+@@ -209,10 +210,17 @@ _SETTINGS_DEFAULTS = {
      "auto_learning": False,
      # Show the advisor photo beside replies
      "show_avatar": True,
@@ -20,7 +28,7 @@ index 4b5a702..0f1dc76 100644
  }
  _settings_cache = None
  _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
-@@ -462,6 +469,211 @@ def acknowledgements_for(interaction_ids):
+@@ -462,6 +470,211 @@ def acknowledgements_for(interaction_ids):
      return out
  
  
@@ -232,7 +240,7 @@ index 4b5a702..0f1dc76 100644
  def _geo_ensure_table(conn):
      with conn.cursor() as cur:
          cur.execute("""
-@@ -794,9 +1006,14 @@ def mail_transport_configured() -> bool:
+@@ -794,9 +1007,14 @@ def mail_transport_configured() -> bool:
  
  
  def login_is_required() -> bool:
@@ -249,7 +257,7 @@ index 4b5a702..0f1dc76 100644
      except Exception:
          return REQUIRE_LOGIN
  
-@@ -1240,7 +1457,7 @@ def _learning_loop():
+@@ -1240,7 +1458,7 @@ def _learning_loop():
      time.sleep(120 + (os.getpid() % 47))
      while True:
          try:
@@ -258,7 +266,29 @@ index 4b5a702..0f1dc76 100644
                  conn = _settings_db_conn()
                  may_run = True
                  if conn:
-@@ -1716,7 +1933,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1279,6 +1497,21 @@ def admin_required(f):
+     return wrapper
+ 
+ 
++def advisor_portal_required(f):
++    """Gates the advisor's own knowledge-base portal. Entirely separate
++    from admin_required (a different session key, a different login path)
++    and from the participant-facing session's advisor_slug (which just
++    picks who a visitor is chatting with, not who owns anything) — so an
++    advisor's portal session can never be confused with either."""
++    @wraps(f)
++    def wrapper(*args, **kwargs):
++        slug = session.get("advisor_owner_slug")
++        if not slug or not get_advisor(slug):
++            return redirect(url_for("advisor_portal_login_info"))
++        return f(*args, **kwargs)
++    return wrapper
++
++
+ # ---------------------------------------------------------------------------
+ # Main chat HTML
+ # ---------------------------------------------------------------------------
+@@ -1716,7 +1949,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        margin: 0.18rem 0 0 0; width: 17px; height: 17px;
        accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
      }
@@ -267,7 +297,7 @@ index 4b5a702..0f1dc76 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,18 +1941,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,18 +1957,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -314,7 +344,7 @@ index 4b5a702..0f1dc76 100644
  
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
-@@ -1889,7 +2129,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1889,7 +2145,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      /* Persistent avatar presence — always on screen, always animating */
      .presence {
@@ -323,7 +353,7 @@ index 4b5a702..0f1dc76 100644
        width: 104px; text-align: center; user-select: none;
      }
      .presence-frame {
-@@ -1983,18 +2223,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1983,18 +2239,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {
        /* Smaller, and above the composer — the send button owns the bottom
@@ -344,7 +374,7 @@ index 4b5a702..0f1dc76 100644
      @media (prefers-reduced-motion: reduce) {
        .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
        .presence.speaking .presence-ring,
-@@ -2200,7 +2436,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2200,7 +2452,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
      .attach-btn:hover { color: var(--navy); background: var(--paper); }
      .attach-btn svg { width: 18px; height: 18px; }
@@ -353,7 +383,7 @@ index 4b5a702..0f1dc76 100644
        position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
        background: transparent; border: none;
        color: var(--muted); cursor: pointer;
-@@ -2208,6 +2444,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2208,6 +2460,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
        display: flex; align-items: center; justify-content: center;
        transition: all 0.2s ease; padding: 0;
      }
@@ -371,7 +401,7 @@ index 4b5a702..0f1dc76 100644
      .folder-btn:hover { color: var(--navy); background: var(--paper); }
      .folder-btn svg { width: 18px; height: 18px; }
      #file-input, #folder-input-chat { display: none; }
-@@ -2230,7 +2477,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2230,7 +2493,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .attached-file button:hover { color: var(--rust); }
      .attached-file button svg { width: 14px; height: 14px; }
      input[type="text"] {
@@ -380,7 +410,7 @@ index 4b5a702..0f1dc76 100644
        border: 1px solid var(--line); border-radius: 2px;
        font-size: 0.95rem; font-family: inherit; outline: none;
        background: var(--paper); color: var(--text); width: 100%;
-@@ -2265,12 +2512,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2265,12 +2528,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        border: 5px solid transparent; border-top-color: var(--navy);
      }
      /* Anchored under each button, which sits at a fixed offset from the right */
@@ -398,7 +428,7 @@ index 4b5a702..0f1dc76 100644
      .attach-btn:hover ~ .attach-tip,
      .attach-btn:focus-visible ~ .attach-tip {
        opacity: 1; visibility: visible; transform: translateY(0);
-@@ -2340,6 +2591,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2340,6 +2607,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
        .voice-hint { margin: 0 1rem 0.45rem; font-size: 0.76rem; }
      }
  
@@ -434,7 +464,7 @@ index 4b5a702..0f1dc76 100644
      @keyframes pulse {
        0%, 100% { box-shadow: 0 0 0 0 rgba(157, 67, 44, 0.6); }
        50% { box-shadow: 0 0 0 8px rgba(157, 67, 44, 0); }
-@@ -2371,6 +2651,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2371,6 +2667,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                    box-shadow 0.2s ease, transform 0.12s ease;
      }
      .cta-btn { cursor: pointer; user-select: none; }
@@ -442,7 +472,7 @@ index 4b5a702..0f1dc76 100644
      .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
      .cta-btn:hover {
        background: var(--navy); color: var(--gold);
-@@ -2397,7 +2678,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2397,7 +2694,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
        #chat { padding: 1.5rem 1rem 0.75rem; }
        form { padding: 0.75rem 1rem; gap: 0.4rem; }
@@ -451,7 +481,7 @@ index 4b5a702..0f1dc76 100644
        button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
        .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
        .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
-@@ -2490,6 +2771,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2490,6 +2787,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
      </div>
    </div>
  
@@ -520,7 +550,7 @@ index 4b5a702..0f1dc76 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2575,6 +2918,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2575,6 +2934,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
          </button>
          <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
@@ -534,7 +564,7 @@ index 4b5a702..0f1dc76 100644
          <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-@@ -2622,9 +2972,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +2988,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -546,7 +576,7 @@ index 4b5a702..0f1dc76 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +3055,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +3071,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -653,7 +683,7 @@ index 4b5a702..0f1dc76 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3154,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3170,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
@@ -683,7 +713,7 @@ index 4b5a702..0f1dc76 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3178,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3194,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -703,7 +733,7 @@ index 4b5a702..0f1dc76 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -3872,7 +4295,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4311,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -712,7 +742,7 @@ index 4b5a702..0f1dc76 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -5028,6 +5451,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5467,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -885,7 +915,7 @@ index 4b5a702..0f1dc76 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5823,7 +6412,7 @@ def _did_request(text: str):
+@@ -5823,7 +6428,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -894,7 +924,7 @@ index 4b5a702..0f1dc76 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6519,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6535,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -936,7 +966,7 @@ index 4b5a702..0f1dc76 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6560,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6576,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -945,7 +975,7 @@ index 4b5a702..0f1dc76 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6591,23 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6607,32 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -966,10 +996,19 @@ index 4b5a702..0f1dc76 100644
 +                            f"{col} BOOLEAN")
 +            except Exception:
 +                pass
++        # Added later: a long random secret that gates this advisor's own
++        # knowledge-base portal — the "dedicated link" they log in with.
++        # NULL means portal access has never been generated (or was
++        # revoked) for this advisor.
++        try:
++            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
++                        "portal_token TEXT")
++        except Exception:
++            pass
      conn.commit()
  
  
-@@ -5993,8 +6622,8 @@ def advisors_with_detail():
+@@ -5993,8 +6647,8 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -980,7 +1019,7 @@ index 4b5a702..0f1dc76 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6638,23 @@ def list_advisors():
+@@ -6009,13 +6663,25 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -988,13 +1027,14 @@ index 4b5a702..0f1dc76 100644
 +                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
 +                       COALESCE(scheduling_url, ''), show_scheduling_override,
 +                       show_avatar_override, allow_materials_override,
-+                       personality_override
++                       personality_override, portal_token
                  FROM advisors ORDER BY name
              """)
 -            for slug, name, has_photo, no_photo in cur.fetchall():
 +            for (slug, name, has_photo, no_photo, scheduling_url,
 +                 show_scheduling_override, show_avatar_override,
-+                 allow_materials_override, personality_override) in cur.fetchall():
++                 allow_materials_override, personality_override,
++                 portal_token) in cur.fetchall():
                  out.append({"slug": slug, "name": name,
                              "has_photo": bool(has_photo),
 -                            "no_photo": bool(no_photo)})
@@ -1003,11 +1043,12 @@ index 4b5a702..0f1dc76 100644
 +                            "show_scheduling_override": show_scheduling_override,
 +                            "show_avatar_override": show_avatar_override,
 +                            "allow_materials_override": allow_materials_override,
-+                            "personality_override": personality_override})
++                            "personality_override": personality_override,
++                            "portal_token": portal_token or ""})
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6671,18 @@ def get_advisor(slug: str):
+@@ -6032,11 +6698,20 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -1015,7 +1056,8 @@ index 4b5a702..0f1dc76 100644
 +            cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE),
 +                                  COALESCE(scheduling_url, ''),
 +                                  show_scheduling_override, show_avatar_override,
-+                                  allow_materials_override, personality_override
++                                  allow_materials_override, personality_override,
++                                  portal_token
                             FROM advisors WHERE slug = %s""", (slug,))
              row = cur.fetchone()
 -        return {"slug": row[0], "name": row[1],
@@ -1025,14 +1067,60 @@ index 4b5a702..0f1dc76 100644
 +                "show_scheduling_override": row[4],
 +                "show_avatar_override": row[5],
 +                "allow_materials_override": row[6],
-+                "personality_override": row[7]} if row else None
++                "personality_override": row[7],
++                "portal_token": row[8] or ""} if row else None
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,6 +6690,20 @@ def get_advisor(slug: str):
+@@ -6044,6 +6719,65 @@ def get_advisor(slug: str):
          conn.close()
  
  
++def get_advisor_by_portal_token(token: str):
++    """Look up which advisor a portal link belongs to. Never matches an
++    empty/NULL token, so a slug with portal access not yet generated can't
++    be reached with a blank token."""
++    if not token:
++        return None
++    conn = _settings_db_conn()
++    if not conn:
++        return None
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""SELECT slug, name FROM advisors
++                           WHERE portal_token = %s AND portal_token IS NOT NULL
++                           AND portal_token != ''""", (token,))
++            row = cur.fetchone()
++        return {"slug": row[0], "name": row[1]} if row else None
++    except Exception as e:
++        app.logger.error(f"[advisors] portal token lookup failed: {e}")
++        return None
++    finally:
++        conn.close()
++
++
++def set_advisor_portal_token(slug: str, token) -> bool:
++    """Generate/replace (a string) or revoke (None) an advisor's portal
++    link. Regenerating immediately invalidates whatever link was issued
++    before — there's only ever one valid token per advisor at a time."""
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("UPDATE advisors SET portal_token = %s WHERE slug = %s",
++                        (token, slug))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[advisors] portal token write failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
 +def active_persona_name() -> str:
 +    """The name to log against this interaction — the named advisor this
 +    session is with, if any, else the shared default persona name. Used so
@@ -1050,7 +1138,7 @@ index 4b5a702..0f1dc76 100644
  def get_advisor_photo(slug: str):
      conn = _settings_db_conn()
      if not conn:
-@@ -6065,7 +6725,15 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6799,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -1067,7 +1155,7 @@ index 4b5a702..0f1dc76 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6760,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6834,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -1088,7 +1176,7 @@ index 4b5a702..0f1dc76 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +6930,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +7004,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1097,7 +1185,7 @@ index 4b5a702..0f1dc76 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,58 +6979,377 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,20 +7053,339 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1158,6 +1246,9 @@ index 4b5a702..0f1dc76 100644
 +            for trait, vals in by_trait.items() if vals}
  
 -def _profile_ensure_table(conn):
+-    with conn.cursor() as cur:
+-        cur.execute("""
+-            CREATE TABLE IF NOT EXISTS participant_profile (
 +
 +def _tipi_bucket(score) -> int:
 +    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
@@ -1173,15 +1264,8 @@ index 4b5a702..0f1dc76 100644
 +
 +
 +def _personality_ensure_table(conn):
-     with conn.cursor() as cur:
-         cur.execute("""
--            CREATE TABLE IF NOT EXISTS participant_profile (
--                token       TEXT PRIMARY KEY,
--                first_name  TEXT,
--                role        TEXT,
--                specialty   TEXT,
--                asked       TEXT,
--                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    with conn.cursor() as cur:
++        cur.execute("""
 +            CREATE TABLE IF NOT EXISTS participant_personality (
 +                token             TEXT PRIMARY KEY,
 +                openness          NUMERIC(3,1),
@@ -1190,8 +1274,8 @@ index 4b5a702..0f1dc76 100644
 +                agreeableness     NUMERIC(3,1),
 +                stability         NUMERIC(3,1),
 +                updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )
-         """)
++            )
++        """)
 +        # Upgrading from the old 1-5 single-item version to TIPI's averaged,
 +        # half-point-capable 1-7 scale.
 +        for col in ("openness", "conscientiousness", "extraversion",
@@ -1201,10 +1285,9 @@ index 4b5a702..0f1dc76 100644
 +                            f"ALTER COLUMN {col} TYPE NUMERIC(3,1)")
 +            except Exception:
 +                pass
-     conn.commit()
- 
- 
--def load_profile() -> dict:
++    conn.commit()
++
++
 +def save_personality_scores(answers: dict) -> bool:
 +    """answers: {trait: 1-7} — TIPI trait averages (already computed by
 +    score_tipi()), for some or all of the five traits above. Falls back to
@@ -1223,14 +1306,12 @@ index 4b5a702..0f1dc76 100644
 +    if not clean:
 +        return False
 +
-     conn = _settings_db_conn()
-     if not conn:
--        return dict(session.get("profile_fallback") or {})
++    conn = _settings_db_conn()
++    if not conn:
 +        session["personality"] = clean
 +        session.permanent = True
 +        return True
-     try:
--        _profile_ensure_table(conn)
++    try:
 +        _personality_ensure_table(conn)
 +        # _history_token(), not participant_token(): personality is meant to
 +        # be a once-per-session touch (skippable, re-asked on a fresh visit),
@@ -1241,15 +1322,7 @@ index 4b5a702..0f1dc76 100644
 +        cols = ", ".join(clean.keys())
 +        placeholders = ", ".join(["%s"] * len(clean))
 +        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
-         with conn.cursor() as cur:
--            cur.execute("""SELECT first_name, role, specialty, asked
--                           FROM participant_profile WHERE token = %s""",
--                        (participant_token(),))
--            row = cur.fetchone()
--        if not row:
--            return {}
--        return {"first_name": row[0], "role": row[1], "specialty": row[2],
--                "asked": (row[3] or "")}
++        with conn.cursor() as cur:
 +            cur.execute(f"""
 +                INSERT INTO participant_personality (token, {cols}, updated_at)
 +                VALUES (%s, {placeholders}, NOW())
@@ -1257,20 +1330,13 @@ index 4b5a702..0f1dc76 100644
 +            """, (token, *clean.values()))
 +        conn.commit()
 +        return True
-     except Exception as e:
--        app.logger.error(f"[profile] read failed: {e}")
--        return {}
++    except Exception as e:
 +        app.logger.error(f"[personality] save failed: {e}")
 +        return False
-     finally:
-         conn.close()
- 
- 
--def save_profile(**fields) -> bool:
--    """Write only the fields given; leave the rest alone."""
--    fields = {k: v for k, v in fields.items()
--              if k in PROFILE_FIELDS + ("asked",) and v}
--    if not fields:
++    finally:
++        conn.close()
++
++
 +def get_personality_scores() -> dict:
 +    conn = _settings_db_conn()
 +    if not conn:
@@ -1466,48 +1532,10 @@ index 4b5a702..0f1dc76 100644
 +    with conn.cursor() as cur:
 +        cur.execute("""
 +            CREATE TABLE IF NOT EXISTS participant_profile (
-+                token       TEXT PRIMARY KEY,
-+                first_name  TEXT,
-+                role        TEXT,
-+                specialty   TEXT,
-+                asked       TEXT,
-+                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+    conn.commit()
-+
-+
-+def load_profile() -> dict:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return dict(session.get("profile_fallback") or {})
-+    try:
-+        _profile_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""SELECT first_name, role, specialty, asked
-+                           FROM participant_profile WHERE token = %s""",
-+                        (participant_token(),))
-+            row = cur.fetchone()
-+        if not row:
-+            return {}
-+        return {"first_name": row[0], "role": row[1], "specialty": row[2],
-+                "asked": (row[3] or "")}
-+    except Exception as e:
-+        app.logger.error(f"[profile] read failed: {e}")
-+        return {}
-+    finally:
-+        conn.close()
-+
-+
-+def save_profile(**fields) -> bool:
-+    """Write only the fields given; leave the rest alone."""
-+    fields = {k: v for k, v in fields.items()
-+              if k in PROFILE_FIELDS + ("asked",) and v}
-+    if not fields:
-         return True
-     conn = _settings_db_conn()
-     if not conn:
-@@ -6762,10 +7763,35 @@ def build_briefing() -> str:
+                 token       TEXT PRIMARY KEY,
+                 first_name  TEXT,
+                 role        TEXT,
+@@ -6762,10 +7837,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -1544,7 +1572,7 @@ index 4b5a702..0f1dc76 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,12 +7815,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +7889,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -1566,7 +1594,7 @@ index 4b5a702..0f1dc76 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +7884,113 @@ def document_owners() -> dict:
+@@ -6852,19 +7958,113 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -1687,7 +1715,7 @@ index 4b5a702..0f1dc76 100644
              keep.append(r)
      return keep
  
-@@ -7107,14 +8233,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +8307,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -1726,7 +1754,7 @@ index 4b5a702..0f1dc76 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8272,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8346,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -1738,7 +1766,7 @@ index 4b5a702..0f1dc76 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8289,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8363,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -1747,7 +1775,7 @@ index 4b5a702..0f1dc76 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7154,17 +8298,26 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7154,17 +8372,26 @@ def _render_chat(force_scheduling=None, advisor=None):
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
          name_the_advisor(page_cfg, active["name"])
@@ -1776,7 +1804,7 @@ index 4b5a702..0f1dc76 100644
      )
  
  
-@@ -7173,6 +8326,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8400,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -1789,7 +1817,7 @@ index 4b5a702..0f1dc76 100644
      return _render_chat()
  
  
-@@ -7182,6 +8341,7 @@ def index():
+@@ -7182,6 +8415,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -1797,7 +1825,7 @@ index 4b5a702..0f1dc76 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8435,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8509,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -1805,7 +1833,7 @@ index 4b5a702..0f1dc76 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7506,7 +8667,7 @@ def chat():
+@@ -7506,7 +8741,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -1814,7 +1842,7 @@ index 4b5a702..0f1dc76 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7918,12 +9079,14 @@ def chat():
+@@ -7918,12 +9153,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -1829,7 +1857,7 @@ index 4b5a702..0f1dc76 100644
          )
  
      try:
-@@ -8207,12 +9370,13 @@ def chat():
+@@ -8207,12 +9444,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -1844,7 +1872,7 @@ index 4b5a702..0f1dc76 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9441,28 @@ def acknowledge_release():
+@@ -8277,6 +9515,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -1873,7 +1901,7 @@ index 4b5a702..0f1dc76 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +9541,12 @@ def feedback():
+@@ -8355,12 +9615,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -1888,7 +1916,7 @@ index 4b5a702..0f1dc76 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +9800,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +9874,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -1899,7 +1927,7 @@ index 4b5a702..0f1dc76 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +10008,23 @@ def advisor_avatar():
+@@ -8820,8 +10082,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -1924,7 +1952,7 @@ index 4b5a702..0f1dc76 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +10042,38 @@ def advisor_avatar():
+@@ -8839,28 +10116,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -1981,7 +2009,307 @@ index 4b5a702..0f1dc76 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -9089,15 +10302,71 @@ header a:hover { color: var(--gold); }
+@@ -8966,43 +10253,269 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+   </form>
+ </body></html>"""
+ 
+-LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
++ADVISOR_PORTAL_LOGIN_HTML = """<!DOCTYPE html>
+ <html lang="en"><head>
+ <meta charset="UTF-8" />
+ <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-<title>Learning archive — {{ cfg.persona_name }}</title>
++<title>Advisor Portal — {{ cfg.persona_name }}</title>
+ <link rel="icon" href="{{ cfg.favicon_url }}" />
+ <link rel="preconnect" href="https://fonts.googleapis.com">
++<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+ <link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+ <style>
+-  :root { --navy:#27334A; --gold:#D2BC8D; --paper:#FAF6F0; --line:rgba(39,51,74,0.12); --muted:#6B7280; }
+-  *,*::before,*::after { box-sizing:border-box; }
+-  body { margin:0; font-family:'Jost',-apple-system,sans-serif; background:var(--paper); color:var(--navy); }
+-  header { background:var(--navy); border-bottom:2px solid var(--gold);
+-           padding:1rem 1.5rem; display:flex; justify-content:space-between; align-items:center; }
+-  header h1 { margin:0; font-size:0.85rem; letter-spacing:0.18em; text-transform:uppercase;
+-              color:var(--gold); font-weight:500; }
+-  header a { color:var(--gold); text-decoration:none; font-size:0.75rem;
+-             letter-spacing:0.12em; text-transform:uppercase; }
+-  .container { max-width:1100px; width:95%; margin:0 auto; padding:2rem 1.5rem; }
+-  .section { background:#fff; border:1px solid var(--line); border-radius:4px; padding:1.5rem; }
+-  h2 { margin:0 0 1rem; font-size:0.8rem; letter-spacing:0.14em; text-transform:uppercase;
+-       padding-bottom:0.6rem; border-bottom:1px solid var(--line); font-weight:500; }
+-  table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+-  th { text-align:left; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase;
+-       color:var(--muted); padding:0.6rem 0.5rem; border-bottom:2px solid var(--navy); }
+-  td { padding:0.6rem 0.5rem; border-bottom:1px solid var(--line); vertical-align:top; }
+-  .muted { color:var(--muted); }
+-  details summary { cursor:pointer; font-size:0.78rem; color:var(--muted); }
+-  pre { white-space:pre-wrap; font-size:0.72rem; background:var(--paper);
+-        padding:0.6rem; border-radius:3px; margin:0.5rem 0 0; }
+-</style></head><body>
+-<header>
+-  <h1>{{ cfg.persona_name }} — Learning archive</h1>
+-  <a href="/admin">&larr; Back to admin</a>
+-</header>
+-<div class="container">
+-  <div class="section">
++  :root {
++    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
++    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
++  }
++  *, *::before, *::after { box-sizing: border-box; }
++  body {
++    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
++    background: var(--paper); color: var(--navy);
++    display: flex; align-items: center; justify-content: center;
++    min-height: 100vh; padding: 1.25rem;
++  }
++  .box {
++    background: #fff; border-radius: 4px; width: 100%; max-width: 460px;
++    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
++  }
++  .box-head {
++    background: var(--navy); border-bottom: 2px solid var(--gold);
++    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
++  }
++  .box-head img { height: 44px; width: auto; display: block; }
++  .brand-divider { width: 1px; height: 26px; background: rgba(210,188,141,0.45); }
++  .box-head span {
++    color: var(--gold); font-size: 0.78rem;
++    letter-spacing: 0.22em; text-transform: uppercase; font-weight: 400;
++  }
++  .content { padding: 1.75rem 2rem 1.7rem; }
++  h1 {
++    margin: 0 0 1rem; font-size: 0.85rem; font-weight: 500;
++    letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
++    padding-bottom: 0.65rem; border-bottom: 1px solid var(--line);
++  }
++  p { font-size: 0.9rem; line-height: 1.6; color: var(--navy); margin: 0 0 0.9rem; }
++  .muted { color: var(--muted); font-size: 0.82rem; }
++</style></head><body>
++  <div class="box">
++    <div class="box-head">
++      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
++      <div class="brand-divider"></div>
++      <span>{{ cfg.persona_name }}</span>
++    </div>
++    <div class="content">
++      <h1>Advisor portal access</h1>
++      <p>This portal is reached only through your own dedicated link — there's
++      no password to type here. Ask an admin for your link if you don't have
++      it, or if it's stopped working.</p>
++      <p class="muted">Each advisor's link is unique to them and gives access
++      only to their own knowledge base, never anyone else's.</p>
++    </div>
++  </div>
++</body></html>"""
++
++ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
++<html lang="en"><head>
++<meta charset="UTF-8" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
++<title>{{ advisor.name }} — Knowledge Base — {{ cfg.persona_name }}</title>
++<link rel="icon" href="{{ cfg.favicon_url }}" />
++<link rel="preconnect" href="https://fonts.googleapis.com">
++<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
++<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
++<style>
++  :root {
++    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
++    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
++  }
++  *, *::before, *::after { box-sizing: border-box; }
++  body {
++    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
++    background: var(--paper); color: var(--navy); min-height: 100vh;
++  }
++  header {
++    background: var(--navy); border-bottom: 2px solid var(--gold);
++    padding: 0.9rem 1.75rem; display: flex; align-items: center;
++    justify-content: space-between; gap: 1rem; flex-wrap: wrap;
++  }
++  .brand { display: flex; align-items: center; gap: 0.9rem; }
++  .brand img { height: 40px; width: auto; display: block; }
++  .brand-divider { width: 1px; height: 24px; background: rgba(210,188,141,0.45); }
++  .brand span {
++    color: var(--gold); font-size: 0.76rem;
++    letter-spacing: 0.2em; text-transform: uppercase;
++  }
++  header form { margin: 0; }
++  .logout-btn {
++    background: transparent; color: var(--gold); border: 1px solid rgba(210,188,141,0.6);
++    border-radius: 2px; padding: 0.5rem 0.9rem; cursor: pointer;
++    font-family: inherit; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
++  }
++  .logout-btn:hover { background: rgba(210,188,141,0.15); }
++  .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
++  h1 {
++    font-size: 1.5rem; letter-spacing: 0.06em; margin: 0 0 0.3rem; color: var(--navy);
++    font-weight: 500;
++  }
++  .subtitle { color: var(--muted); font-size: 0.88rem; margin: 0 0 1.6rem; line-height: 1.6; }
++  .card {
++    background: #fff; border: 1px solid var(--line); border-radius: 4px;
++    padding: 1.5rem; margin-bottom: 1.5rem;
++  }
++  .card h2 {
++    font-size: 0.8rem; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase;
++    color: var(--navy); margin: 0 0 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line);
++  }
++  .flash {
++    background: var(--paper); border: 1px solid var(--gold); border-left: 3px solid var(--gold);
++    padding: 0.7rem 1rem; border-radius: 2px; font-size: 0.85rem; margin-bottom: 1.2rem;
++  }
++  .upload-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
++  .upload-row input[type="text"] {
++    flex: 1 1 220px; padding: 0.6rem 0.8rem; border: 1px solid var(--line);
++    border-radius: 2px; font-family: inherit; font-size: 0.85rem; background: var(--paper);
++  }
++  .upload-row input[type="file"] {
++    flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
++    border-radius: 2px; font-family: inherit; font-size: 0.8rem;
++  }
++  .btn {
++    padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold);
++    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
++    font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase;
++  }
++  .btn:hover { background: var(--gold); color: var(--navy); }
++  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
++  th {
++    text-align: left; padding: 0.5rem 0.6rem; font-size: 0.68rem;
++    letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
++    border-bottom: 1px solid var(--line);
++  }
++  td { padding: 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
++  .muted { color: var(--muted); }
++  .btn-danger {
++    background: var(--rust); color: #fff; border-color: var(--rust);
++    padding: 0.35rem 0.7rem; font-size: 0.68rem;
++  }
++  .btn-danger:hover { background: #7d3423; }
++  .shared-note { font-size: 0.72rem; color: var(--muted); }
++  @media (max-width: 640px) {
++    header { padding: 0.8rem 1.1rem; }
++    .container { padding: 1.5rem 1rem 2rem; }
++    table, thead, tbody, th, td, tr { display: block; }
++    thead { display: none; }
++    td { border-bottom: none; padding: 0.15rem 0; }
++    tr { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
++  }
++</style></head><body>
++  <header>
++    <div class="brand">
++      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
++      <div class="brand-divider"></div>
++      <span>{{ cfg.persona_name }} Advisor Portal</span>
++    </div>
++    <form method="POST" action="{{ url_for('advisor_portal_logout') }}">
++      <button type="submit" class="logout-btn">Sign out</button>
++    </form>
++  </header>
++  <div class="container">
++    <h1>{{ advisor.name }}'s Knowledge Base</h1>
++    <p class="subtitle">
++      Documents you upload here are yours alone — never shown to the default
++      assistant or to other advisors unless you're explicitly told otherwise.
++      They're used only in your own sessions, alongside the shared J3P base.
++    </p>
++
++    {% with messages = get_flashed_messages() %}
++      {% if messages %}
++        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
++      {% endif %}
++    {% endwith %}
++
++    <div class="card">
++      <h2>Add a document</h2>
++      <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
++        <div class="upload-row">
++          <input type="text" name="title" placeholder="Title (optional — defaults to the filename)" />
++          <input type="file" name="file" required />
++          <button type="submit" class="btn">Upload</button>
++        </div>
++      </form>
++    </div>
++
++    <div class="card">
++      <h2>Your documents</h2>
++      {% if documents %}
++      <table>
++        <thead>
++          <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th>Shared with</th><th></th></tr>
++        </thead>
++        <tbody>
++          {% for d in documents %}
++          <tr>
++            <td>{{ d.title }}</td>
++            <td class="muted">{{ d.source }}</td>
++            <td class="muted">{{ d.chunk_count }}</td>
++            <td class="muted">{{ d.uploaded_at.strftime("%Y-%m-%d") if d.uploaded_at else "" }}</td>
++            <td class="shared-note">
++              {% if d.shared_with %}also: {{ d.shared_with|join(", ") }}{% else %}just you{% endif %}
++            </td>
++            <td>
++              <form method="POST" action="{{ url_for('advisor_portal_delete', doc_id=d.id) }}"
++                    onsubmit="return confirm('Remove &quot;' + {{ d.title|tojson }} + '&quot;? This can\\'t be undone.');">
++                <button type="submit" class="btn-danger">
++                  {% if d.shared_with %}Remove my access{% else %}Delete{% endif %}
++                </button>
++              </form>
++            </td>
++          </tr>
++          {% endfor %}
++        </tbody>
++      </table>
++      {% else %}
++      <p class="muted">No documents yet — upload your first one above.</p>
++      {% endif %}
++    </div>
++  </div>
++</body></html>"""
++
++LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
++<html lang="en"><head>
++<meta charset="UTF-8" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
++<title>Learning archive — {{ cfg.persona_name }}</title>
++<link rel="icon" href="{{ cfg.favicon_url }}" />
++<link rel="preconnect" href="https://fonts.googleapis.com">
++<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
++<style>
++  :root { --navy:#27334A; --gold:#D2BC8D; --paper:#FAF6F0; --line:rgba(39,51,74,0.12); --muted:#6B7280; }
++  *,*::before,*::after { box-sizing:border-box; }
++  body { margin:0; font-family:'Jost',-apple-system,sans-serif; background:var(--paper); color:var(--navy); }
++  header { background:var(--navy); border-bottom:2px solid var(--gold);
++           padding:1rem 1.5rem; display:flex; justify-content:space-between; align-items:center; }
++  header h1 { margin:0; font-size:0.85rem; letter-spacing:0.18em; text-transform:uppercase;
++              color:var(--gold); font-weight:500; }
++  header a { color:var(--gold); text-decoration:none; font-size:0.75rem;
++             letter-spacing:0.12em; text-transform:uppercase; }
++  .container { max-width:1100px; width:95%; margin:0 auto; padding:2rem 1.5rem; }
++  .section { background:#fff; border:1px solid var(--line); border-radius:4px; padding:1.5rem; }
++  h2 { margin:0 0 1rem; font-size:0.8rem; letter-spacing:0.14em; text-transform:uppercase;
++       padding-bottom:0.6rem; border-bottom:1px solid var(--line); font-weight:500; }
++  table { width:100%; border-collapse:collapse; font-size:0.85rem; }
++  th { text-align:left; font-size:0.68rem; letter-spacing:0.1em; text-transform:uppercase;
++       color:var(--muted); padding:0.6rem 0.5rem; border-bottom:2px solid var(--navy); }
++  td { padding:0.6rem 0.5rem; border-bottom:1px solid var(--line); vertical-align:top; }
++  .muted { color:var(--muted); }
++  details summary { cursor:pointer; font-size:0.78rem; color:var(--muted); }
++  pre { white-space:pre-wrap; font-size:0.72rem; background:var(--paper);
++        padding:0.6rem; border-radius:3px; margin:0.5rem 0 0; }
++</style></head><body>
++<header>
++  <h1>{{ cfg.persona_name }} — Learning archive</h1>
++  <a href="/admin">&larr; Back to admin</a>
++</header>
++<div class="container">
++  <div class="section">
+     <h2>Archived runs ({{ runs|length }})</h2>
+     {% if runs %}
+     <p class="muted" style="font-size:0.84rem; margin:0 0 1rem;">
+@@ -9089,15 +10602,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -2055,7 +2383,7 @@ index 4b5a702..0f1dc76 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +10388,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +10688,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -2071,7 +2399,7 @@ index 4b5a702..0f1dc76 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10405,13 @@ form.upload {
+@@ -9133,8 +10705,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -2087,7 +2415,7 @@ index 4b5a702..0f1dc76 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10447,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10747,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -2107,7 +2435,7 @@ index 4b5a702..0f1dc76 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10516,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10816,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -2131,13 +2459,10 @@ index 4b5a702..0f1dc76 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10631,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +10931,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
--  <h2 class="group-heading">Display</h2>
--
--  <div class="section">
 +  <div id="camera-overlay" class="camera-overlay" hidden>
 +    <div class="camera-box">
 +      <h3>Take a photo</h3>
@@ -2314,9 +2639,9 @@ index 4b5a702..0f1dc76 100644
 +  </div>
 +
 +  <div class="tab-pane" data-tab="settings">
-+  <h2 class="group-heading">Display</h2>
-+
-+  <div class="section">
+   <h2 class="group-heading">Display</h2>
+ 
+   <div class="section">
      <h2>Display Settings</h2>
      <form method="POST" action="/admin/settings" id="settings-form">
        <input type="hidden" name="_fields"
@@ -2325,7 +2650,7 @@ index 4b5a702..0f1dc76 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +10847,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11147,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2378,7 +2703,7 @@ index 4b5a702..0f1dc76 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +10902,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11202,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2412,7 +2737,7 @@ index 4b5a702..0f1dc76 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +10938,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11238,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2471,7 +2796,7 @@ index 4b5a702..0f1dc76 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +10987,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +11287,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2482,7 +2807,7 @@ index 4b5a702..0f1dc76 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +11038,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +11338,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2500,7 +2825,7 @@ index 4b5a702..0f1dc76 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +11055,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +11355,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2545,7 +2870,7 @@ index 4b5a702..0f1dc76 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11122,23 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +11422,67 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -2554,6 +2879,50 @@ index 4b5a702..0f1dc76 100644
 -        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
 -          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
 -        </ul>
++        <h3>Knowledge-Base Portal</h3>
++        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
++          A dedicated link {{ adv.name }} can use to log in and manage their
++          own knowledge base — upload and remove their own documents,
++          without seeing the J3P base or other advisors' documents.
++        </p>
++        {% if adv.portal_token %}
++        <div class="advisor-link-row">
++          <div class="muted advisor-link-label">Their portal link</div>
++          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
++            <a href="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}" target="_blank"
++               class="adv-link">{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}</a>
++            <button type="button" class="copy-link"
++                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}">Copy</button>
++            <button type="button" class="share-link"
++                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}"
++                    data-advisor="{{ adv.name }}">Share</button>
++          </div>
++        </div>
++        <div style="display: flex; gap: 0.5rem; margin-top: 0.6rem;">
++          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
++            <input type="hidden" name="action" value="generate" />
++            <button type="submit" class="btn" style="font-size: 0.64rem;"
++                    onclick="return confirm('Regenerate the link? The old one will stop working immediately.');">
++              Regenerate link
++            </button>
++          </form>
++          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
++            <input type="hidden" name="action" value="revoke" />
++            <button type="submit" class="btn-danger" style="font-size: 0.64rem;"
++                    onclick="return confirm('Revoke portal access for {{ adv.name }}? Their link will stop working.');">
++              Revoke access
++            </button>
++          </form>
++        </div>
++        {% else %}
++        <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
++          <input type="hidden" name="action" value="generate" />
++          <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
++        </form>
++        {% endif %}
++      </div>
++
++      <div class="advisor-links">
 +        {% set adv_docs = advisor_docs.get(adv.slug, []) %}
 +        <h3>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</h3>
 +        {% if adv_docs %}
@@ -2575,7 +2944,7 @@ index 4b5a702..0f1dc76 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +11185,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +11529,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2606,7 +2975,7 @@ index 4b5a702..0f1dc76 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +11228,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +11572,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2616,7 +2985,7 @@ index 4b5a702..0f1dc76 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11393,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11737,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -2631,7 +3000,7 @@ index 4b5a702..0f1dc76 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11435,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11779,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -2640,7 +3009,7 @@ index 4b5a702..0f1dc76 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11464,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11808,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -2658,7 +3027,7 @@ index 4b5a702..0f1dc76 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11526,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11870,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -2686,7 +3055,7 @@ index 4b5a702..0f1dc76 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +11734,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12078,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -2696,7 +3065,7 @@ index 4b5a702..0f1dc76 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +11755,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12099,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -2719,7 +3088,7 @@ index 4b5a702..0f1dc76 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +11888,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +12232,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -2730,7 +3099,7 @@ index 4b5a702..0f1dc76 100644
  
  </div>
  
-@@ -10478,6 +12119,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +12463,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -2746,7 +3115,7 @@ index 4b5a702..0f1dc76 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +12138,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +12482,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -3027,7 +3396,135 @@ index 4b5a702..0f1dc76 100644
  </body></html>"""
  
  
-@@ -10523,11 +12447,25 @@ def admin_dashboard():
+@@ -10511,6 +12779,127 @@ def admin_logout():
+     return redirect(url_for("admin_login"))
+ 
+ 
++# ---------------------------------------------------------------------------
++# Advisor portal — each named advisor's own dedicated link, scoped to only
++# their own knowledge base. Entirely separate auth path from /admin: no
++# shared password, no visibility into other advisors, settings, the
++# conversation log, or biometric data — just their own documents.
++# ---------------------------------------------------------------------------
++
++@app.route("/advisor-portal/<slug>/<token>")
++def advisor_portal_enter(slug, token):
++    """The dedicated link. Visiting it with a valid token establishes a
++    long-lived session, then redirects to the clean /advisor-portal URL so
++    the secret token doesn't linger in browser history past the first visit."""
++    match = get_advisor_by_portal_token(token)
++    if not match or match["slug"] != slug:
++        return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG), 404
++    session["advisor_owner_slug"] = slug
++    session.permanent = True
++    return redirect(url_for("advisor_portal_view"))
++
++
++@app.route("/advisor-portal/login-info")
++def advisor_portal_login_info():
++    """Shown when /advisor-portal (or any of its sub-routes) is reached
++    without a valid session — no password form, since access only ever
++    comes through the dedicated link itself."""
++    return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG)
++
++
++@app.route("/advisor-portal")
++@advisor_portal_required
++def advisor_portal_view():
++    slug = session["advisor_owner_slug"]
++    advisor = get_advisor(slug)
++    adv_map = document_advisor_map()
++    adv_names = {a["slug"]: a["name"] for a in list_advisors()}
++    docs = db.list_documents() if db.is_enabled() else []
++    mine = []
++    for d in docs:
++        assigned = adv_map.get(d["title"], [])
++        if slug not in assigned:
++            continue
++        d = dict(d)
++        d["shared_with"] = [adv_names.get(s, s) for s in assigned if s != slug]
++        mine.append(d)
++    return render_template_string(ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine)
++
++
++@app.route("/advisor-portal/upload", methods=["POST"])
++@advisor_portal_required
++def advisor_portal_upload():
++    slug = session["advisor_owner_slug"]
++    if not (db.is_enabled() and emb.is_enabled()):
++        flash("Cannot upload: the knowledge base isn't fully configured right now.")
++        return redirect(url_for("advisor_portal_view"))
++
++    file = request.files.get("file")
++    if not file or not file.filename:
++        flash("No file selected.")
++        return redirect(url_for("advisor_portal_view"))
++
++    title = (request.form.get("title") or "").strip() or file.filename
++
++    duplicate = db.find_duplicate_document(title=title, source=file.filename)
++    if duplicate:
++        flash(f"⚠ '{duplicate['title']}' already exists — delete it first if you want to replace it.")
++        return redirect(url_for("advisor_portal_view"))
++
++    try:
++        file_bytes = file.read()
++        text = extract_attachment_text(file.filename, file_bytes)
++        if not text.strip():
++            flash(f"No text could be extracted from {file.filename}.")
++            return redirect(url_for("advisor_portal_view"))
++        chunks = emb.chunk_text(text)
++        if not chunks:
++            flash("Document produced no chunks (too short or empty).")
++            return redirect(url_for("advisor_portal_view"))
++        vectors = emb.embed_batch(chunks)
++        pairs = list(zip(chunks, vectors))
++        doc_id = db.insert_document(title, file.filename, pairs)
++        # Scoped to just this advisor — never the shared base, never anyone
++        # else's, unless an admin later reassigns it from the main panel.
++        set_document_advisors(title, [slug])
++        flash(f"✓ Uploaded '{title}' — {len(chunks)} chunks embedded.")
++    except Exception as e:
++        app.logger.error(f"[advisor-portal] upload failed: {e}")
++        flash(f"Upload failed: {str(e)[:200]}")
++    return redirect(url_for("advisor_portal_view"))
++
++
++@app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
++@advisor_portal_required
++def advisor_portal_delete(doc_id):
++    slug = session["advisor_owner_slug"]
++    docs = {d["id"]: d for d in (db.list_documents() if db.is_enabled() else [])}
++    doc = docs.get(doc_id)
++    if not doc:
++        flash("That document no longer exists.")
++        return redirect(url_for("advisor_portal_view"))
++    assigned = document_advisor_map().get(doc["title"], [])
++    if slug not in assigned:
++        # Not theirs — refuse rather than trusting a doc_id from the form.
++        flash("You don't have access to that document.")
++        return redirect(url_for("advisor_portal_view"))
++    if len(assigned) > 1:
++        # Shared with someone else — only drop this advisor's own access,
++        # don't pull the document out from under whoever else has it.
++        set_document_advisors(doc["title"], [s for s in assigned if s != slug])
++        flash(f"✓ Removed your access to '{doc['title']}' — it's still available to the others it's shared with.")
++    else:
++        db.delete_document(doc_id)
++        flash(f"✓ Deleted '{doc['title']}'.")
++    return redirect(url_for("advisor_portal_view"))
++
++
++@app.route("/advisor-portal/logout", methods=["POST"])
++def advisor_portal_logout():
++    session.pop("advisor_owner_slug", None)
++    return redirect(url_for("advisor_portal_login_info"))
++
++
+ @app.route("/admin")
+ @admin_required
+ def admin_dashboard():
+@@ -10523,11 +12912,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -3053,7 +3550,7 @@ index 4b5a702..0f1dc76 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +12473,12 @@ def admin_dashboard():
+@@ -10535,7 +12938,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -3067,7 +3564,7 @@ index 4b5a702..0f1dc76 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +12488,23 @@ def admin_dashboard():
+@@ -10545,9 +12953,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -3091,7 +3588,7 @@ index 4b5a702..0f1dc76 100644
      )
  
  
-@@ -10631,15 +12588,34 @@ def admin_save_advisor():
+@@ -10631,15 +13053,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -3131,7 +3628,37 @@ index 4b5a702..0f1dc76 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10672,21 +12648,14 @@ def admin_settings():
+@@ -10657,6 +13098,29 @@ def admin_delete_advisor(slug):
+     return redirect(url_for("admin_dashboard"))
+ 
+ 
++@app.route("/admin/advisors/portal-token/<slug>", methods=["POST"])
++@admin_required
++def admin_advisor_portal_token(slug):
++    """Generate, regenerate, or revoke an advisor's dedicated portal link.
++    Regenerating immediately invalidates whatever link they had before —
++    there's only ever one valid link per advisor."""
++    advisor = get_advisor(slug)
++    if not advisor:
++        flash("That advisor no longer exists.")
++        return redirect(url_for("admin_dashboard"))
++
++    action = (request.form.get("action") or "generate").strip()
++    if action == "revoke":
++        set_advisor_portal_token(slug, None)
++        flash(f"✓ Revoked {advisor['name']}'s portal link. It no longer works.")
++    else:
++        token = secrets.token_urlsafe(32)
++        set_advisor_portal_token(slug, token)
++        verb = "Regenerated" if advisor.get("portal_token") else "Generated"
++        flash(f"✓ {verb} {advisor['name']}'s portal link.")
++    return redirect(url_for("admin_dashboard") + "#advisors")
++
++
+ @app.route("/admin/settings", methods=["POST"])
+ @admin_required
+ def admin_settings():
+@@ -10672,21 +13136,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -3155,7 +3682,7 @@ index 4b5a702..0f1dc76 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +13129,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +13617,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

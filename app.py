@@ -16,6 +16,7 @@ NEW environment variables:
 All other env vars from the persona template still apply.
 """
 import os
+import secrets
 import tempfile
 import re
 import threading
@@ -1492,6 +1493,21 @@ def admin_required(f):
             return ("Admin disabled. Set ADMIN_PASSWORD environment variable.", 503)
         if not session.get("is_admin"):
             return redirect(url_for("admin_login"))
+        return f(*args, **kwargs)
+    return wrapper
+
+
+def advisor_portal_required(f):
+    """Gates the advisor's own knowledge-base portal. Entirely separate
+    from admin_required (a different session key, a different login path)
+    and from the participant-facing session's advisor_slug (which just
+    picks who a visitor is chatting with, not who owns anything) — so an
+    advisor's portal session can never be confused with either."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        slug = session.get("advisor_owner_slug")
+        if not slug or not get_advisor(slug):
+            return redirect(url_for("advisor_portal_login_info"))
         return f(*args, **kwargs)
     return wrapper
 
@@ -6608,6 +6624,15 @@ def _advisors_ensure_table(conn):
                             f"{col} BOOLEAN")
             except Exception:
                 pass
+        # Added later: a long random secret that gates this advisor's own
+        # knowledge-base portal — the "dedicated link" they log in with.
+        # NULL means portal access has never been generated (or was
+        # revoked) for this advisor.
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "portal_token TEXT")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -6641,12 +6666,13 @@ def list_advisors():
                 SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
                        COALESCE(scheduling_url, ''), show_scheduling_override,
                        show_avatar_override, allow_materials_override,
-                       personality_override
+                       personality_override, portal_token
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
                  show_scheduling_override, show_avatar_override,
-                 allow_materials_override, personality_override) in cur.fetchall():
+                 allow_materials_override, personality_override,
+                 portal_token) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -6654,7 +6680,8 @@ def list_advisors():
                             "show_scheduling_override": show_scheduling_override,
                             "show_avatar_override": show_avatar_override,
                             "allow_materials_override": allow_materials_override,
-                            "personality_override": personality_override})
+                            "personality_override": personality_override,
+                            "portal_token": portal_token or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -6674,7 +6701,8 @@ def get_advisor(slug: str):
             cur.execute("""SELECT slug, name, COALESCE(no_photo, FALSE),
                                   COALESCE(scheduling_url, ''),
                                   show_scheduling_override, show_avatar_override,
-                                  allow_materials_override, personality_override
+                                  allow_materials_override, personality_override,
+                                  portal_token
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
@@ -6682,10 +6710,56 @@ def get_advisor(slug: str):
                 "show_scheduling_override": row[4],
                 "show_avatar_override": row[5],
                 "allow_materials_override": row[6],
-                "personality_override": row[7]} if row else None
+                "personality_override": row[7],
+                "portal_token": row[8] or ""} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
+    finally:
+        conn.close()
+
+
+def get_advisor_by_portal_token(token: str):
+    """Look up which advisor a portal link belongs to. Never matches an
+    empty/NULL token, so a slug with portal access not yet generated can't
+    be reached with a blank token."""
+    if not token:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""SELECT slug, name FROM advisors
+                           WHERE portal_token = %s AND portal_token IS NOT NULL
+                           AND portal_token != ''""", (token,))
+            row = cur.fetchone()
+        return {"slug": row[0], "name": row[1]} if row else None
+    except Exception as e:
+        app.logger.error(f"[advisors] portal token lookup failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def set_advisor_portal_token(slug: str, token) -> bool:
+    """Generate/replace (a string) or revoke (None) an advisor's portal
+    link. Regenerating immediately invalidates whatever link was issued
+    before — there's only ever one valid token per advisor at a time."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET portal_token = %s WHERE slug = %s",
+                        (token, slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] portal token write failed: {e}")
+        return False
     finally:
         conn.close()
 
@@ -10179,6 +10253,232 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
   </form>
 </body></html>"""
 
+ADVISOR_PORTAL_LOGIN_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Advisor Portal — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper); color: var(--navy);
+    display: flex; align-items: center; justify-content: center;
+    min-height: 100vh; padding: 1.25rem;
+  }
+  .box {
+    background: #fff; border-radius: 4px; width: 100%; max-width: 460px;
+    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
+  }
+  .box-head {
+    background: var(--navy); border-bottom: 2px solid var(--gold);
+    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
+  }
+  .box-head img { height: 44px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 26px; background: rgba(210,188,141,0.45); }
+  .box-head span {
+    color: var(--gold); font-size: 0.78rem;
+    letter-spacing: 0.22em; text-transform: uppercase; font-weight: 400;
+  }
+  .content { padding: 1.75rem 2rem 1.7rem; }
+  h1 {
+    margin: 0 0 1rem; font-size: 0.85rem; font-weight: 500;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy);
+    padding-bottom: 0.65rem; border-bottom: 1px solid var(--line);
+  }
+  p { font-size: 0.9rem; line-height: 1.6; color: var(--navy); margin: 0 0 0.9rem; }
+  .muted { color: var(--muted); font-size: 0.82rem; }
+</style></head><body>
+  <div class="box">
+    <div class="box-head">
+      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+      <div class="brand-divider"></div>
+      <span>{{ cfg.persona_name }}</span>
+    </div>
+    <div class="content">
+      <h1>Advisor portal access</h1>
+      <p>This portal is reached only through your own dedicated link — there's
+      no password to type here. Ask an admin for your link if you don't have
+      it, or if it's stopped working.</p>
+      <p class="muted">Each advisor's link is unique to them and gives access
+      only to their own knowledge base, never anyone else's.</p>
+    </div>
+  </div>
+</body></html>"""
+
+ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>{{ advisor.name }} — Knowledge Base — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper); color: var(--navy); min-height: 100vh;
+  }
+  header {
+    background: var(--navy); border-bottom: 2px solid var(--gold);
+    padding: 0.9rem 1.75rem; display: flex; align-items: center;
+    justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 0.9rem; }
+  .brand img { height: 40px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 24px; background: rgba(210,188,141,0.45); }
+  .brand span {
+    color: var(--gold); font-size: 0.76rem;
+    letter-spacing: 0.2em; text-transform: uppercase;
+  }
+  header form { margin: 0; }
+  .logout-btn {
+    background: transparent; color: var(--gold); border: 1px solid rgba(210,188,141,0.6);
+    border-radius: 2px; padding: 0.5rem 0.9rem; cursor: pointer;
+    font-family: inherit; font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .logout-btn:hover { background: rgba(210,188,141,0.15); }
+  .container { max-width: 900px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+  h1 {
+    font-size: 1.5rem; letter-spacing: 0.06em; margin: 0 0 0.3rem; color: var(--navy);
+    font-weight: 500;
+  }
+  .subtitle { color: var(--muted); font-size: 0.88rem; margin: 0 0 1.6rem; line-height: 1.6; }
+  .card {
+    background: #fff; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.5rem; margin-bottom: 1.5rem;
+  }
+  .card h2 {
+    font-size: 0.8rem; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--navy); margin: 0 0 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line);
+  }
+  .flash {
+    background: var(--paper); border: 1px solid var(--gold); border-left: 3px solid var(--gold);
+    padding: 0.7rem 1rem; border-radius: 2px; font-size: 0.85rem; margin-bottom: 1.2rem;
+  }
+  .upload-row { display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: center; }
+  .upload-row input[type="text"] {
+    flex: 1 1 220px; padding: 0.6rem 0.8rem; border: 1px solid var(--line);
+    border-radius: 2px; font-family: inherit; font-size: 0.85rem; background: var(--paper);
+  }
+  .upload-row input[type="file"] {
+    flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+    border-radius: 2px; font-family: inherit; font-size: 0.8rem;
+  }
+  .btn {
+    padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold);
+    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
+    font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .btn:hover { background: var(--gold); color: var(--navy); }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th {
+    text-align: left; padding: 0.5rem 0.6rem; font-size: 0.68rem;
+    letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  td { padding: 0.6rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+  .muted { color: var(--muted); }
+  .btn-danger {
+    background: var(--rust); color: #fff; border-color: var(--rust);
+    padding: 0.35rem 0.7rem; font-size: 0.68rem;
+  }
+  .btn-danger:hover { background: #7d3423; }
+  .shared-note { font-size: 0.72rem; color: var(--muted); }
+  @media (max-width: 640px) {
+    header { padding: 0.8rem 1.1rem; }
+    .container { padding: 1.5rem 1rem 2rem; }
+    table, thead, tbody, th, td, tr { display: block; }
+    thead { display: none; }
+    td { border-bottom: none; padding: 0.15rem 0; }
+    tr { padding: 0.7rem 0; border-bottom: 1px solid var(--line); }
+  }
+</style></head><body>
+  <header>
+    <div class="brand">
+      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+      <div class="brand-divider"></div>
+      <span>{{ cfg.persona_name }} Advisor Portal</span>
+    </div>
+    <form method="POST" action="{{ url_for('advisor_portal_logout') }}">
+      <button type="submit" class="logout-btn">Sign out</button>
+    </form>
+  </header>
+  <div class="container">
+    <h1>{{ advisor.name }}'s Knowledge Base</h1>
+    <p class="subtitle">
+      Documents you upload here are yours alone — never shown to the default
+      assistant or to other advisors unless you're explicitly told otherwise.
+      They're used only in your own sessions, alongside the shared J3P base.
+    </p>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <div class="card">
+      <h2>Add a document</h2>
+      <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
+        <div class="upload-row">
+          <input type="text" name="title" placeholder="Title (optional — defaults to the filename)" />
+          <input type="file" name="file" required />
+          <button type="submit" class="btn">Upload</button>
+        </div>
+      </form>
+    </div>
+
+    <div class="card">
+      <h2>Your documents</h2>
+      {% if documents %}
+      <table>
+        <thead>
+          <tr><th>Title</th><th>Source</th><th>Chunks</th><th>Uploaded</th><th>Shared with</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for d in documents %}
+          <tr>
+            <td>{{ d.title }}</td>
+            <td class="muted">{{ d.source }}</td>
+            <td class="muted">{{ d.chunk_count }}</td>
+            <td class="muted">{{ d.uploaded_at.strftime("%Y-%m-%d") if d.uploaded_at else "" }}</td>
+            <td class="shared-note">
+              {% if d.shared_with %}also: {{ d.shared_with|join(", ") }}{% else %}just you{% endif %}
+            </td>
+            <td>
+              <form method="POST" action="{{ url_for('advisor_portal_delete', doc_id=d.id) }}"
+                    onsubmit="return confirm('Remove &quot;' + {{ d.title|tojson }} + '&quot;? This can\\'t be undone.');">
+                <button type="submit" class="btn-danger">
+                  {% if d.shared_with %}Remove my access{% else %}Delete{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <p class="muted">No documents yet — upload your first one above.</p>
+      {% endif %}
+    </div>
+  </div>
+</body></html>"""
+
 LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8" />
@@ -11119,6 +11419,50 @@ input[type="file"], input[type="text"] {
           </div>
         </div>
         {% endfor %}
+      </div>
+
+      <div class="advisor-links">
+        <h3>Knowledge-Base Portal</h3>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          A dedicated link {{ adv.name }} can use to log in and manage their
+          own knowledge base — upload and remove their own documents,
+          without seeing the J3P base or other advisors' documents.
+        </p>
+        {% if adv.portal_token %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">Their portal link</div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}" target="_blank"
+               class="adv-link">{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}</a>
+            <button type="button" class="copy-link"
+                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}">Copy</button>
+            <button type="button" class="share-link"
+                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}"
+                    data-advisor="{{ adv.name }}">Share</button>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-top: 0.6rem;">
+          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+            <input type="hidden" name="action" value="generate" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;"
+                    onclick="return confirm('Regenerate the link? The old one will stop working immediately.');">
+              Regenerate link
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+            <input type="hidden" name="action" value="revoke" />
+            <button type="submit" class="btn-danger" style="font-size: 0.64rem;"
+                    onclick="return confirm('Revoke portal access for {{ adv.name }}? Their link will stop working.');">
+              Revoke access
+            </button>
+          </form>
+        </div>
+        {% else %}
+        <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+          <input type="hidden" name="action" value="generate" />
+          <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
+        </form>
+        {% endif %}
       </div>
 
       <div class="advisor-links">
@@ -12435,6 +12779,127 @@ def admin_logout():
     return redirect(url_for("admin_login"))
 
 
+# ---------------------------------------------------------------------------
+# Advisor portal — each named advisor's own dedicated link, scoped to only
+# their own knowledge base. Entirely separate auth path from /admin: no
+# shared password, no visibility into other advisors, settings, the
+# conversation log, or biometric data — just their own documents.
+# ---------------------------------------------------------------------------
+
+@app.route("/advisor-portal/<slug>/<token>")
+def advisor_portal_enter(slug, token):
+    """The dedicated link. Visiting it with a valid token establishes a
+    long-lived session, then redirects to the clean /advisor-portal URL so
+    the secret token doesn't linger in browser history past the first visit."""
+    match = get_advisor_by_portal_token(token)
+    if not match or match["slug"] != slug:
+        return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG), 404
+    session["advisor_owner_slug"] = slug
+    session.permanent = True
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/login-info")
+def advisor_portal_login_info():
+    """Shown when /advisor-portal (or any of its sub-routes) is reached
+    without a valid session — no password form, since access only ever
+    comes through the dedicated link itself."""
+    return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG)
+
+
+@app.route("/advisor-portal")
+@advisor_portal_required
+def advisor_portal_view():
+    slug = session["advisor_owner_slug"]
+    advisor = get_advisor(slug)
+    adv_map = document_advisor_map()
+    adv_names = {a["slug"]: a["name"] for a in list_advisors()}
+    docs = db.list_documents() if db.is_enabled() else []
+    mine = []
+    for d in docs:
+        assigned = adv_map.get(d["title"], [])
+        if slug not in assigned:
+            continue
+        d = dict(d)
+        d["shared_with"] = [adv_names.get(s, s) for s in assigned if s != slug]
+        mine.append(d)
+    return render_template_string(ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine)
+
+
+@app.route("/advisor-portal/upload", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_upload():
+    slug = session["advisor_owner_slug"]
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot upload: the knowledge base isn't fully configured right now.")
+        return redirect(url_for("advisor_portal_view"))
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("No file selected.")
+        return redirect(url_for("advisor_portal_view"))
+
+    title = (request.form.get("title") or "").strip() or file.filename
+
+    duplicate = db.find_duplicate_document(title=title, source=file.filename)
+    if duplicate:
+        flash(f"⚠ '{duplicate['title']}' already exists — delete it first if you want to replace it.")
+        return redirect(url_for("advisor_portal_view"))
+
+    try:
+        file_bytes = file.read()
+        text = extract_attachment_text(file.filename, file_bytes)
+        if not text.strip():
+            flash(f"No text could be extracted from {file.filename}.")
+            return redirect(url_for("advisor_portal_view"))
+        chunks = emb.chunk_text(text)
+        if not chunks:
+            flash("Document produced no chunks (too short or empty).")
+            return redirect(url_for("advisor_portal_view"))
+        vectors = emb.embed_batch(chunks)
+        pairs = list(zip(chunks, vectors))
+        doc_id = db.insert_document(title, file.filename, pairs)
+        # Scoped to just this advisor — never the shared base, never anyone
+        # else's, unless an admin later reassigns it from the main panel.
+        set_document_advisors(title, [slug])
+        flash(f"✓ Uploaded '{title}' — {len(chunks)} chunks embedded.")
+    except Exception as e:
+        app.logger.error(f"[advisor-portal] upload failed: {e}")
+        flash(f"Upload failed: {str(e)[:200]}")
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_delete(doc_id):
+    slug = session["advisor_owner_slug"]
+    docs = {d["id"]: d for d in (db.list_documents() if db.is_enabled() else [])}
+    doc = docs.get(doc_id)
+    if not doc:
+        flash("That document no longer exists.")
+        return redirect(url_for("advisor_portal_view"))
+    assigned = document_advisor_map().get(doc["title"], [])
+    if slug not in assigned:
+        # Not theirs — refuse rather than trusting a doc_id from the form.
+        flash("You don't have access to that document.")
+        return redirect(url_for("advisor_portal_view"))
+    if len(assigned) > 1:
+        # Shared with someone else — only drop this advisor's own access,
+        # don't pull the document out from under whoever else has it.
+        set_document_advisors(doc["title"], [s for s in assigned if s != slug])
+        flash(f"✓ Removed your access to '{doc['title']}' — it's still available to the others it's shared with.")
+    else:
+        db.delete_document(doc_id)
+        flash(f"✓ Deleted '{doc['title']}'.")
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/logout", methods=["POST"])
+def advisor_portal_logout():
+    session.pop("advisor_owner_slug", None)
+    return redirect(url_for("advisor_portal_login_info"))
+
+
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
@@ -12631,6 +13096,29 @@ def admin_delete_advisor(slug):
     else:
         flash("Could not remove that advisor.")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/advisors/portal-token/<slug>", methods=["POST"])
+@admin_required
+def admin_advisor_portal_token(slug):
+    """Generate, regenerate, or revoke an advisor's dedicated portal link.
+    Regenerating immediately invalidates whatever link they had before —
+    there's only ever one valid link per advisor."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard"))
+
+    action = (request.form.get("action") or "generate").strip()
+    if action == "revoke":
+        set_advisor_portal_token(slug, None)
+        flash(f"✓ Revoked {advisor['name']}'s portal link. It no longer works.")
+    else:
+        token = secrets.token_urlsafe(32)
+        set_advisor_portal_token(slug, token)
+        verb = "Regenerated" if advisor.get("portal_token") else "Generated"
+        flash(f"✓ {verb} {advisor['name']}'s portal link.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
 
 
 @app.route("/admin/settings", methods=["POST"])
