@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..cbbffc3 100644
+index 4b5a702..97635cf 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -818,7 +818,24 @@ index 4b5a702..cbbffc3 100644
  
      // -------------------------------------------------------------
      // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
-@@ -3872,7 +4348,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3306,13 +3782,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         // Turning OFF should stop anything currently speaking
+         if (!autoSpeakEnabled) {
+           J3PSpeech.stop();
+-          if (window.__activeSpeakBtn) {
+-            const prev = window.__activeSpeakBtn;
+-            prev.classList.remove("speaking", "paused");
+-            const lbl = prev.querySelector(".speak-label");
+-            if (lbl) lbl.textContent = "Speak";
+-            window.__activeSpeakBtn = null;
+-          }
++          setAvatarSpeaking(window.__activeSpeakMsg, false);
++          Presence.set("idle");
++          window.__activeSpeakMsg = null;
+         }
+       });
+     }
+@@ -3872,7 +4344,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -827,7 +844,37 @@ index 4b5a702..cbbffc3 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -4406,7 +4882,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4211,8 +4683,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+             }
+           }
+ 
+-          const speakBtn = last.querySelector(".speak-btn");
+-          if (speakBtn) speakBtn.click();
++          if (last.__speakReply) last.__speakReply();
+         });
+       }
+ 
+@@ -4293,8 +4764,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       // browser's own speech, which is instant and free.
+       wrap.addEventListener("click", async () => {
+         if (!TALKING_AVATAR_ON) {
+-          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
+-          if (speakBtn) speakBtn.click();
++          if (msgDiv && msgDiv.__speakReply) msgDiv.__speakReply();
+           return;
+         }
+         if (wrap.classList.contains("is-video")) {
+@@ -4330,8 +4800,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+           // Never leave a dead frame — fall back to browser speech
+           wrap.classList.remove("is-loading", "is-video");
+           if (hint) hint.textContent = "Click to listen";
+-          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
+-          if (speakBtn) speakBtn.click();
++          if (msgDiv && msgDiv.__speakReply) msgDiv.__speakReply();
+         }
+       });
+ 
+@@ -4406,7 +4875,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
      }
  
@@ -836,7 +883,7 @@ index 4b5a702..cbbffc3 100644
        const div = document.createElement("div");
        div.className = "msg " + role;
        if (interactionId) div.dataset.interactionId = String(interactionId);
-@@ -4420,7 +4896,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4420,7 +4889,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          textNode.textContent = text;
        }
        div.appendChild(textNode);
@@ -845,7 +892,19 @@ index 4b5a702..cbbffc3 100644
        // Advisor replies are preceded by the avatar, when one is configured.
        // If the image fails to load it removes itself, so a missing file just
        // leaves the reply looking as it did before.
-@@ -4441,7 +4917,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4431,17 +4900,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       chatWrap.scrollTop = chatWrap.scrollHeight;
+       // If auto-speak is enabled and this is a fresh assistant reply (with feedback
+       // row, meaning it was just received from the API), start reading it aloud.
+-      // A tiny delay gives the DOM time to attach the speak button.
++      // A tiny delay gives the DOM time to finish attaching div.__speakReply.
+       if (withFeedback && role.startsWith("assistant") && window.__isAutoSpeakOn && window.__isAutoSpeakOn()) {
+         setTimeout(() => {
+-          const sb = div.querySelector(".speak-btn");
+-          if (sb) sb.click();
++          if (div.__speakReply) div.__speakReply();
+         }, 60);
+       }
        return div;
      }
  
@@ -854,7 +913,22 @@ index 4b5a702..cbbffc3 100644
        const wrap = document.createElement("div");
        wrap.className = "feedback";
        wrap.innerHTML = `
-@@ -4470,6 +4946,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4456,20 +4924,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
+             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
+           </svg>
+         </button>
+-        <button class="action-btn speak-btn" style="margin-left: auto;" aria-label="Read answer aloud" title="Read answer aloud">
+-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
+-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
+-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
+-          </svg>
+-          <span class="speak-label">Speak</span>
+-        </button>
+-        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
++        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
+           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
            </svg>
            <span class="copy-label">Copy</span>
          </button>
@@ -874,7 +948,122 @@ index 4b5a702..cbbffc3 100644
          <span class="download-wrap">
            <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-@@ -4728,15 +5217,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4599,13 +5072,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
+           }
+         });
+       });
+-      // === SPEAK button (browser text-to-speech) ===
+-      const speakBtn = wrap.querySelector(".speak-btn");
+-      const speakLabel = speakBtn ? speakBtn.querySelector(".speak-label") : null;
+-      if (!J3PSpeech.supported && speakBtn) {
+-        // Browser doesn't support speech synthesis — hide the button entirely
+-        speakBtn.style.display = "none";
+-      } else if (speakBtn) {
++      // === Read this reply aloud — no dedicated per-message button anymore
++      // (removed as redundant with the header's Speak toggle). Triggered by
++      // clicking the presence avatar, or by the header's auto-speak toggle
++      // reading a fresh reply automatically. msgDiv.__speakReply() is the
++      // one shared entry point both of those call into. ===
++      if (J3PSpeech.supported) {
+         // Strip markdown so the reader doesn't literally say "star star bold star star"
+         const stripMarkdown = (t) => (t || "")
+           .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
+@@ -4625,80 +5097,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
+           .trim();
+ 
+         function resetSpeakUI() {
+-          speakBtn.classList.remove("speaking", "paused");
+-          if (speakLabel) speakLabel.textContent = "Speak";
+           setAvatarSpeaking(msgDiv, false);
+           Presence.set("idle");
+-        }
+-        function markSpeaking() {
+-          speakBtn.classList.add("speaking");
+-          speakBtn.classList.remove("paused");
+-          // Where pause isn't available the control is stop-only, so say so
+-          if (speakLabel) speakLabel.textContent = J3PSpeech.canPause ? "Speaking" : "Stop";
+-          clearAllAvatarStates();
+-          setAvatarSpeaking(msgDiv, true);
+-          Presence.set("speaking");
+-        }
+-
+-        // On platforms without pause support, make the intent clear up front
+-        if (!J3PSpeech.canPause) {
+-          speakBtn.title = "Read answer aloud (tap again to stop)";
++          if (window.__activeSpeakMsg === msgDiv) window.__activeSpeakMsg = null;
+         }
+ 
+-        speakBtn.addEventListener("click", () => {
+-          // This button is the active one → toggle pause/resume, or stop
+-          if (window.__activeSpeakBtn === speakBtn) {
+-            if (!J3PSpeech.canPause) {
+-              J3PSpeech.stop();
+-              resetSpeakUI();
+-              window.__activeSpeakBtn = null;
+-              return;
+-            }
+-            if (J3PSpeech.isPaused()) {
+-              J3PSpeech.resume();
+-              markSpeaking();
+-            } else {
+-              J3PSpeech.pause();
+-              speakBtn.classList.remove("speaking");
+-              speakBtn.classList.add("paused");
+-              if (speakLabel) speakLabel.textContent = "Paused";
+-            }
++        msgDiv.__speakReply = function() {
++          // This message is the one currently playing — toggle it off
++          if (window.__activeSpeakMsg === msgDiv) {
++            J3PSpeech.stop();
++            resetSpeakUI();
+             return;
+           }
+-
+-          // A different message was playing — reset its button first
+-          if (window.__activeSpeakBtn && window.__activeSpeakBtn !== speakBtn) {
+-            const prev = window.__activeSpeakBtn;
+-            prev.classList.remove("speaking", "paused");
+-            const prevLabel = prev.querySelector(".speak-label");
+-            if (prevLabel) prevLabel.textContent = "Speak";
+-          }
++          // A different message was playing — stop it before starting this one
++          if (window.__activeSpeakMsg) J3PSpeech.stop();
+ 
+           const ok = J3PSpeech.play(stripMarkdown(replyText), {
+             onStart: () => {
+-              window.__activeSpeakBtn = speakBtn;
+-              markSpeaking();
+-            },
+-            onEnd: () => {
+-              resetSpeakUI();
+-              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
++              window.__activeSpeakMsg = msgDiv;
++              clearAllAvatarStates();
++              setAvatarSpeaking(msgDiv, true);
++              Presence.set("speaking");
+             },
++            onEnd: () => resetSpeakUI(),
+             onError: (reason) => {
+               console.error("Speech error:", reason);
+               resetSpeakUI();
+-              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
+-              if (reason === "blocked" && speakLabel) {
+-                // Most common cause on iPhone/iPad is the physical silent switch
+-                speakLabel.textContent = J3PSpeech.isIOS ? "Check mute" : "Unavailable";
+-                speakBtn.title = J3PSpeech.isIOS
+-                  ? "No audio — check the side silent switch and volume, then try again"
+-                  : "Speech is unavailable in this browser";
+-                setTimeout(() => { if (speakLabel) speakLabel.textContent = "Speak"; }, 3200);
+-              }
+             },
+           }, { fromGesture: true });
+           if (!ok) resetSpeakUI();
+-        });
++        };
+       }
+ 
+       // === COPY button ===
+@@ -4728,15 +5156,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
          }
        });
  
@@ -959,7 +1148,7 @@ index 4b5a702..cbbffc3 100644
          downloadMenu.classList.toggle("open");
          if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
        });
-@@ -4862,6 +5419,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4862,6 +5358,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
              Copy link
            </button>
          `;
@@ -968,7 +1157,7 @@ index 4b5a702..cbbffc3 100644
          shareMenu.classList.add("open");
          positionMenu(shareMenu);
  
-@@ -5028,6 +5587,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5526,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -1141,7 +1330,7 @@ index 4b5a702..cbbffc3 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5157,7 +5882,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5157,7 +5821,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          setAvatarThinking(false);
          if (data.reply) {
            const msgDiv = addMessage(data.reply, "assistant", true,
@@ -1150,7 +1339,16 @@ index 4b5a702..cbbffc3 100644
            // Nothing downloads on its own. When the reply looks like a
            // deliverable, offer a download and let the user decide.
            setAvatarResponding(msgDiv);
-@@ -5823,7 +6548,7 @@ def _did_request(text: str):
+@@ -5208,7 +5872,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       resetArmed = false;
+       // Stop any in-progress speech before wiping the chat
+       J3PSpeech.stop();
+-      window.__activeSpeakBtn = null;
++      window.__activeSpeakMsg = null;
+       await fetch("/reset", { method: "POST" });
+       chat.innerHTML = "";
+       const div = document.createElement("div");
+@@ -5823,7 +6487,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -1159,7 +1357,7 @@ index 4b5a702..cbbffc3 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6655,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6594,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -1201,7 +1399,7 @@ index 4b5a702..cbbffc3 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6696,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6635,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -1210,10 +1408,16 @@ index 4b5a702..cbbffc3 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6727,50 @@ def _advisors_ensure_table(conn):
+@@ -5979,12 +6666,56 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
+-    conn.commit()
+-
+-
+-def slugify_advisor(name: str) -> str:
+-    base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+-    return base[:40] or "advisor"
 +        # Added later: an advisor's own external booking link (Calendly,
 +        # Acuity, etc). Empty means "use the shared J3P scheduling link."
 +        try:
@@ -1258,10 +1462,16 @@ index 4b5a702..cbbffc3 100644
 +                        "expertise TEXT NOT NULL DEFAULT ''")
 +        except Exception:
 +            pass
-     conn.commit()
++    conn.commit()
++
++
++def slugify_advisor(name: str) -> str:
++    base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
++    return base[:40] or "advisor"
  
  
-@@ -5993,8 +6785,14 @@ def advisors_with_detail():
+ def advisors_with_detail():
+@@ -5993,8 +6724,14 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -1278,7 +1488,7 @@ index 4b5a702..cbbffc3 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6807,28 @@ def list_advisors():
+@@ -6009,13 +6746,28 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -1310,7 +1520,7 @@ index 4b5a702..cbbffc3 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6845,23 @@ def get_advisor(slug: str):
+@@ -6032,11 +6784,23 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -1337,32 +1547,26 @@ index 4b5a702..cbbffc3 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,19 +6869,114 @@ def get_advisor(slug: str):
+@@ -6044,6 +6808,101 @@ def get_advisor(slug: str):
          conn.close()
  
  
--def get_advisor_photo(slug: str):
 +def get_advisor_by_portal_token(token: str):
 +    """Look up which advisor a portal link belongs to. Never matches an
 +    empty/NULL token, so a slug with portal access not yet generated can't
 +    be reached with a blank token."""
 +    if not token:
 +        return None
-     conn = _settings_db_conn()
-     if not conn:
-         return None
-     try:
-         _advisors_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT photo, photo_mime FROM advisors WHERE slug = %s", (slug,))
++    conn = _settings_db_conn()
++    if not conn:
++        return None
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
 +            cur.execute("""SELECT slug, name FROM advisors
 +                           WHERE portal_token = %s AND portal_token IS NOT NULL
 +                           AND portal_token != ''""", (token,))
-             row = cur.fetchone()
--        if not row or row[0] is None:
--            return None
--        data = row[0]
--        return (bytes(data) if not isinstance(data, bytes) else data,
++            row = cur.fetchone()
 +        return {"slug": row[0], "name": row[1]} if row else None
 +    except Exception as e:
 +        app.logger.error(f"[advisors] portal token lookup failed: {e}")
@@ -1442,23 +1646,10 @@ index 4b5a702..cbbffc3 100644
 +    return CONFIG["persona_name"]
 +
 +
-+def get_advisor_photo(slug: str):
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return None
-+    try:
-+        _advisors_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("SELECT photo, photo_mime FROM advisors WHERE slug = %s", (slug,))
-+            row = cur.fetchone()
-+        if not row or row[0] is None:
-+            return None
-+        data = row[0]
-+        return (bytes(data) if not isinstance(data, bytes) else data,
-                 row[1] or "image/jpeg")
-     except Exception as e:
-         app.logger.error(f"[advisors] photo read failed: {e}")
-@@ -6065,7 +6985,15 @@ def get_advisor_photo(slug: str):
+ def get_advisor_photo(slug: str):
+     conn = _settings_db_conn()
+     if not conn:
+@@ -6065,7 +6924,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -1475,7 +1666,7 @@ index 4b5a702..cbbffc3 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +7020,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6959,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -1496,7 +1687,7 @@ index 4b5a702..cbbffc3 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +7190,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +7129,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1505,7 +1696,7 @@ index 4b5a702..cbbffc3 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,142 +7239,756 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,610 +7178,1349 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1540,7 +1731,7 @@ index 4b5a702..cbbffc3 100644
 +_PERSONALITY_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]
  
 -PROFILE_FIELDS = ("first_name", "role", "specialty")
- 
++
 +def score_tipi(answers: dict) -> dict:
 +    """answers: {item_id (1-10): raw rating 1-7}. Returns {trait: average}
 +    on TIPI's native 1-7 scale, applying the standard reverse-scoring
@@ -1565,8 +1756,8 @@ index 4b5a702..cbbffc3 100644
 +    return {trait: round(sum(vals) / len(vals), 1)
 +            for trait, vals in by_trait.items() if vals}
  
+ 
 -def _profile_ensure_table(conn):
-+
 +def _tipi_bucket(score) -> int:
 +    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
 +    interpretation text below is written for, so a real, continuous TIPI
@@ -1798,6 +1989,8 @@ index 4b5a702..cbbffc3 100644
          with conn.cursor() as cur:
 -            cur.execute("DELETE FROM participant_profile WHERE token = %s",
 -                        (participant_token(),))
+-        conn.commit()
+-        return True
 +            cur.execute("""
 +                SELECT openness, conscientiousness, extraversion,
 +                       agreeableness, stability, completed_at
@@ -1810,13 +2003,36 @@ index 4b5a702..cbbffc3 100644
 +        if not scores:
 +            return {}
 +        return {"scores": scores, "completed_at": row[5]}
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[profile] forget failed: {e}")
+-        return False
 +        app.logger.error(f"[advisor-personality] read failed: {e}")
 +        return {}
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+ 
+ 
+-# Leadership roles worth recognising, longest first so "associate program
+-# director" wins over "program director".
+-_ROLE_PATTERNS = [
+-    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
+-    (r"\b(vice chair|associate chair)\b", "vice chair"),
+-    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
+-    (r"\b(section chief|section head)\b", "section chief"),
+-    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
+-    (r"\b(associate program director)\b", "associate program director"),
+-    (r"\b(program director)\b", "program director"),
+-    (r"\b(fellowship director)\b", "fellowship director"),
+-    (r"\b(residency director)\b", "residency director"),
+-    (r"\b(medical director)\b", "medical director"),
+-    (r"\b(chief medical officer|\bCMO\b)", "chief medical officer"),
+-    (r"\b(chief of staff)\b", "chief of staff"),
+-    (r"\b(vice president|\bVP\b)", "vice president"),
+-    (r"\b(dean|associate dean|vice dean)\b", "dean"),
+-    (r"\b(clinical director)\b", "clinical director"),
+-    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
+-    (r"\b(attending|faculty member|staff physician)\b", "attending"),
+-]
 +def advisor_style_bio(name: str, scores: dict) -> str:
 +    """A warm, third-person, client-facing style blurb built from the
 +    advisor's own personality self-report — meant as a starting point an
@@ -1854,8 +2070,14 @@ index 4b5a702..cbbffc3 100644
 +    first_name = (name or "Your advisor").split()[0]
 +    body = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + ", and " + phrases[-1]
 +    return f"{first_name} {body}."
-+
-+
+ 
+ 
+-def detect_role(text: str):
+-    low = (text or "").lower()
+-    for pattern, label in _ROLE_PATTERNS:
+-        if re.search(pattern, low, re.IGNORECASE):
+-            return label
+-    return None
 +def _advisor_360_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -1874,19 +2096,153 @@ index 4b5a702..cbbffc3 100644
 +            ON advisor_360_feedback (advisor_slug)
 +        """)
 +    conn.commit()
-+
-+
+ 
+ 
+-def detect_first_name(text: str):
+-    """Only from an explicit self-introduction — never inferred."""
+-    if not text:
+-        return None
+-    patterns = [
+-        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
+-        r"\bi'?m ([A-Z][a-z]{1,18})\b",
+-        r"\bthis is ([A-Z][a-z]{1,18})\b",
+-        r"\bcall me ([A-Z][a-z]{1,18})\b",
+-        r"^([A-Z][a-z]{1,18}) here\b",
+-    ]
+-    # Words that follow "I'm" but aren't names
+-    stop = {"a", "an", "the", "not", "in", "on", "at", "trying", "looking",
+-            "working", "going", "just", "still", "also", "happy", "glad",
+-            "sorry", "new", "here", "chief", "chair", "director", "faculty",
+-            "attending", "concerned", "worried", "curious", "hoping"}
+-    for pattern in patterns:
+-        # Case-insensitive so "My name is" matches as well as "my name is",
+-        # but the captured word must still be capitalised in the original —
+-        # that's what separates a name from "I'm trying".
+-        m = re.search(pattern, text, re.IGNORECASE)
+-        if m:
+-            candidate = m.group(1).strip()
+-            if not candidate[:1].isupper():
+-                continue
+-            if candidate.lower() in stop:
+-                continue
+-            return candidate
+-    return None
+-
+-
+-def update_profile_from_message(text: str) -> dict:
+-    """Pick up anything the participant volunteers. Never asks, never guesses."""
+-    found = {}
+-    name = detect_first_name(text)
+-    role = detect_role(text)
+-    specialty = detect_specialty(text)
+-    current = load_profile()
+-    if name and not current.get("first_name"):
+-        found["first_name"] = name
+-    if role and not current.get("role"):
+-        found["role"] = role
+-    if specialty and not current.get("specialty"):
+-        found["specialty"] = specialty
+-    if found:
+-        save_profile(**found)
+-        app.logger.info(f"[profile] learned: {', '.join(found.keys())}")
+-    return found
+-
+-
+-def profile_guidance() -> str:
+-    """Tell the model what it knows, and what it may ask for next."""
+-    prof = load_profile()
+-    known = [f"{k.replace('_', ' ')}: {prof[k]}"
+-             for k in PROFILE_FIELDS if prof.get(k)]
+-    asked = set((prof.get("asked") or "").split(","))
+-    missing = [k for k in PROFILE_FIELDS if not prof.get(k) and k not in asked]
+-
+-    lines = ["\n\n---\nWHAT YOU KNOW ABOUT THIS PARTICIPANT"]
+-    if known:
+-        lines.append("  " + "; ".join(known))
+-        lines.append("  Use this. Address them by first name occasionally — not "
+-                     "every message. Write for their role and specialty "
+-                     "specifically. Never ask again for anything listed here.")
+-    else:
+-        lines.append("  Nothing yet.")
+-
+-    if missing:
+-        nice = {"first_name": "their first name", "role": "their leadership role",
+-                "specialty": "their specialty"}
+-        lines.append(
+-            "  Not yet known: " + ", ".join(nice[m] for m in missing) + ". "
+-            "You may ask for ONE of these, as a short closing question AFTER a "
+-            "substantive answer — never as a gate, never before helping, and "
+-            "never when they have asked for a document or a revision. At most "
+-            "one such question per conversation."
+-        )
+-
+-    lines.append(
+-        "  NEVER ask for, and never record, their institution, hospital, "
+-        "employer, city, surname, or anything else that would identify them or "
+-        "their organisation. If they volunteer such detail, use it in the reply "
+-        "if helpful but do not treat it as something to collect. Keep what you "
+-        "hold to first name, role and specialty."
+-    )
+-    return "\n".join(lines) + "\n"
+-
+-
+-# ---------------------------------------------------------------------------
+-# Follow-up plans
+-# ---------------------------------------------------------------------------
+-# At the end of a session the participant can ask for an accountability plan:
+-# what they said they'd do, by when, and what to watch for. It's built from
+-# the conversation, saved against their profile, and surfaced at the start of
+-# the next session so the advisor can follow up rather than start cold.
+-
+-PLAN_PROMPT = (
+-    "Build a short accountability plan from this conversation.\n\n"
+-    "Rules:\n"
+-    "- Only include commitments THEY made or clearly accepted. Do not invent "
+-    "actions they never agreed to, and do not pad the list.\n"
+-    "- If they committed to nothing concrete, say so plainly in one line and "
+-    "suggest at most two things they could commit to. Do not fabricate a plan.\n"
+-    "- Use their own words for what they're doing where you can.\n"
+-    "- Give each item a realistic timeframe. If they named one, use theirs; "
+-    "otherwise suggest one and mark it as a suggestion.\n"
+-    "- End with one line on the single thing most likely to derail this, drawn "
+-    "from what they actually told you.\n\n"
+-    "Format as markdown with a '# Follow-up Plan' heading, then a short "
+-    "'## What you're doing' list, then '## Watch for'. Keep the whole thing "
+-    "under 350 words. No preamble, no closing pleasantries."
+-)
+-
+-
+-def _plans_ensure_table(conn):
+-    with conn.cursor() as cur:
+-        cur.execute("""
+-            CREATE TABLE IF NOT EXISTS participant_plans (
+-                id          BIGSERIAL PRIMARY KEY,
+-                token       TEXT NOT NULL,
+-                content     TEXT NOT NULL,
+-                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+-            )
+-        """)
+-        cur.execute("""CREATE INDEX IF NOT EXISTS participant_plans_token
+-                       ON participant_plans (token)""")
+-    conn.commit()
+-
+-
+-def save_plan(content: str) -> bool:
 +def save_advisor_360_feedback(slug: str, filename: str, mime: str, content: bytes) -> bool:
 +    """One 360 file per advisor — a fresh upload replaces whatever was
 +    there before, same as the photo-upload pattern elsewhere."""
 +    if not slug or not content:
 +        return False
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
+     conn = _settings_db_conn()
+     if not conn:
+         return False
+     try:
+-        _plans_ensure_table(conn)
 +        _advisor_360_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("""INSERT INTO participant_plans (token, content)
+-                           VALUES (%s, %s)""",
+-                        (participant_token(), content[:20000]))
 +            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
 +            cur.execute("""
 +                INSERT INTO advisor_360_feedback
@@ -1896,52 +2252,33 @@ index 4b5a702..cbbffc3 100644
          conn.commit()
          return True
      except Exception as e:
--        app.logger.error(f"[profile] forget failed: {e}")
+-        app.logger.error(f"[plans] save failed: {e}")
 +        app.logger.error(f"[advisor-360] write failed: {e}")
          return False
      finally:
          conn.close()
  
  
--# Leadership roles worth recognising, longest first so "associate program
--# director" wins over "program director".
--_ROLE_PATTERNS = [
--    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
--    (r"\b(vice chair|associate chair)\b", "vice chair"),
--    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
--    (r"\b(section chief|section head)\b", "section chief"),
--    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
--    (r"\b(associate program director)\b", "associate program director"),
--    (r"\b(program director)\b", "program director"),
--    (r"\b(fellowship director)\b", "fellowship director"),
--    (r"\b(residency director)\b", "residency director"),
--    (r"\b(medical director)\b", "medical director"),
--    (r"\b(chief medical officer|\bCMO\b)", "chief medical officer"),
--    (r"\b(chief of staff)\b", "chief of staff"),
--    (r"\b(vice president|\bVP\b)", "vice president"),
--    (r"\b(dean|associate dean|vice dean)\b", "dean"),
--    (r"\b(clinical director)\b", "clinical director"),
--    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
--    (r"\b(attending|faculty member|staff physician)\b", "attending"),
--]
--
--
--def detect_role(text: str):
--    low = (text or "").lower()
--    for pattern, label in _ROLE_PATTERNS:
--        if re.search(pattern, low, re.IGNORECASE):
--            return label
--    return None
+-def list_plans(limit=10):
 +def get_advisor_360_meta(slug: str):
 +    """Filename/size/date only — for display, never the content itself."""
 +    if not slug:
 +        return None
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return []
+-    out = []
 +        return None
-+    try:
+     try:
+-        _plans_ensure_table(conn)
 +        _advisor_360_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("""SELECT id, content, created_at FROM participant_plans
+-                           WHERE token = %s ORDER BY id DESC LIMIT %s""",
+-                        (participant_token(), limit))
+-            for row in cur.fetchall():
+-                out.append({"id": row[0], "content": row[1],
+-                            "when": _fmt_ts(row[2])})
 +            cur.execute("""
 +                SELECT id, filename, size_bytes, uploaded_at
 +                FROM advisor_360_feedback WHERE advisor_slug = %s
@@ -1950,21 +2287,20 @@ index 4b5a702..cbbffc3 100644
 +        if not row:
 +            return None
 +        return {"id": row[0], "filename": row[1], "size_bytes": row[2] or 0, "uploaded_at": row[3]}
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[plans] list failed: {e}")
 +        app.logger.error(f"[advisor-360] meta read failed: {e}")
 +        return None
-+    finally:
-+        conn.close()
+     finally:
+         conn.close()
+-    return out
  
  
--def detect_first_name(text: str):
--    """Only from an explicit self-introduction — never inferred."""
--    if not text:
+-def delete_plan(plan_id: int) -> bool:
 +def get_advisor_360_content(slug: str):
 +    """(bytes, mime, filename) for a download, or None."""
 +    if not slug:
-         return None
--    patterns = [
++        return None
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return None
@@ -1991,22 +2327,31 @@ index 4b5a702..cbbffc3 100644
 +def delete_advisor_360_feedback(slug: str) -> bool:
 +    if not slug:
 +        return False
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
+     conn = _settings_db_conn()
+     if not conn:
+         return False
+     try:
+-        _plans_ensure_table(conn)
 +        _advisor_360_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("""DELETE FROM participant_plans
+-                           WHERE id = %s AND token = %s""",
+-                        (plan_id, participant_token()))
 +            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
-+        conn.commit()
-+        return True
-+    except Exception as e:
+         conn.commit()
+         return True
+     except Exception as e:
+-        app.logger.error(f"[plans] delete failed: {e}")
 +        app.logger.error(f"[advisor-360] delete failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
+         return False
+     finally:
+         conn.close()
+ 
+ 
+-def open_commitments_block() -> str:
+-    """The most recent plan, so the advisor can follow up next session."""
+-    plans = list_plans(limit=1)
+-    if not plans:
 +def personality_style_block() -> str:
 +    """Turns a few self-report scores into brief, private tone guidance.
 +    Never surfaced to the participant as a score, a label, or a type."""
@@ -2039,14 +2384,22 @@ index 4b5a702..cbbffc3 100644
 +    elif scores.get("stability", 3) <= 2:
 +        notes.append("extra gentleness around stress or setbacks — avoid alarming language")
 +    if not notes:
-+        return ""
-+    return (
+         return ""
+-    plan = plans[0]
+     return (
+-        "\n\n---\n"
+-        f"COMMITMENTS FROM THEIR LAST SESSION ({plan['when']}) — they asked for "
+-        "this plan themselves. Early in this conversation, ask how one of these "
+-        "went, naming it specifically. Ask once, briefly, and then get on with "
+-        "whatever they've come with; do not work through the list or nag. If "
+-        "they say it slipped, treat that as information, not failure.\n\n"
+-        + plan["content"][:4000] + "\n"
 +        "\n\n---\nCOMMUNICATION STYLE (from a short opt-in self-report; treat "
 +        "as a soft steer on tone only — never mention it, never call it a "
 +        "personality type or a score):\n- " + "\n- ".join(notes) + "\n"
-+    )
-+
-+
+     )
+ 
+ 
 +def advisor_voice_guard(active) -> str:
 +    """Layers a named advisor's own expertise and coaching style on top of
 +    the core J3P voice — additive, never a replacement. VOICE & DIFFERENTIATION
@@ -2092,21 +2445,51 @@ index 4b5a702..cbbffc3 100644
 +    return "".join(parts)
 +
 +
-+# ---------------------------------------------------------------------------
+ # ---------------------------------------------------------------------------
+-# Pre-session briefings
 +# Biometric data files
-+# ---------------------------------------------------------------------------
+ # ---------------------------------------------------------------------------
+-# When a participant books time, the advisor gets a short brief on what the
+-# participant has been working through — so the call starts where the
+-# conversation left off rather than from scratch.
+-#
+-# The brief is always stored in the admin panel. It is emailed as well when a
+-# mail transport is configured; without one the panel is the delivery route.
 +# Admin-side only: J3P staff upload a wearable or lab export (CSV, PDF, XLSX,
 +# whatever the participant's device or provider produces) and tag it with
 +# that participant's email so it's easy to find later. This is storage and
 +# review for the J3P team — nothing here is read into the advisor's prompt
 +# or retrieval; it never reaches the AI.
-+
+ 
+-BRIEFING_PROMPT = (
+-    "Write a pre-call brief for an advisor about to meet this person. The "
+-    "advisor has not seen this conversation.\n\n"
+-    "Rules:\n"
+-    "- Lead with the single thing they most want help with, in one sentence.\n"
+-    "- Then the specifics that matter: what they've tried, who else is "
+-    "involved (by role, not name), any dates or constraints they mentioned.\n"
+-    "- Note anything they seemed hesitant or guarded about — useful for the "
+-    "advisor to handle carefully.\n"
+-    "- End with two or three questions the advisor could open with.\n"
+-    "- Only what they actually said. No speculation about motives, no "
+-    "diagnosis, no advice to the advisor about what to recommend.\n"
+-    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
+-)
 +BIOMETRIC_FILE_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — generous for a CSV/PDF export
-+
-+
+ 
+ 
+-def _briefings_ensure_table(conn):
 +def _biometric_files_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
+     with conn.cursor() as cur:
+         cur.execute("""
+-            CREATE TABLE IF NOT EXISTS session_briefings (
+-                id            BIGSERIAL PRIMARY KEY,
+-                advisor_slug  TEXT,
+-                advisor_name  TEXT,
+-                participant   TEXT,
+-                summary       TEXT NOT NULL,
+-                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
+-                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 +            CREATE TABLE IF NOT EXISTS participant_biometric_files (
 +                id                BIGSERIAL PRIMARY KEY,
 +                participant_email TEXT NOT NULL,
@@ -2116,44 +2499,77 @@ index 4b5a702..cbbffc3 100644
 +                content           BYTEA NOT NULL,
 +                size_bytes        INTEGER NOT NULL,
 +                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
+             )
+         """)
 +        cur.execute("""CREATE INDEX IF NOT EXISTS participant_biometric_files_email
 +                       ON participant_biometric_files (participant_email)""")
-+    conn.commit()
-+
-+
+     conn.commit()
+ 
+ 
+-def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
 +def add_biometric_file(participant_email: str, title: str, notes: str,
 +                        mime: str, content: bytes) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
+     conn = _settings_db_conn()
+     if not conn:
+         return False
+     try:
+-        _briefings_ensure_table(conn)
 +        _biometric_files_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""
+         with conn.cursor() as cur:
+             cur.execute("""
+-                INSERT INTO session_briefings
+-                    (advisor_slug, advisor_name, participant, summary, emailed)
+-                VALUES (%s, %s, %s, %s, %s)
+-            """, (advisor_slug, advisor_name, participant, summary[:12000], emailed))
 +                INSERT INTO participant_biometric_files
 +                    (participant_email, title, notes, mime, content, size_bytes)
 +                VALUES (%s, %s, %s, %s, %s, %s)
 +            """, (participant_email[:200], title[:200], (notes or "")[:2000],
 +                  mime, content, len(content)))
-+        conn.commit()
-+        return True
-+    except Exception as e:
+         conn.commit()
+         return True
+     except Exception as e:
+-        app.logger.error(f"[briefing] save failed: {e}")
 +        app.logger.error(f"[biometric] upload failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
+         return False
+     finally:
+         conn.close()
+ 
+ 
+-def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
+-    """Briefings, optionally just one advisor's — or just the unassigned ones."""
 +def list_biometric_files() -> list:
 +    """Every uploaded file, grouped by participant (then newest first)."""
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return []
-+    try:
+     conn = _settings_db_conn()
+     if not conn:
+         return []
+-    out = []
+     try:
+-        _briefings_ensure_table(conn)
 +        _biometric_files_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            if advisor_slug:
+-                cur.execute("""
+-                    SELECT id, advisor_name, participant, summary, emailed, created_at
+-                    FROM session_briefings WHERE advisor_slug = %s
+-                    ORDER BY id DESC LIMIT %s
+-                """, (advisor_slug, limit))
+-            elif unassigned_only:
+-                cur.execute("""
+-                    SELECT id, advisor_name, participant, summary, emailed, created_at
+-                    FROM session_briefings
+-                    WHERE advisor_slug IS NULL OR advisor_slug = ''
+-                    ORDER BY id DESC LIMIT %s
+-                """, (limit,))
+-            else:
+-                cur.execute("""
+-                    SELECT id, advisor_name, participant, summary, emailed, created_at
+-                    FROM session_briefings ORDER BY id DESC LIMIT %s
+-                """, (limit,))
+-            for row in cur.fetchall():
+-                out.append({"id": row[0], "advisor": row[1] or "—",
+-                            "participant": row[2] or "—", "summary": row[3],
+-                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
 +            cur.execute("""
 +                SELECT id, participant_email, title, notes, size_bytes, uploaded_at
 +                FROM participant_biometric_files
@@ -2163,19 +2579,49 @@ index 4b5a702..cbbffc3 100644
 +        return [{"id": r[0], "participant_email": r[1], "title": r[2],
 +                 "notes": r[3], "size_bytes": r[4], "uploaded_at": r[5]}
 +                for r in rows]
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[briefing] list failed: {e}")
 +        app.logger.error(f"[biometric] list failed: {e}")
 +        return []
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+-    return out
+-
+-
+-def participant_label() -> str:
+-    """How the participant appears on the brief — no more than they've given."""
+-    prof = load_profile()
+-    bits = [prof.get(k) for k in ("first_name", "role", "specialty") if prof.get(k)]
+-    email = session.get("user_email", "")
+-    if email:
+-        bits.append(email)
+-    return " · ".join(bits) if bits else "Anonymous participant"
+ 
+ 
+-def build_briefing() -> str:
+-    """Summarise the conversation for the advisor. Empty string if too thin."""
+-    history = load_history()
+-    if len(history) < 2:
+-        return ""
+-    lines = []
+-    for turn in history[-30:]:
+-        who = "Participant" if turn.get("role") == "user" else "Advisor (AI)"
+-        lines.append(f"{who}: {(turn.get('content') or '')[:1800]}")
 +def get_biometric_file(file_id: int):
 +    """(content, mime, title) for download, or None."""
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return None
-+    try:
+     try:
+-        resp = client.messages.create(
+-            model=CONFIG["model"],
+-            max_tokens=900,
+-            system=[{"type": "text", "text": BRIEFING_PROMPT}],
+-            messages=[{"role": "user",
+-                       "content": "Conversation:\n\n" + "\n\n".join(lines)}],
+-        )
+-        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+-        return scrub_internal_emails("\n".join(parts).strip())
 +        _biometric_files_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            cur.execute("""
@@ -2184,45 +2630,71 @@ index 4b5a702..cbbffc3 100644
 +            """, (file_id,))
 +            row = cur.fetchone()
 +        return (row[0], row[1], row[2]) if row else None
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[briefing] generation failed: {e}")
+-        return ""
 +        app.logger.error(f"[biometric] fetch failed: {e}")
 +        return None
 +    finally:
 +        conn.close()
-+
-+
+ 
+ 
+-def email_briefing(advisor_name, participant, summary) -> bool:
+-    if not mail_transport_configured():
 +def delete_biometric_file(file_id: int) -> bool:
 +    conn = _settings_db_conn()
 +    if not conn:
-+        return False
-+    try:
+         return False
+-    to_addr = os.environ.get("BRIEFING_EMAIL") or os.environ.get(
+-        "SAFETY_ALERT_EMAIL") or CONFIG["contact_email"]
+-    subject = f"Pre-call brief — {participant}"
+-    body = (f"A participant has just booked time"
+-            f"{' with ' + advisor_name if advisor_name and advisor_name != '—' else ''}.\n\n"
+-            f"Participant: {participant}\n\n{summary}\n\n"
+-            f"— Generated automatically from their session with the J3P Advisor.")
+     try:
+-        return bool(send_email(to_addr, subject, body))
 +        _biometric_files_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM participant_biometric_files WHERE id = %s",
 +                        (file_id,))
 +        conn.commit()
 +        return True
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[briefing] email failed: {e}")
 +        app.logger.error(f"[biometric] delete failed: {e}")
-+        return False
+         return False
 +    finally:
 +        conn.close()
-+
-+
-+# ---------------------------------------------------------------------------
+ 
+ 
+ # ---------------------------------------------------------------------------
+-# Per-advisor knowledge
 +# Participant profile
-+# ---------------------------------------------------------------------------
+ # ---------------------------------------------------------------------------
+-# Two tiers. The shared J3P base is the framework every advisor draws on. On
+-# top of that, a document can be assigned to one advisor, and then only that
+-# advisor's sessions retrieve it.
+-#
+-# Ownership is tracked here rather than in the documents table, so database.py
+-# is untouched: documents keep unique titles (the duplicate check enforces it),
+-# and a title-to-advisor map is enough to filter retrieval.
 +# A deliberately thin profile: first name, role, specialty. No institution, no
 +# surname, no email beyond what sign-in already holds, nothing that would
 +# identify the person or their organisation. Enough for the advisor to stop
 +# being generic; not enough to be a personnel record.
-+
+ 
+-def _doc_owner_ensure_table(conn):
 +PROFILE_FIELDS = ("first_name", "role", "specialty")
 +
 +
 +def _profile_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
+     with conn.cursor() as cur:
+         cur.execute("""
+-            CREATE TABLE IF NOT EXISTS document_owner (
+-                title        TEXT PRIMARY KEY,
+-                advisor_slug TEXT NOT NULL,
+-                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
 +            CREATE TABLE IF NOT EXISTS participant_profile (
 +                token       TEXT PRIMARY KEY,
 +                first_name  TEXT,
@@ -2230,18 +2702,32 @@ index 4b5a702..cbbffc3 100644
 +                specialty   TEXT,
 +                asked       TEXT,
 +                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+    conn.commit()
-+
-+
+             )
+         """)
+     conn.commit()
+ 
+ 
+-def set_document_owner(title: str, advisor_slug: str) -> bool:
+-    """Assign a document to one advisor. Empty slug means the shared base."""
+-    if not title:
+-        return False
 +def load_profile() -> dict:
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return False
 +        return dict(session.get("profile_fallback") or {})
-+    try:
+     try:
+-        _doc_owner_ensure_table(conn)
 +        _profile_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            if advisor_slug:
+-                cur.execute("""
+-                    INSERT INTO document_owner (title, advisor_slug)
+-                    VALUES (%s, %s)
+-                    ON CONFLICT (title) DO UPDATE SET advisor_slug = EXCLUDED.advisor_slug
+-                """, (title[:200], advisor_slug))
+-            else:
+-                cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
 +            cur.execute("""SELECT first_name, role, specialty, asked
 +                           FROM participant_profile WHERE token = %s""",
 +                        (participant_token(),))
@@ -2282,34 +2768,67 @@ index 4b5a702..cbbffc3 100644
 +                ON CONFLICT (token) DO UPDATE
 +                SET {updates}, updated_at = NOW()
 +            """, (participant_token(), *fields.values()))
-+        conn.commit()
-+        return True
-+    except Exception as e:
+         conn.commit()
+         return True
+     except Exception as e:
+-        app.logger.error(f"[kb] owner write failed: {e}")
 +        app.logger.error(f"[profile] save failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
+         return False
+     finally:
+         conn.close()
+ 
+ 
+-def document_owners() -> dict:
+-    """{title: advisor_slug} for every assigned document."""
 +def forget_profile() -> bool:
 +    session.pop("profile_fallback", None)
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return {}
 +        return True
-+    try:
+     try:
+-        _doc_owner_ensure_table(conn)
 +        _profile_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("SELECT title, advisor_slug FROM document_owner")
+-            return {row[0]: row[1] for row in cur.fetchall()}
 +            cur.execute("DELETE FROM participant_profile WHERE token = %s",
 +                        (participant_token(),))
 +        conn.commit()
 +        return True
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[kb] owner read failed: {e}")
+-        return {}
 +        app.logger.error(f"[profile] forget failed: {e}")
 +        return False
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+ 
+ 
+-def filter_chunks_for_advisor(results, advisor_slug):
+-    """Shared documents plus this advisor's own. Others are dropped.
+-
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
+-    """
+-    owners = document_owners()
+-    if not owners:
+-        return results
+-    keep = []
+-    for r in results:
+-        owner = owners.get(r.get("title"))
+-        if not owner or owner == advisor_slug:
+-            keep.append(r)
+-    return keep
+-
+-
+-def detect_deliverable_request(text: str) -> bool:
+-    """True when the user is asking for a written document of some kind."""
+-    import re as _r
+-    if not text:
+-        return False
+-    low = text.lower()
+-    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
 +# Leadership roles worth recognising, longest first so "associate program
 +# director" wins over "program director".
 +_ROLE_PATTERNS = [
@@ -2331,33 +2850,373 @@ index 4b5a702..cbbffc3 100644
 +    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
 +    (r"\b(attending|faculty member|staff physician)\b", "attending"),
 +]
-+
-+
+ 
+ 
+-# "one pdf", "a single document", "not separate files" — the user wants
+-# everything in one file rather than one file per deliverable.
+-_SINGLE_FILE_RE = (
+-    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
+-    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
+-    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
+-    r"\bas one\b|\bsingle file\b)"
+-)
 +def detect_role(text: str):
 +    low = (text or "").lower()
 +    for pattern, label in _ROLE_PATTERNS:
 +        if re.search(pattern, low, re.IGNORECASE):
 +            return label
 +    return None
-+
-+
+ 
+ 
+-_SEPARATE_FILES_RE = (
+-    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
+-    r"\bindividual\s+(?:files?|documents?)\b|"
+-    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
+-    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
+-    r"\bsplit\s+(?:them|it|into)\b)"
+-)
 +def detect_first_name(text: str):
 +    """Only from an explicit self-introduction — never inferred."""
 +    if not text:
 +        return None
 +    patterns = [
-         r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
-         r"\bi'?m ([A-Z][a-z]{1,18})\b",
-         r"\bthis is ([A-Z][a-z]{1,18})\b",
-@@ -6762,10 +8318,35 @@ def build_briefing() -> str:
-                        "content": "Conversation:\n\n" + "\n\n".join(lines)}],
-         )
-         parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
--        return scrub_internal_emails("\n".join(parts).strip())
++        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
++        r"\bi'?m ([A-Z][a-z]{1,18})\b",
++        r"\bthis is ([A-Z][a-z]{1,18})\b",
++        r"\bcall me ([A-Z][a-z]{1,18})\b",
++        r"^([A-Z][a-z]{1,18}) here\b",
++    ]
++    # Words that follow "I'm" but aren't names
++    stop = {"a", "an", "the", "not", "in", "on", "at", "trying", "looking",
++            "working", "going", "just", "still", "also", "happy", "glad",
++            "sorry", "new", "here", "chief", "chair", "director", "faculty",
++            "attending", "concerned", "worried", "curious", "hoping"}
++    for pattern in patterns:
++        # Case-insensitive so "My name is" matches as well as "my name is",
++        # but the captured word must still be capitalised in the original —
++        # that's what separates a name from "I'm trying".
++        m = re.search(pattern, text, re.IGNORECASE)
++        if m:
++            candidate = m.group(1).strip()
++            if not candidate[:1].isupper():
++                continue
++            if candidate.lower() in stop:
++                continue
++            return candidate
++    return None
+ 
+ 
+-def wants_separate_files(text: str) -> bool:
+-    """True only when the user explicitly asked for more than one file."""
+-    import re as _r
+-    if not text:
++def update_profile_from_message(text: str) -> dict:
++    """Pick up anything the participant volunteers. Never asks, never guesses."""
++    found = {}
++    name = detect_first_name(text)
++    role = detect_role(text)
++    specialty = detect_specialty(text)
++    current = load_profile()
++    if name and not current.get("first_name"):
++        found["first_name"] = name
++    if role and not current.get("role"):
++        found["role"] = role
++    if specialty and not current.get("specialty"):
++        found["specialty"] = specialty
++    if found:
++        save_profile(**found)
++        app.logger.info(f"[profile] learned: {', '.join(found.keys())}")
++    return found
++
++
++def profile_guidance() -> str:
++    """Tell the model what it knows, and what it may ask for next."""
++    prof = load_profile()
++    known = [f"{k.replace('_', ' ')}: {prof[k]}"
++             for k in PROFILE_FIELDS if prof.get(k)]
++    asked = set((prof.get("asked") or "").split(","))
++    missing = [k for k in PROFILE_FIELDS if not prof.get(k) and k not in asked]
++
++    lines = ["\n\n---\nWHAT YOU KNOW ABOUT THIS PARTICIPANT"]
++    if known:
++        lines.append("  " + "; ".join(known))
++        lines.append("  Use this. Address them by first name occasionally — not "
++                     "every message. Write for their role and specialty "
++                     "specifically. Never ask again for anything listed here.")
++    else:
++        lines.append("  Nothing yet.")
++
++    if missing:
++        nice = {"first_name": "their first name", "role": "their leadership role",
++                "specialty": "their specialty"}
++        lines.append(
++            "  Not yet known: " + ", ".join(nice[m] for m in missing) + ". "
++            "You may ask for ONE of these, as a short closing question AFTER a "
++            "substantive answer — never as a gate, never before helping, and "
++            "never when they have asked for a document or a revision. At most "
++            "one such question per conversation."
++        )
++
++    lines.append(
++        "  NEVER ask for, and never record, their institution, hospital, "
++        "employer, city, surname, or anything else that would identify them or "
++        "their organisation. If they volunteer such detail, use it in the reply "
++        "if helpful but do not treat it as something to collect. Keep what you "
++        "hold to first name, role and specialty."
++    )
++    return "\n".join(lines) + "\n"
++
++
++# ---------------------------------------------------------------------------
++# Follow-up plans
++# ---------------------------------------------------------------------------
++# At the end of a session the participant can ask for an accountability plan:
++# what they said they'd do, by when, and what to watch for. It's built from
++# the conversation, saved against their profile, and surfaced at the start of
++# the next session so the advisor can follow up rather than start cold.
++
++PLAN_PROMPT = (
++    "Build a short accountability plan from this conversation.\n\n"
++    "Rules:\n"
++    "- Only include commitments THEY made or clearly accepted. Do not invent "
++    "actions they never agreed to, and do not pad the list.\n"
++    "- If they committed to nothing concrete, say so plainly in one line and "
++    "suggest at most two things they could commit to. Do not fabricate a plan.\n"
++    "- Use their own words for what they're doing where you can.\n"
++    "- Give each item a realistic timeframe. If they named one, use theirs; "
++    "otherwise suggest one and mark it as a suggestion.\n"
++    "- End with one line on the single thing most likely to derail this, drawn "
++    "from what they actually told you.\n\n"
++    "Format as markdown with a '# Follow-up Plan' heading, then a short "
++    "'## What you're doing' list, then '## Watch for'. Keep the whole thing "
++    "under 350 words. No preamble, no closing pleasantries."
++)
++
++
++def _plans_ensure_table(conn):
++    with conn.cursor() as cur:
++        cur.execute("""
++            CREATE TABLE IF NOT EXISTS participant_plans (
++                id          BIGSERIAL PRIMARY KEY,
++                token       TEXT NOT NULL,
++                content     TEXT NOT NULL,
++                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
++            )
++        """)
++        cur.execute("""CREATE INDEX IF NOT EXISTS participant_plans_token
++                       ON participant_plans (token)""")
++    conn.commit()
++
++
++def save_plan(content: str) -> bool:
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _plans_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""INSERT INTO participant_plans (token, content)
++                           VALUES (%s, %s)""",
++                        (participant_token(), content[:20000]))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[plans] save failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def list_plans(limit=10):
++    conn = _settings_db_conn()
++    if not conn:
++        return []
++    out = []
++    try:
++        _plans_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""SELECT id, content, created_at FROM participant_plans
++                           WHERE token = %s ORDER BY id DESC LIMIT %s""",
++                        (participant_token(), limit))
++            for row in cur.fetchall():
++                out.append({"id": row[0], "content": row[1],
++                            "when": _fmt_ts(row[2])})
++    except Exception as e:
++        app.logger.error(f"[plans] list failed: {e}")
++    finally:
++        conn.close()
++    return out
++
++
++def delete_plan(plan_id: int) -> bool:
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _plans_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""DELETE FROM participant_plans
++                           WHERE id = %s AND token = %s""",
++                        (plan_id, participant_token()))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[plans] delete failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def open_commitments_block() -> str:
++    """The most recent plan, so the advisor can follow up next session."""
++    plans = list_plans(limit=1)
++    if not plans:
++        return ""
++    plan = plans[0]
++    return (
++        "\n\n---\n"
++        f"COMMITMENTS FROM THEIR LAST SESSION ({plan['when']}) — they asked for "
++        "this plan themselves. Early in this conversation, ask how one of these "
++        "went, naming it specifically. Ask once, briefly, and then get on with "
++        "whatever they've come with; do not work through the list or nag. If "
++        "they say it slipped, treat that as information, not failure.\n\n"
++        + plan["content"][:4000] + "\n"
++    )
++
++
++# ---------------------------------------------------------------------------
++# Pre-session briefings
++# ---------------------------------------------------------------------------
++# When a participant books time, the advisor gets a short brief on what the
++# participant has been working through — so the call starts where the
++# conversation left off rather than from scratch.
++#
++# The brief is always stored in the admin panel. It is emailed as well when a
++# mail transport is configured; without one the panel is the delivery route.
++
++BRIEFING_PROMPT = (
++    "Write a pre-call brief for an advisor about to meet this person. The "
++    "advisor has not seen this conversation.\n\n"
++    "Rules:\n"
++    "- Lead with the single thing they most want help with, in one sentence.\n"
++    "- Then the specifics that matter: what they've tried, who else is "
++    "involved (by role, not name), any dates or constraints they mentioned.\n"
++    "- Note anything they seemed hesitant or guarded about — useful for the "
++    "advisor to handle carefully.\n"
++    "- End with two or three questions the advisor could open with.\n"
++    "- Only what they actually said. No speculation about motives, no "
++    "diagnosis, no advice to the advisor about what to recommend.\n"
++    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
++)
++
++
++def _briefings_ensure_table(conn):
++    with conn.cursor() as cur:
++        cur.execute("""
++            CREATE TABLE IF NOT EXISTS session_briefings (
++                id            BIGSERIAL PRIMARY KEY,
++                advisor_slug  TEXT,
++                advisor_name  TEXT,
++                participant   TEXT,
++                summary       TEXT NOT NULL,
++                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
++                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
++            )
++        """)
++    conn.commit()
++
++
++def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _briefings_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                INSERT INTO session_briefings
++                    (advisor_slug, advisor_name, participant, summary, emailed)
++                VALUES (%s, %s, %s, %s, %s)
++            """, (advisor_slug, advisor_name, participant, summary[:12000], emailed))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[briefing] save failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
++    """Briefings, optionally just one advisor's — or just the unassigned ones."""
++    conn = _settings_db_conn()
++    if not conn:
++        return []
++    out = []
++    try:
++        _briefings_ensure_table(conn)
++        with conn.cursor() as cur:
++            if advisor_slug:
++                cur.execute("""
++                    SELECT id, advisor_name, participant, summary, emailed, created_at
++                    FROM session_briefings WHERE advisor_slug = %s
++                    ORDER BY id DESC LIMIT %s
++                """, (advisor_slug, limit))
++            elif unassigned_only:
++                cur.execute("""
++                    SELECT id, advisor_name, participant, summary, emailed, created_at
++                    FROM session_briefings
++                    WHERE advisor_slug IS NULL OR advisor_slug = ''
++                    ORDER BY id DESC LIMIT %s
++                """, (limit,))
++            else:
++                cur.execute("""
++                    SELECT id, advisor_name, participant, summary, emailed, created_at
++                    FROM session_briefings ORDER BY id DESC LIMIT %s
++                """, (limit,))
++            for row in cur.fetchall():
++                out.append({"id": row[0], "advisor": row[1] or "—",
++                            "participant": row[2] or "—", "summary": row[3],
++                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
++    except Exception as e:
++        app.logger.error(f"[briefing] list failed: {e}")
++    finally:
++        conn.close()
++    return out
++
++
++def participant_label() -> str:
++    """How the participant appears on the brief — no more than they've given."""
++    prof = load_profile()
++    bits = [prof.get(k) for k in ("first_name", "role", "specialty") if prof.get(k)]
++    email = session.get("user_email", "")
++    if email:
++        bits.append(email)
++    return " · ".join(bits) if bits else "Anonymous participant"
++
++
++def build_briefing() -> str:
++    """Summarise the conversation for the advisor. Empty string if too thin."""
++    history = load_history()
++    if len(history) < 2:
++        return ""
++    lines = []
++    for turn in history[-30:]:
++        who = "Participant" if turn.get("role") == "user" else "Advisor (AI)"
++        lines.append(f"{who}: {(turn.get('content') or '')[:1800]}")
++    try:
++        resp = client.messages.create(
++            model=CONFIG["model"],
++            max_tokens=900,
++            system=[{"type": "text", "text": BRIEFING_PROMPT}],
++            messages=[{"role": "user",
++                       "content": "Conversation:\n\n" + "\n\n".join(lines)}],
++        )
++        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
 +        summary = "\n".join(parts).strip()
-     except Exception as e:
-         app.logger.error(f"[briefing] generation failed: {e}")
-         return ""
++    except Exception as e:
++        app.logger.error(f"[briefing] generation failed: {e}")
++        return ""
 +    # A separate, deterministic section — not handed to the model, so it's
 +    # never paraphrased, garbled, or quietly dropped the way something
 +    # folded into the AI's own summary could be.
@@ -2383,21 +3242,34 @@ index 4b5a702..cbbffc3 100644
 +        "personality measure, not a clinical assessment._"
 +    )
 +    return "\n".join(parts)
- 
- 
- def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,12 +8370,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
- # Per-advisor knowledge
- # ---------------------------------------------------------------------------
- # Two tiers. The shared J3P base is the framework every advisor draws on. On
--# top of that, a document can be assigned to one advisor, and then only that
--# advisor's sessions retrieve it.
++
++
++def email_briefing(advisor_name, participant, summary) -> bool:
++    if not mail_transport_configured():
++        return False
++    to_addr = os.environ.get("BRIEFING_EMAIL") or os.environ.get(
++        "SAFETY_ALERT_EMAIL") or CONFIG["contact_email"]
++    subject = f"Pre-call brief — {participant}"
++    body = (f"A participant has just booked time"
++            f"{' with ' + advisor_name if advisor_name and advisor_name != '—' else ''}.\n\n"
++            f"Participant: {participant}\n\n{summary}\n\n"
++            f"— Generated automatically from their session with the J3P Advisor.")
++    try:
++        return bool(send_email(to_addr, subject, body))
++    except Exception as e:
++        app.logger.error(f"[briefing] email failed: {e}")
++        return False
++
++
++# ---------------------------------------------------------------------------
++# Per-advisor knowledge
++# ---------------------------------------------------------------------------
++# Two tiers. The shared J3P base is the framework every advisor draws on. On
 +# top of that, a document can be assigned to one or more advisors, and then
 +# only those advisors' sessions retrieve it.
- #
- # Ownership is tracked here rather than in the documents table, so database.py
- # is untouched: documents keep unique titles (the duplicate check enforces it),
--# and a title-to-advisor map is enough to filter retrieval.
++#
++# Ownership is tracked here rather than in the documents table, so database.py
++# is untouched: documents keep unique titles (the duplicate check enforces it),
 +# and a title-to-advisor(s) map is enough to filter retrieval.
 +#
 +# document_owner (legacy, single advisor per title) is kept for backward
@@ -2405,18 +3277,63 @@ index 4b5a702..cbbffc3 100644
 +# document_advisors (title, advisor_slug) is the current many-to-many table —
 +# it's what the admin "Base" column reads and writes, and it lets a document
 +# be shared with several advisors at once rather than exactly one.
- 
- def _doc_owner_ensure_table(conn):
-     with conn.cursor() as cur:
-@@ -6852,19 +8439,113 @@ def document_owners() -> dict:
-         conn.close()
- 
- 
--def filter_chunks_for_advisor(results, advisor_slug):
--    """Shared documents plus this advisor's own. Others are dropped.
--
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
++
++def _doc_owner_ensure_table(conn):
++    with conn.cursor() as cur:
++        cur.execute("""
++            CREATE TABLE IF NOT EXISTS document_owner (
++                title        TEXT PRIMARY KEY,
++                advisor_slug TEXT NOT NULL,
++                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
++            )
++        """)
++    conn.commit()
++
++
++def set_document_owner(title: str, advisor_slug: str) -> bool:
++    """Assign a document to one advisor. Empty slug means the shared base."""
++    if not title:
++        return False
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _doc_owner_ensure_table(conn)
++        with conn.cursor() as cur:
++            if advisor_slug:
++                cur.execute("""
++                    INSERT INTO document_owner (title, advisor_slug)
++                    VALUES (%s, %s)
++                    ON CONFLICT (title) DO UPDATE SET advisor_slug = EXCLUDED.advisor_slug
++                """, (title[:200], advisor_slug))
++            else:
++                cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[kb] owner write failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def document_owners() -> dict:
++    """{title: advisor_slug} for every assigned document."""
++    conn = _settings_db_conn()
++    if not conn:
++        return {}
++    try:
++        _doc_owner_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("SELECT title, advisor_slug FROM document_owner")
++            return {row[0]: row[1] for row in cur.fetchall()}
++    except Exception as e:
++        app.logger.error(f"[kb] owner read failed: {e}")
++        return {}
++    finally:
++        conn.close()
++
++
 +def _doc_advisors_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -2516,22 +3433,54 @@ index 4b5a702..cbbffc3 100644
 +    A document with no assignments belongs to the shared J3P base and is
 +    always available; an assigned one is reachable only to the advisor(s)
 +    it's been given to.
-     """
--    owners = document_owners()
--    if not owners:
++    """
 +    advisor_map = document_advisor_map()
 +    if not advisor_map:
-         return results
-     keep = []
-     for r in results:
--        owner = owners.get(r.get("title"))
--        if not owner or owner == advisor_slug:
++        return results
++    keep = []
++    for r in results:
 +        slugs = advisor_map.get(r.get("title"))
 +        if not slugs or advisor_slug in slugs:
-             keep.append(r)
-     return keep
- 
-@@ -7107,14 +8788,37 @@ def _render_chat(force_scheduling=None, advisor=None):
++            keep.append(r)
++    return keep
++
++
++def detect_deliverable_request(text: str) -> bool:
++    """True when the user is asking for a written document of some kind."""
++    import re as _r
++    if not text:
++        return False
++    low = text.lower()
++    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
++
++
++# "one pdf", "a single document", "not separate files" — the user wants
++# everything in one file rather than one file per deliverable.
++_SINGLE_FILE_RE = (
++    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
++    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
++    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
++    r"\bas one\b|\bsingle file\b)"
++)
++
++
++_SEPARATE_FILES_RE = (
++    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
++    r"\bindividual\s+(?:files?|documents?)\b|"
++    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
++    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
++    r"\bsplit\s+(?:them|it|into)\b)"
++)
++
++
++def wants_separate_files(text: str) -> bool:
++    """True only when the user explicitly asked for more than one file."""
++    import re as _r
++    if not text:
+         return False
+     low = text.lower()
+     if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
+@@ -7107,14 +8727,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -2570,7 +3519,7 @@ index 4b5a702..cbbffc3 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8827,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8766,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -2582,7 +3531,7 @@ index 4b5a702..cbbffc3 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8844,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8783,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -2591,7 +3540,7 @@ index 4b5a702..cbbffc3 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +8852,29 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +8791,29 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
@@ -2623,7 +3572,7 @@ index 4b5a702..cbbffc3 100644
      )
  
  
-@@ -7173,6 +8883,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8822,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -2636,7 +3585,7 @@ index 4b5a702..cbbffc3 100644
      return _render_chat()
  
  
-@@ -7182,6 +8898,7 @@ def index():
+@@ -7182,6 +8837,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -2644,7 +3593,7 @@ index 4b5a702..cbbffc3 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8992,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8931,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -2652,7 +3601,7 @@ index 4b5a702..cbbffc3 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7506,7 +9224,7 @@ def chat():
+@@ -7506,7 +9163,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -2661,7 +3610,7 @@ index 4b5a702..cbbffc3 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7903,6 +9621,10 @@ def chat():
+@@ -7903,6 +9560,10 @@ def chat():
          f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
      )
  
@@ -2672,7 +3621,7 @@ index 4b5a702..cbbffc3 100644
      if context:
          composed_prompt = (
              base_prompt
-@@ -7918,12 +9640,16 @@ def chat():
+@@ -7918,12 +9579,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -2689,7 +3638,7 @@ index 4b5a702..cbbffc3 100644
          )
  
      try:
-@@ -8207,12 +9933,13 @@ def chat():
+@@ -8207,12 +9872,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -2704,7 +3653,7 @@ index 4b5a702..cbbffc3 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +10004,28 @@ def acknowledge_release():
+@@ -8277,6 +9943,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -2733,7 +3682,7 @@ index 4b5a702..cbbffc3 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +10104,12 @@ def feedback():
+@@ -8355,12 +10043,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -2748,7 +3697,7 @@ index 4b5a702..cbbffc3 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +10363,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +10302,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -2759,7 +3708,7 @@ index 4b5a702..cbbffc3 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +10571,23 @@ def advisor_avatar():
+@@ -8820,8 +10510,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -2784,7 +3733,7 @@ index 4b5a702..cbbffc3 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +10605,38 @@ def advisor_avatar():
+@@ -8839,28 +10544,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -2817,31 +3766,31 @@ index 4b5a702..cbbffc3 100644
 +            return redirect(url_for("admin_dashboard"))
 +        data, mime = prepare_avatar(raw)
 +        store_avatar(data, mime)
++
++    name = (request.form.get("avatar_name") or "").strip()[:60]
++    save_setting("avatar_name", name)
  
 -    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
 -    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
 -        flash("Use a JPG, PNG, WEBP or GIF image.")
 -        return redirect(url_for("admin_dashboard"))
-+    name = (request.form.get("avatar_name") or "").strip()[:60]
-+    save_setting("avatar_name", name)
++    # An uploaded file always wins over a stale "no photo" checkbox — same
++    # priority as a named advisor's form.
++    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
++    save_setting("avatar_no_photo", no_photo)
  
 -    data, mime = prepare_avatar(raw)
 -    if store_avatar(data, mime):
 -        flash("✓ Advisor photo updated. Participants will see it immediately.")
 -    else:
 -        flash("Could not save the photo — check the database connection.")
-+    # An uploaded file always wins over a stale "no photo" checkbox — same
-+    # priority as a named advisor's form.
-+    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
-+    save_setting("avatar_no_photo", no_photo)
-+
 +    save_setting("default_scheduling_url", scheduling_url[:500])
 +
 +    flash("✓ Default advisor saved.")
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -8904,66 +10680,556 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8904,66 +10619,556 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
      background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
      box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
    }
@@ -3447,7 +4396,7 @@ index 4b5a702..cbbffc3 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9089,15 +11355,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +11294,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -3521,7 +4470,7 @@ index 4b5a702..cbbffc3 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +11441,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +11380,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -3537,7 +4486,7 @@ index 4b5a702..cbbffc3 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +11458,13 @@ form.upload {
+@@ -9133,8 +11397,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -3553,7 +4502,7 @@ index 4b5a702..cbbffc3 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +11500,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +11439,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -3573,7 +4522,7 @@ index 4b5a702..cbbffc3 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +11569,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +11508,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -3597,7 +4546,7 @@ index 4b5a702..cbbffc3 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +11684,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +11623,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -3788,7 +4737,7 @@ index 4b5a702..cbbffc3 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +11900,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11839,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -3841,7 +4790,7 @@ index 4b5a702..cbbffc3 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +11955,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11894,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -3875,7 +4824,7 @@ index 4b5a702..cbbffc3 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +11991,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11930,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -3934,7 +4883,7 @@ index 4b5a702..cbbffc3 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +12040,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +11979,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -3945,7 +4894,7 @@ index 4b5a702..cbbffc3 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +12091,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +12030,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -3963,7 +4912,7 @@ index 4b5a702..cbbffc3 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +12108,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +12047,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -4008,7 +4957,7 @@ index 4b5a702..cbbffc3 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +12175,143 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +12114,143 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -4158,7 +5107,7 @@ index 4b5a702..cbbffc3 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +12358,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +12297,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -4189,7 +5138,7 @@ index 4b5a702..cbbffc3 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +12401,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +12340,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -4199,7 +5148,7 @@ index 4b5a702..cbbffc3 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +12566,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +12505,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -4214,7 +5163,7 @@ index 4b5a702..cbbffc3 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +12608,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +12547,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -4223,7 +5172,7 @@ index 4b5a702..cbbffc3 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +12637,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +12576,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -4241,7 +5190,7 @@ index 4b5a702..cbbffc3 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +12699,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +12638,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -4269,7 +5218,7 @@ index 4b5a702..cbbffc3 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +12907,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12846,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -4279,7 +5228,7 @@ index 4b5a702..cbbffc3 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +12928,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12867,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -4302,7 +5251,7 @@ index 4b5a702..cbbffc3 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +13061,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +13000,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -4313,7 +5262,7 @@ index 4b5a702..cbbffc3 100644
  
  </div>
  
-@@ -10478,6 +13292,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +13231,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -4329,7 +5278,7 @@ index 4b5a702..cbbffc3 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +13311,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +13250,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -4610,7 +5559,7 @@ index 4b5a702..cbbffc3 100644
  </body></html>"""
  
  
-@@ -10511,6 +13608,247 @@ def admin_logout():
+@@ -10511,6 +13547,247 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -4858,7 +5807,7 @@ index 4b5a702..cbbffc3 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +13861,25 @@ def admin_dashboard():
+@@ -10523,11 +13800,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -4884,7 +5833,7 @@ index 4b5a702..cbbffc3 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +13887,13 @@ def admin_dashboard():
+@@ -10535,7 +13826,13 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -4899,7 +5848,7 @@ index 4b5a702..cbbffc3 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +13903,23 @@ def admin_dashboard():
+@@ -10545,9 +13842,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -4923,7 +5872,7 @@ index 4b5a702..cbbffc3 100644
      )
  
  
-@@ -10631,16 +14003,43 @@ def admin_save_advisor():
+@@ -10631,16 +13942,43 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -4973,7 +5922,7 @@ index 4b5a702..cbbffc3 100644
      else:
          flash("Could not save the advisor — check the database connection.")
      return redirect(url_for("admin_dashboard"))
-@@ -10657,6 +14056,78 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +13995,78 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -5052,7 +6001,7 @@ index 4b5a702..cbbffc3 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +14143,14 @@ def admin_settings():
+@@ -10672,21 +14082,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -5076,7 +6025,7 @@ index 4b5a702..cbbffc3 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +14245,34 @@ def admin_upload_folder():
+@@ -10781,22 +14184,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -5117,7 +6066,7 @@ index 4b5a702..cbbffc3 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +14285,6 @@ def admin_upload_folder():
+@@ -10809,7 +14224,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -5125,7 +6074,7 @@ index 4b5a702..cbbffc3 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +14313,10 @@ def admin_upload_folder():
+@@ -10838,7 +14252,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -5137,7 +6086,7 @@ index 4b5a702..cbbffc3 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +14324,12 @@ def admin_upload_folder():
+@@ -10846,14 +14263,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -5152,7 +6101,7 @@ index 4b5a702..cbbffc3 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +14337,11 @@ def admin_upload_folder():
+@@ -10861,8 +14276,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -5166,7 +6115,7 @@ index 4b5a702..cbbffc3 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +14522,34 @@ def admin_upload_url():
+@@ -11043,25 +14461,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -5208,7 +6157,7 @@ index 4b5a702..cbbffc3 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +14570,10 @@ def admin_upload_url():
+@@ -11082,7 +14509,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -5220,7 +6169,7 @@ index 4b5a702..cbbffc3 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +14581,7 @@ def admin_upload_url():
+@@ -11090,8 +14520,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -5230,7 +6179,7 @@ index 4b5a702..cbbffc3 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +14591,14 @@ def admin_upload_url():
+@@ -11101,14 +14530,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -5248,7 +6197,7 @@ index 4b5a702..cbbffc3 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +14611,32 @@ def admin_upload_url():
+@@ -11121,32 +14550,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -5297,7 +6246,7 @@ index 4b5a702..cbbffc3 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +14650,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +14589,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

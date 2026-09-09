@@ -3782,13 +3782,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         // Turning OFF should stop anything currently speaking
         if (!autoSpeakEnabled) {
           J3PSpeech.stop();
-          if (window.__activeSpeakBtn) {
-            const prev = window.__activeSpeakBtn;
-            prev.classList.remove("speaking", "paused");
-            const lbl = prev.querySelector(".speak-label");
-            if (lbl) lbl.textContent = "Speak";
-            window.__activeSpeakBtn = null;
-          }
+          setAvatarSpeaking(window.__activeSpeakMsg, false);
+          Presence.set("idle");
+          window.__activeSpeakMsg = null;
         }
       });
     }
@@ -4687,8 +4683,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             }
           }
 
-          const speakBtn = last.querySelector(".speak-btn");
-          if (speakBtn) speakBtn.click();
+          if (last.__speakReply) last.__speakReply();
         });
       }
 
@@ -4769,8 +4764,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // browser's own speech, which is instant and free.
       wrap.addEventListener("click", async () => {
         if (!TALKING_AVATAR_ON) {
-          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
-          if (speakBtn) speakBtn.click();
+          if (msgDiv && msgDiv.__speakReply) msgDiv.__speakReply();
           return;
         }
         if (wrap.classList.contains("is-video")) {
@@ -4806,8 +4800,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // Never leave a dead frame — fall back to browser speech
           wrap.classList.remove("is-loading", "is-video");
           if (hint) hint.textContent = "Click to listen";
-          const speakBtn = msgDiv ? msgDiv.querySelector(".speak-btn") : null;
-          if (speakBtn) speakBtn.click();
+          if (msgDiv && msgDiv.__speakReply) msgDiv.__speakReply();
         }
       });
 
@@ -4907,11 +4900,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       chatWrap.scrollTop = chatWrap.scrollHeight;
       // If auto-speak is enabled and this is a fresh assistant reply (with feedback
       // row, meaning it was just received from the API), start reading it aloud.
-      // A tiny delay gives the DOM time to attach the speak button.
+      // A tiny delay gives the DOM time to finish attaching div.__speakReply.
       if (withFeedback && role.startsWith("assistant") && window.__isAutoSpeakOn && window.__isAutoSpeakOn()) {
         setTimeout(() => {
-          const sb = div.querySelector(".speak-btn");
-          if (sb) sb.click();
+          if (div.__speakReply) div.__speakReply();
         }, 60);
       }
       return div;
@@ -4932,15 +4924,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
           </svg>
         </button>
-        <button class="action-btn speak-btn" style="margin-left: auto;" aria-label="Read answer aloud" title="Read answer aloud">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/>
-            <path d="M15.54 8.46a5 5 0 0 1 0 7.07"/>
-            <path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>
-          </svg>
-          <span class="speak-label">Speak</span>
-        </button>
-        <button class="action-btn copy-btn" aria-label="Copy answer" title="Copy answer">
+        <button class="action-btn copy-btn" style="margin-left: auto;" aria-label="Copy answer" title="Copy answer">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
           </svg>
@@ -5088,13 +5072,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
         });
       });
-      // === SPEAK button (browser text-to-speech) ===
-      const speakBtn = wrap.querySelector(".speak-btn");
-      const speakLabel = speakBtn ? speakBtn.querySelector(".speak-label") : null;
-      if (!J3PSpeech.supported && speakBtn) {
-        // Browser doesn't support speech synthesis — hide the button entirely
-        speakBtn.style.display = "none";
-      } else if (speakBtn) {
+      // === Read this reply aloud — no dedicated per-message button anymore
+      // (removed as redundant with the header's Speak toggle). Triggered by
+      // clicking the presence avatar, or by the header's auto-speak toggle
+      // reading a fresh reply automatically. msgDiv.__speakReply() is the
+      // one shared entry point both of those call into. ===
+      if (J3PSpeech.supported) {
         // Strip markdown so the reader doesn't literally say "star star bold star star"
         const stripMarkdown = (t) => (t || "")
           .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
@@ -5114,80 +5097,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
           .trim();
 
         function resetSpeakUI() {
-          speakBtn.classList.remove("speaking", "paused");
-          if (speakLabel) speakLabel.textContent = "Speak";
           setAvatarSpeaking(msgDiv, false);
           Presence.set("idle");
-        }
-        function markSpeaking() {
-          speakBtn.classList.add("speaking");
-          speakBtn.classList.remove("paused");
-          // Where pause isn't available the control is stop-only, so say so
-          if (speakLabel) speakLabel.textContent = J3PSpeech.canPause ? "Speaking" : "Stop";
-          clearAllAvatarStates();
-          setAvatarSpeaking(msgDiv, true);
-          Presence.set("speaking");
+          if (window.__activeSpeakMsg === msgDiv) window.__activeSpeakMsg = null;
         }
 
-        // On platforms without pause support, make the intent clear up front
-        if (!J3PSpeech.canPause) {
-          speakBtn.title = "Read answer aloud (tap again to stop)";
-        }
-
-        speakBtn.addEventListener("click", () => {
-          // This button is the active one → toggle pause/resume, or stop
-          if (window.__activeSpeakBtn === speakBtn) {
-            if (!J3PSpeech.canPause) {
-              J3PSpeech.stop();
-              resetSpeakUI();
-              window.__activeSpeakBtn = null;
-              return;
-            }
-            if (J3PSpeech.isPaused()) {
-              J3PSpeech.resume();
-              markSpeaking();
-            } else {
-              J3PSpeech.pause();
-              speakBtn.classList.remove("speaking");
-              speakBtn.classList.add("paused");
-              if (speakLabel) speakLabel.textContent = "Paused";
-            }
+        msgDiv.__speakReply = function() {
+          // This message is the one currently playing — toggle it off
+          if (window.__activeSpeakMsg === msgDiv) {
+            J3PSpeech.stop();
+            resetSpeakUI();
             return;
           }
-
-          // A different message was playing — reset its button first
-          if (window.__activeSpeakBtn && window.__activeSpeakBtn !== speakBtn) {
-            const prev = window.__activeSpeakBtn;
-            prev.classList.remove("speaking", "paused");
-            const prevLabel = prev.querySelector(".speak-label");
-            if (prevLabel) prevLabel.textContent = "Speak";
-          }
+          // A different message was playing — stop it before starting this one
+          if (window.__activeSpeakMsg) J3PSpeech.stop();
 
           const ok = J3PSpeech.play(stripMarkdown(replyText), {
             onStart: () => {
-              window.__activeSpeakBtn = speakBtn;
-              markSpeaking();
+              window.__activeSpeakMsg = msgDiv;
+              clearAllAvatarStates();
+              setAvatarSpeaking(msgDiv, true);
+              Presence.set("speaking");
             },
-            onEnd: () => {
-              resetSpeakUI();
-              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
-            },
+            onEnd: () => resetSpeakUI(),
             onError: (reason) => {
               console.error("Speech error:", reason);
               resetSpeakUI();
-              if (window.__activeSpeakBtn === speakBtn) window.__activeSpeakBtn = null;
-              if (reason === "blocked" && speakLabel) {
-                // Most common cause on iPhone/iPad is the physical silent switch
-                speakLabel.textContent = J3PSpeech.isIOS ? "Check mute" : "Unavailable";
-                speakBtn.title = J3PSpeech.isIOS
-                  ? "No audio — check the side silent switch and volume, then try again"
-                  : "Speech is unavailable in this browser";
-                setTimeout(() => { if (speakLabel) speakLabel.textContent = "Speak"; }, 3200);
-              }
             },
           }, { fromGesture: true });
           if (!ok) resetSpeakUI();
-        });
+        };
       }
 
       // === COPY button ===
@@ -5933,7 +5872,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       resetArmed = false;
       // Stop any in-progress speech before wiping the chat
       J3PSpeech.stop();
-      window.__activeSpeakBtn = null;
+      window.__activeSpeakMsg = null;
       await fetch("/reset", { method: "POST" });
       chat.innerHTML = "";
       const div = document.createElement("div");
