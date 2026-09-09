@@ -10412,7 +10412,7 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
       <div class="brand-divider"></div>
-      <span>{{ cfg.persona_name }} Advisor Portal</span>
+      <span>Advisor Portal</span>
     </div>
     <form method="POST" action="{{ url_for('advisor_portal_logout') }}">
       <button type="submit" class="logout-btn">Sign out</button>
