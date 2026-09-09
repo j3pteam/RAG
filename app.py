@@ -25,7 +25,7 @@ from pathlib import Path
 from functools import wraps
 from flask import (
     Flask, request, jsonify, session, render_template_string,
-    send_from_directory, redirect, url_for, flash,
+    send_from_directory, redirect, url_for, flash, Response,
 )
 import anthropic
 
@@ -1884,6 +1884,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
       content: ""; position: absolute; left: 0; top: 0; bottom: 0;
       width: 3px; background: var(--gold);
     }
+    /* A short, admin-curated "about your advisor" note — deliberately not
+       styled like a chat bubble, so it doesn't read as something the
+       assistant said about itself. */
+    .advisor-bio-note {
+      margin: -0.6rem 0 1.25rem; padding: 0.7rem 1rem;
+      background: rgba(210, 188, 141, 0.15); border: 1px solid rgba(210, 188, 141, 0.4);
+      border-radius: 3px; font-size: 0.85rem; line-height: 1.55; color: var(--navy);
+    }
+    .advisor-bio-note strong { color: var(--navy); font-weight: 500; }
     /* Acknowledgment gate — shown at the start of every session */
     .ack-overlay {
       position: fixed; inset: 0; z-index: 100;
@@ -2900,6 +2909,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div id="chat-wrap">
     <div id="chat">
       <div class="msg assistant">{{ cfg.opening }}</div>
+      {% if cfg.client_bio %}
+      <div class="advisor-bio-note">
+        <strong>About {{ cfg.persona_name }}:</strong> {{ cfg.client_bio }}
+      </div>
+      {% endif %}
     </div>
   </div>
 
@@ -6633,6 +6647,15 @@ def _advisors_ensure_table(conn):
                         "portal_token TEXT")
         except Exception:
             pass
+        # Added later: an admin-curated, client-facing "about this advisor"
+        # style blurb — participants may see this; it's never generated or
+        # edited automatically from the advisor's personality/360 data,
+        # only ever suggested as a starting point for an admin to review.
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "client_bio TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -6649,6 +6672,12 @@ def advisors_with_detail():
         adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
         adv["documents"] = [t for t, slugs in document_advisor_map().items()
                             if adv["slug"] in slugs]
+        adv["personality"] = get_advisor_personality(adv["slug"])
+        adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
+        adv["suggested_bio"] = (
+            advisor_style_bio(adv["name"], adv["personality"]["scores"])
+            if adv["personality"] else ""
+        )
         out.append(adv)
     return out
 
@@ -6666,13 +6695,13 @@ def list_advisors():
                 SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
                        COALESCE(scheduling_url, ''), show_scheduling_override,
                        show_avatar_override, allow_materials_override,
-                       personality_override, portal_token
+                       personality_override, portal_token, COALESCE(client_bio, '')
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
                  show_scheduling_override, show_avatar_override,
                  allow_materials_override, personality_override,
-                 portal_token) in cur.fetchall():
+                 portal_token, client_bio) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -6681,7 +6710,8 @@ def list_advisors():
                             "show_avatar_override": show_avatar_override,
                             "allow_materials_override": allow_materials_override,
                             "personality_override": personality_override,
-                            "portal_token": portal_token or ""})
+                            "portal_token": portal_token or "",
+                            "client_bio": client_bio or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -6702,7 +6732,7 @@ def get_advisor(slug: str):
                                   COALESCE(scheduling_url, ''),
                                   show_scheduling_override, show_avatar_override,
                                   allow_materials_override, personality_override,
-                                  portal_token
+                                  portal_token, COALESCE(client_bio, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
@@ -6711,7 +6741,8 @@ def get_advisor(slug: str):
                 "show_avatar_override": row[5],
                 "allow_materials_override": row[6],
                 "personality_override": row[7],
-                "portal_token": row[8] or ""} if row else None
+                "portal_token": row[8] or "",
+                "client_bio": row[9] or ""} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -6759,6 +6790,24 @@ def set_advisor_portal_token(slug: str, token) -> bool:
         return True
     except Exception as e:
         app.logger.error(f"[advisors] portal token write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_advisor_bio(slug: str, bio: str) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET client_bio = %s WHERE slug = %s",
+                        ((bio or "")[:2000], slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] bio write failed: {e}")
         return False
     finally:
         conn.close()
@@ -7210,6 +7259,256 @@ def get_personality_scores() -> dict:
     except Exception as e:
         app.logger.error(f"[personality] read failed: {e}")
         return session.get("personality") or {}
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Advisor onboarding: the advisor's own TIPI self-report (persistent, keyed
+# by slug — unlike participant_personality above, which is deliberately
+# session-scoped) and their 360-degree feedback document. Both live only in
+# the advisor portal and the admin panel; neither is ever read by the AI
+# during a chat session or exposed to participants directly.
+# ---------------------------------------------------------------------------
+
+def _advisor_personality_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_personality (
+                advisor_slug      TEXT PRIMARY KEY,
+                openness          NUMERIC(3,1),
+                conscientiousness NUMERIC(3,1),
+                extraversion      NUMERIC(3,1),
+                agreeableness     NUMERIC(3,1),
+                stability         NUMERIC(3,1),
+                completed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_advisor_personality_scores(slug: str, answers: dict) -> bool:
+    """answers: {trait: 1-7} — TIPI trait averages (already computed by
+    score_tipi()). Persistent per advisor, overwritten on retake."""
+    if not slug:
+        return False
+    clean = {}
+    for trait in _PERSONALITY_TRAITS:
+        if trait not in answers:
+            continue
+        try:
+            v = round(float(answers[trait]), 1)
+        except (TypeError, ValueError):
+            continue
+        if 1 <= v <= 7:
+            clean[trait] = v
+    if not clean:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_personality_ensure_table(conn)
+        cols = ", ".join(clean.keys())
+        placeholders = ", ".join(["%s"] * len(clean))
+        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean.keys())
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO advisor_personality (advisor_slug, {cols}, completed_at)
+                VALUES (%s, {placeholders}, NOW())
+                ON CONFLICT (advisor_slug) DO UPDATE SET
+                    {updates}, completed_at = NOW()
+            """, (slug, *clean.values()))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-personality] write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_advisor_personality(slug: str) -> dict:
+    """{scores: {...}, completed_at: datetime} or {} if never completed."""
+    if not slug:
+        return {}
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _advisor_personality_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT openness, conscientiousness, extraversion,
+                       agreeableness, stability, completed_at
+                FROM advisor_personality WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        scores = {k: v for k, v in zip(_PERSONALITY_TRAITS, row[:5]) if v is not None}
+        if not scores:
+            return {}
+        return {"scores": scores, "completed_at": row[5]}
+    except Exception as e:
+        app.logger.error(f"[advisor-personality] read failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def advisor_style_bio(name: str, scores: dict) -> str:
+    """A warm, third-person, client-facing style blurb built from the
+    advisor's own personality self-report — meant as a starting point an
+    admin reviews and edits before it's ever shown to a participant.
+    Deliberately distinct from personality_interaction_tips(): that's
+    private, second-person advice for whoever's about to talk to someone;
+    this is public bio copy, so every trait direction is framed in a
+    positive, professional light rather than clinically."""
+    if not scores:
+        return ""
+    b = {t: _tipi_bucket(scores[t]) for t in _PERSONALITY_TRAITS if scores.get(t)}
+    phrases = []
+    if b.get("openness", 3) >= 4:
+        phrases.append("brings fresh, creative thinking to every conversation")
+    elif b.get("openness", 3) <= 2:
+        phrases.append("favors practical, proven approaches over abstract theory")
+    if b.get("conscientiousness", 3) >= 4:
+        phrases.append("is highly organized, with a clear plan for every session")
+    elif b.get("conscientiousness", 3) <= 2:
+        phrases.append("keeps things flexible rather than tightly scripted")
+    if b.get("extraversion", 3) >= 4:
+        phrases.append("is energetic and engaging, and loves thinking out loud together")
+    elif b.get("extraversion", 3) <= 2:
+        phrases.append("brings a calm, thoughtful, reflective presence")
+    if b.get("agreeableness", 3) >= 4:
+        phrases.append("leads with warmth and empathy")
+    elif b.get("agreeableness", 3) <= 2:
+        phrases.append("is refreshingly direct and unafraid of hard conversations")
+    if b.get("stability", 3) >= 4:
+        phrases.append("stays calm and steady, even under pressure")
+    elif b.get("stability", 3) <= 2:
+        phrases.append("brings deep sensitivity to the emotional side of a challenge")
+    if not phrases:
+        return ""
+    first_name = (name or "Your advisor").split()[0]
+    body = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + ", and " + phrases[-1]
+    return f"{first_name} {body}."
+
+
+def _advisor_360_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_360_feedback (
+                id           SERIAL PRIMARY KEY,
+                advisor_slug TEXT NOT NULL,
+                filename     TEXT NOT NULL,
+                mime         TEXT,
+                content      BYTEA NOT NULL,
+                size_bytes   INTEGER,
+                uploaded_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS advisor_360_slug_idx
+            ON advisor_360_feedback (advisor_slug)
+        """)
+    conn.commit()
+
+
+def save_advisor_360_feedback(slug: str, filename: str, mime: str, content: bytes) -> bool:
+    """One 360 file per advisor — a fresh upload replaces whatever was
+    there before, same as the photo-upload pattern elsewhere."""
+    if not slug or not content:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
+            cur.execute("""
+                INSERT INTO advisor_360_feedback
+                    (advisor_slug, filename, mime, content, size_bytes)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (slug, filename[:200], mime, content, len(content)))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-360] write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_advisor_360_meta(slug: str):
+    """Filename/size/date only — for display, never the content itself."""
+    if not slug:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, filename, size_bytes, uploaded_at
+                FROM advisor_360_feedback WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "filename": row[1], "size_bytes": row[2] or 0, "uploaded_at": row[3]}
+    except Exception as e:
+        app.logger.error(f"[advisor-360] meta read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_advisor_360_content(slug: str):
+    """(bytes, mime, filename) for a download, or None."""
+    if not slug:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT content, mime, filename
+                FROM advisor_360_feedback WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        data = row[0]
+        return (bytes(data) if not isinstance(data, bytes) else data,
+                row[1] or "application/octet-stream", row[2])
+    except Exception as e:
+        app.logger.error(f"[advisor-360] content read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def delete_advisor_360_feedback(slug: str) -> bool:
+    if not slug:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-360] delete failed: {e}")
+        return False
     finally:
         conn.close()
 
@@ -8371,6 +8670,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         photo_override = True      # their own photo or monogram, not the loop
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
+        page_cfg["client_bio"] = active.get("client_bio", "")
         name_the_advisor(page_cfg, active["name"])
         if active.get("scheduling_url"):
             page_cfg["footer_cta_url"] = active["scheduling_url"]
@@ -10433,6 +10733,71 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
     {% endwith %}
 
     <div class="card">
+      <h2>Getting set up ({{ onboarding_done }}/{{ onboarding_total }})</h2>
+      <ul style="margin: 0; padding: 0; list-style: none;">
+        {% for label, done in onboarding_steps %}
+        <li style="display: flex; align-items: center; gap: 0.6rem; padding: 0.35rem 0; font-size: 0.86rem;">
+          <span style="display: inline-flex; align-items: center; justify-content: center;
+                       width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; font-size: 0.68rem;
+                       {% if done %}background: var(--navy); color: var(--gold);{% else %}border: 1px solid var(--line); color: transparent;{% endif %}">✓</span>
+          <span {% if done %}style="color: var(--muted);"{% endif %}>{{ label }}</span>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+
+    <div class="card">
+      <h2>Your personality assessment</h2>
+      {% if personality %}
+        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
+          Completed {{ personality.completed_at.strftime("%Y-%m-%d") if personality.completed_at else "" }}.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          This is used to help present your style to J3P — it's never shown
+          to participants as scores, only ever considered by an admin when
+          writing your client-facing bio below.
+        </p>
+      {% else %}
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+          A short, ten-item self-report — about two minutes. Helps J3P
+          present your style to clients accurately.
+        </p>
+      {% endif %}
+      <a href="{{ url_for('advisor_portal_personality') }}" class="btn">
+        {% if personality %}Retake assessment{% else %}Take assessment{% endif %}
+      </a>
+    </div>
+
+    <div class="card">
+      <h2>Your 360 feedback</h2>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+        Upload your most recent 360-degree feedback report, if you have one.
+        This stays private to J3P's team for internal reference — it's
+        never read by the AI or shown to participants.
+      </p>
+      {% if feedback_360 %}
+        <p style="margin: 0 0 0.9rem; font-size: 0.85rem;">
+          <strong>{{ feedback_360.filename }}</strong>
+          <span class="muted">
+            — {{ "%.1f"|format(feedback_360.size_bytes / 1048576) }} MB,
+            uploaded {{ feedback_360.uploaded_at.strftime("%Y-%m-%d") if feedback_360.uploaded_at else "" }}
+          </span>
+        </p>
+        <form method="POST" action="{{ url_for('advisor_portal_delete_360') }}" style="display: inline;"
+              onsubmit="return confirm('Remove your 360 feedback file?');">
+          <button type="submit" class="btn-danger">Remove file</button>
+        </form>
+      {% else %}
+        <form method="POST" action="{{ url_for('advisor_portal_upload_360') }}" enctype="multipart/form-data">
+          <div class="upload-row">
+            <input type="file" name="file" required />
+            <button type="submit" class="btn">Upload</button>
+          </div>
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="card">
       <h2>Add a document</h2>
       <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
         <div class="upload-row">
@@ -10551,6 +10916,127 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
       <p class="muted">No documents yet — upload your first one above.</p>
       {% endif %}
     </div>
+  </div>
+</body></html>"""
+
+ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Personality Assessment — {{ advisor.name }} — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper); color: var(--navy); min-height: 100vh;
+  }
+  header {
+    background: var(--navy); border-bottom: 2px solid var(--gold);
+    padding: 0.9rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
+  }
+  header img { height: 40px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 24px; background: rgba(210,188,141,0.45); }
+  header span { color: var(--gold); font-size: 0.76rem; letter-spacing: 0.2em; text-transform: uppercase; }
+  .container { max-width: 640px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+  h1 { font-size: 1.4rem; font-weight: 500; margin: 0 0 0.4rem; }
+  .subtitle { color: var(--muted); font-size: 0.88rem; line-height: 1.6; margin: 0 0 1.6rem; }
+  .flash {
+    background: #fff; border: 1px solid var(--gold); border-left: 3px solid var(--gold);
+    padding: 0.7rem 1rem; border-radius: 2px; font-size: 0.85rem; margin-bottom: 1.2rem;
+  }
+  .pq-row {
+    background: #fff; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.1rem 1.2rem; margin-bottom: 0.9rem;
+  }
+  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
+  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .pq-scale label {
+    flex: 1 1 32px; text-align: center; cursor: pointer;
+  }
+  .pq-scale input[type="radio"] {
+    position: absolute; opacity: 0; width: 0; height: 0;
+  }
+  .pq-scale span {
+    display: block; padding: 0.5rem 0; border-radius: 2px;
+    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
+    font-size: 0.82rem; transition: all 0.15s ease;
+  }
+  .pq-scale input[type="radio"]:checked + span {
+    background: var(--navy); color: var(--gold); border-color: var(--navy);
+  }
+  .pq-scale label:hover span { border-color: var(--gold); }
+  .pq-labels {
+    display: flex; justify-content: space-between; margin-top: 0.4rem;
+    font-size: 0.64rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+  }
+  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
+  .btn {
+    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
+    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
+    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .btn:hover { background: var(--gold); color: var(--navy); }
+  .btn-secondary {
+    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
+    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
+    display: inline-flex; align-items: center;
+  }
+  .btn-secondary:hover { border-color: var(--navy); }
+  @media (max-width: 480px) {
+    .pq-scale { gap: 0.25rem; }
+    .pq-scale span { padding: 0.4rem 0; font-size: 0.74rem; }
+  }
+</style></head><body>
+  <header>
+    <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+    <div class="brand-divider"></div>
+    <span>Advisor Portal</span>
+  </header>
+  <div class="container">
+    <h1>Your personality assessment</h1>
+    <p class="subtitle">
+      {% if existing %}You completed this before — answering again replaces your
+      previous result.{% else %}A short, ten-item self-report (the TIPI, a
+      published personality measure). It takes about two minutes.{% endif %}
+      This is used to help present your style to J3P — never scored as a
+      test, and there's no wrong answer.
+    </p>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+      {% for q in tipi_items %}
+      <div class="pq-row">
+        <p class="pq-statement">I see myself as: {{ q.text }}</p>
+        <div class="pq-scale">
+          {% for v in range(1, 8) %}
+          <label>
+            <input type="radio" name="q{{ q.id }}" value="{{ v }}" required />
+            <span>{{ v }}</span>
+          </label>
+          {% endfor %}
+        </div>
+        <div class="pq-labels"><span>Disagree strongly</span><span>Agree strongly</span></div>
+      </div>
+      {% endfor %}
+      <div class="actions">
+        <button type="submit" class="btn">Submit</button>
+        <a href="{{ url_for('advisor_portal_view') }}" class="btn-secondary">Cancel</a>
+      </div>
+    </form>
   </div>
 </body></html>"""
 
@@ -11538,6 +12024,62 @@ input[type="file"], input[type="text"] {
           <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
         </form>
         {% endif %}
+      </div>
+
+      <div class="advisor-links">
+        <h3>Onboarding</h3>
+        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1rem;">
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              Personality assessment
+            </div>
+            {% if adv.personality %}
+              <span style="color: #2D7D5F;">✓ Completed</span>
+              {{ adv.personality.completed_at.strftime("%Y-%m-%d") if adv.personality.completed_at else "" }}
+              — {{ personality_summary_tag(adv.personality.scores) }}
+            {% else %}
+              <span class="muted">Not yet completed</span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              360 feedback
+            </div>
+            {% if adv.feedback_360 %}
+              <a href="{{ url_for('admin_download_advisor_360', slug=adv.slug) }}">{{ adv.feedback_360.filename }}</a>
+              <span class="muted">({{ "%.1f"|format(adv.feedback_360.size_bytes / 1048576) }} MB)</span>
+            {% else %}
+              <span class="muted">Not yet uploaded</span>
+            {% endif %}
+          </div>
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          {{ adv.name }} completes both from their own portal link above.
+        </p>
+
+        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
+          Client-facing bio
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          Shown to participants as a short "about your advisor" style preview.
+          Nothing here is written or shown automatically — review and edit
+          before saving.
+        </p>
+        <form method="POST" action="{{ url_for('admin_save_advisor_bio', slug=adv.slug) }}">
+          <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3"
+                    style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
+                           border-radius: 2px; font-family: inherit; font-size: 0.83rem;
+                           resize: vertical;">{{ adv.client_bio }}</textarea>
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Save bio</button>
+            {% if adv.suggested_bio %}
+            <button type="button" class="btn" style="font-size: 0.64rem; background: transparent; color: var(--navy); border-color: var(--navy);"
+                    onclick="document.getElementById('bio-{{ adv.slug }}').value = {{ adv.suggested_bio|tojson }};">
+              Use suggested (from personality assessment)
+            </button>
+            {% endif %}
+          </div>
+        </form>
       </div>
 
       <div class="advisor-links">
@@ -12898,7 +13440,22 @@ def advisor_portal_view():
         d = dict(d)
         d["shared_with"] = [adv_names.get(s, s) for s in assigned if s != slug]
         mine.append(d)
-    return render_template_string(ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine)
+    personality = get_advisor_personality(slug)
+    feedback_360 = get_advisor_360_meta(slug)
+    onboarding_steps = [
+        ("Add a photo", advisor and (advisor["has_photo"] or advisor.get("no_photo"))),
+        ("Complete your personality assessment", bool(personality)),
+        ("Upload your 360 feedback", bool(feedback_360)),
+        ("Add at least one knowledge-base document", bool(mine)),
+    ]
+    return render_template_string(
+        ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine,
+        personality=personality, feedback_360=feedback_360,
+        onboarding_steps=onboarding_steps,
+        onboarding_done=sum(1 for _, done in onboarding_steps if done),
+        onboarding_total=len(onboarding_steps),
+        tipi_items=TIPI_ITEMS,
+    )
 
 
 @app.route("/advisor-portal/upload", methods=["POST"])
@@ -12972,6 +13529,64 @@ def advisor_portal_upload_url():
     custom_title = (request.form.get("url_title") or "").strip()
     result = ingest_url_content(url, custom_title=custom_title, scope_slugs=[slug])
     flash(result["message"])
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/personality", methods=["GET", "POST"])
+@advisor_portal_required
+def advisor_portal_personality():
+    slug = session["advisor_owner_slug"]
+    advisor = get_advisor(slug)
+    if request.method == "POST":
+        answers = {}
+        for item in TIPI_ITEMS:
+            raw = request.form.get(f"q{item['id']}")
+            if raw:
+                answers[item["id"]] = raw
+        scores = score_tipi(answers)
+        if not scores:
+            flash("Please answer at least one question before submitting.")
+            return redirect(url_for("advisor_portal_personality"))
+        save_advisor_personality_scores(slug, scores)
+        flash("✓ Thanks — your personality assessment is saved.")
+        return redirect(url_for("advisor_portal_view"))
+    existing = get_advisor_personality(slug)
+    return render_template_string(
+        ADVISOR_PORTAL_PERSONALITY_HTML, cfg=CONFIG, advisor=advisor,
+        tipi_items=TIPI_ITEMS, existing=existing,
+    )
+
+
+@app.route("/advisor-portal/360/upload", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_upload_360():
+    slug = session["advisor_owner_slug"]
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Choose a file to upload.")
+        return redirect(url_for("advisor_portal_view"))
+    raw = file.read()
+    if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
+        flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
+              f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
+        return redirect(url_for("advisor_portal_view"))
+    if not raw:
+        flash("That file appears to be empty.")
+        return redirect(url_for("advisor_portal_view"))
+    mime = file.mimetype or "application/octet-stream"
+    if save_advisor_360_feedback(slug, file.filename, mime, raw):
+        flash(f"✓ Uploaded '{file.filename[:80]}'.")
+    else:
+        flash("Upload failed — check the server logs.")
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/360/delete", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_delete_360():
+    slug = session["advisor_owner_slug"]
+    delete_advisor_360_feedback(slug)
+    flash("✓ Removed your 360 feedback file.")
     return redirect(url_for("advisor_portal_view"))
 
 
@@ -13049,6 +13664,7 @@ def admin_dashboard():
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
         initials_for=initials_for,
+        personality_summary_tag=personality_summary_tag,
         biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
@@ -13224,6 +13840,38 @@ def admin_advisor_portal_token(slug):
         set_advisor_portal_token(slug, token)
         verb = "Regenerated" if advisor.get("portal_token") else "Generated"
         flash(f"✓ {verb} {advisor['name']}'s portal link.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/360/download/<slug>")
+@admin_required
+def admin_download_advisor_360(slug):
+    """The advisor's 360 feedback file — admin-only, never read by the AI
+    or shown to participants."""
+    result = get_advisor_360_content(slug)
+    if not result:
+        flash("No 360 feedback file on record for that advisor.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    content, mime, filename = result
+    return Response(content, mimetype=mime, headers={
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    })
+
+
+@app.route("/admin/advisors/bio/<slug>", methods=["POST"])
+@admin_required
+def admin_save_advisor_bio(slug):
+    """Save the admin-curated, client-facing 'about this advisor' blurb.
+    Never written automatically — always a deliberate save by an admin,
+    whether typed from scratch or started from the suggested draft."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    bio = (request.form.get("client_bio") or "").strip()
+    set_advisor_bio(slug, bio)
+    flash(f"✓ Saved {advisor['name']}'s client-facing bio." if bio
+          else f"✓ Cleared {advisor['name']}'s client-facing bio.")
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
