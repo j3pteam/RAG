@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..95337b2 100644
+index 4b5a702..95dbbc5 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -2009,7 +2009,7 @@ index 4b5a702..95337b2 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -8966,43 +10253,269 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8966,43 +10253,344 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
    </form>
  </body></html>"""
  
@@ -2234,6 +2234,81 @@ index 4b5a702..95337b2 100644
 +    </div>
 +
 +    <div class="card">
++      <h2>Add a folder</h2>
++      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
++        Select an entire folder — every supported file inside it (PDF, DOCX,
++        TXT, MD, including subfolders) uploads in one batch. Unsupported
++        files and duplicates are skipped automatically. Up to 50 files per batch.
++      </p>
++      <form method="POST" action="{{ url_for('advisor_portal_upload_folder') }}"
++            enctype="multipart/form-data" id="portal-folder-form">
++        <div class="upload-row">
++          <input type="file" name="files" id="portal-folder-input" webkitdirectory directory multiple required />
++          <input type="text" name="folder_title" placeholder="Folder title (optional)" />
++          <button type="submit" class="btn" id="portal-folder-btn">Upload folder</button>
++        </div>
++      </form>
++      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
++    </div>
++
++    <div class="card">
++      <h2>Add from a URL</h2>
++      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
++        Paste a link to an article, blog post, or web page — the main text
++        gets extracted and embedded. Works best on article-style pages
++        (not paywalled, login-required, or JavaScript-only sites).
++      </p>
++      <form method="POST" action="{{ url_for('advisor_portal_upload_url') }}">
++        <div class="upload-row">
++          <input type="url" name="url" placeholder="https://example.com/article" required
++                 style="flex: 1.5 1 280px;" />
++          <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
++          <button type="submit" class="btn">Fetch &amp; embed</button>
++        </div>
++      </form>
++    </div>
++
++    <script>
++      (function() {
++        const folderInput = document.getElementById("portal-folder-input");
++        const preview = document.getElementById("portal-folder-preview");
++        const btn = document.getElementById("portal-folder-btn");
++        const form = document.getElementById("portal-folder-form");
++        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
++        if (!folderInput) return;
++
++        folderInput.addEventListener("change", () => {
++          const all = Array.from(folderInput.files || []);
++          const supported = all.filter(f => SUPPORTED.test(f.name));
++          const skipped = all.length - supported.length;
++          if (all.length === 0) { preview.style.display = "none"; return; }
++          let msg = `${supported.length} supported file${supported.length === 1 ? '' : 's'} ready to upload`;
++          if (skipped > 0) msg += ` · ${skipped} unsupported file${skipped === 1 ? '' : 's'} will be skipped`;
++          if (supported.length > 50) msg += ` · ⚠ Only the first 50 will be processed`;
++          if (supported.length === 0) {
++            msg = "⚠ No supported files found in this folder (PDF, DOCX, TXT, MD only).";
++            btn.disabled = true;
++          } else {
++            btn.disabled = false;
++          }
++          preview.textContent = msg;
++          preview.style.display = "block";
++        });
++
++        form.addEventListener("submit", (e) => {
++          const supported = Array.from(folderInput.files || []).filter(f => SUPPORTED.test(f.name));
++          if (supported.length === 0) {
++            e.preventDefault();
++            alert("No supported files found in this folder.");
++            return;
++          }
++          btn.textContent = "Uploading… (this may take a while)";
++          btn.disabled = true;
++        });
++      })();
++    </script>
++
++    <div class="card">
 +      <h2>Your documents</h2>
 +      {% if documents %}
 +      <table>
@@ -2309,7 +2384,7 @@ index 4b5a702..95337b2 100644
      <h2>Archived runs ({{ runs|length }})</h2>
      {% if runs %}
      <p class="muted" style="font-size:0.84rem; margin:0 0 1rem;">
-@@ -9089,15 +10602,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +10677,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -2383,7 +2458,7 @@ index 4b5a702..95337b2 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +10688,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +10763,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -2399,7 +2474,7 @@ index 4b5a702..95337b2 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +10705,13 @@ form.upload {
+@@ -9133,8 +10780,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -2415,7 +2490,7 @@ index 4b5a702..95337b2 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +10747,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +10822,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -2435,7 +2510,7 @@ index 4b5a702..95337b2 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +10816,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +10891,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -2459,7 +2534,7 @@ index 4b5a702..95337b2 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +10931,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +11006,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -2650,7 +2725,7 @@ index 4b5a702..95337b2 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +11147,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11222,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -2703,7 +2778,7 @@ index 4b5a702..95337b2 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +11202,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11277,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -2737,7 +2812,7 @@ index 4b5a702..95337b2 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +11238,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11313,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -2796,7 +2871,7 @@ index 4b5a702..95337b2 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +11287,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +11362,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -2807,7 +2882,7 @@ index 4b5a702..95337b2 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +11338,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +11413,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -2825,7 +2900,7 @@ index 4b5a702..95337b2 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +11355,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +11430,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -2870,15 +2945,15 @@ index 4b5a702..95337b2 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11422,67 @@ input[type="file"], input[type="text"] {
-       </div>
- 
-       <div class="advisor-links">
--        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
--        {% if adv.documents %}
--        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
--          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
--        </ul>
+@@ -9505,18 +11493,71 @@ input[type="file"], input[type="text"] {
+                     data-advisor="{{ adv.name }}">Share</button>
+           </div>
+         </div>
+-        {% endfor %}
++        {% endfor %}
++      </div>
++
++      <div class="advisor-links">
 +        <h3>Knowledge-Base Portal</h3>
 +        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
 +          A dedicated link {{ adv.name }} can use to log in and manage their
@@ -2920,9 +2995,14 @@ index 4b5a702..95337b2 100644
 +          <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
 +        </form>
 +        {% endif %}
-+      </div>
-+
-+      <div class="advisor-links">
+       </div>
+ 
+       <div class="advisor-links">
+-        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
+-        {% if adv.documents %}
+-        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
+-          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
+-        </ul>
 +        {% set adv_docs = advisor_docs.get(adv.slug, []) %}
 +        <h3>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</h3>
 +        {% if adv_docs %}
@@ -2944,7 +3024,7 @@ index 4b5a702..95337b2 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +11529,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +11604,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -2975,7 +3055,7 @@ index 4b5a702..95337b2 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +11572,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +11647,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -2985,7 +3065,7 @@ index 4b5a702..95337b2 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +11737,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +11812,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -3000,7 +3080,7 @@ index 4b5a702..95337b2 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +11779,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +11854,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -3009,7 +3089,7 @@ index 4b5a702..95337b2 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +11808,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +11883,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -3027,7 +3107,7 @@ index 4b5a702..95337b2 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +11870,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +11945,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -3055,7 +3135,7 @@ index 4b5a702..95337b2 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +12078,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12153,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -3065,7 +3145,7 @@ index 4b5a702..95337b2 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +12099,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12174,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -3088,7 +3168,7 @@ index 4b5a702..95337b2 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +12232,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +12307,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -3099,7 +3179,7 @@ index 4b5a702..95337b2 100644
  
  </div>
  
-@@ -10478,6 +12463,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +12538,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -3115,7 +3195,7 @@ index 4b5a702..95337b2 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +12482,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +12557,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -3396,7 +3476,7 @@ index 4b5a702..95337b2 100644
  </body></html>"""
  
  
-@@ -10511,6 +12779,127 @@ def admin_logout():
+@@ -10511,6 +12854,158 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -3490,6 +3570,37 @@ index 4b5a702..95337b2 100644
 +    return redirect(url_for("advisor_portal_view"))
 +
 +
++@app.route("/advisor-portal/upload-folder", methods=["POST"])
++@advisor_portal_required
++def advisor_portal_upload_folder():
++    slug = session["advisor_owner_slug"]
++    if not (db.is_enabled() and emb.is_enabled()):
++        flash("Cannot upload: the knowledge base isn't fully configured right now.")
++        return redirect(url_for("advisor_portal_view"))
++    files = request.files.getlist("files")
++    if not files:
++        flash("No files were selected.")
++        return redirect(url_for("advisor_portal_view"))
++    folder_title = (request.form.get("folder_title") or "").strip()[:80]
++    summary = ingest_folder_batch(files, folder_title=folder_title, scope_slugs=[slug])
++    flash(summary["message"])
++    return redirect(url_for("advisor_portal_view"))
++
++
++@app.route("/advisor-portal/upload-url", methods=["POST"])
++@advisor_portal_required
++def advisor_portal_upload_url():
++    slug = session["advisor_owner_slug"]
++    if not (db.is_enabled() and emb.is_enabled()):
++        flash("Cannot ingest URL: the knowledge base isn't fully configured right now.")
++        return redirect(url_for("advisor_portal_view"))
++    url = (request.form.get("url") or "").strip()
++    custom_title = (request.form.get("url_title") or "").strip()
++    result = ingest_url_content(url, custom_title=custom_title, scope_slugs=[slug])
++    flash(result["message"])
++    return redirect(url_for("advisor_portal_view"))
++
++
 +@app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
 +@advisor_portal_required
 +def advisor_portal_delete(doc_id):
@@ -3524,7 +3635,7 @@ index 4b5a702..95337b2 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +12912,25 @@ def admin_dashboard():
+@@ -10523,11 +13018,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -3550,7 +3661,7 @@ index 4b5a702..95337b2 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +12938,12 @@ def admin_dashboard():
+@@ -10535,7 +13044,12 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -3564,7 +3675,7 @@ index 4b5a702..95337b2 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +12953,23 @@ def admin_dashboard():
+@@ -10545,9 +13059,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -3588,7 +3699,7 @@ index 4b5a702..95337b2 100644
      )
  
  
-@@ -10631,15 +13053,34 @@ def admin_save_advisor():
+@@ -10631,15 +13159,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -3628,7 +3739,7 @@ index 4b5a702..95337b2 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10657,6 +13098,29 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +13204,29 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -3658,7 +3769,7 @@ index 4b5a702..95337b2 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +13136,14 @@ def admin_settings():
+@@ -10672,21 +13242,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -3682,7 +3793,228 @@ index 4b5a702..95337b2 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -11160,6 +13617,84 @@ def admin_delete(doc_id):
+@@ -10781,22 +13344,34 @@ def admin_upload_folder():
+         flash("No files were selected.")
+         return redirect(url_for("admin_dashboard"))
+ 
++    folder_title = (request.form.get("folder_title") or "").strip()[:80]
++    folder_owner = (request.form.get("owner") or "").strip()
++    summary = ingest_folder_batch(files, folder_title=folder_title, owner=folder_owner)
++    flash(summary["message"])
++    return redirect(url_for("admin_dashboard"))
++
++
++def ingest_folder_batch(files, folder_title: str = "", scope_slugs=None, owner: str = "") -> dict:
++    """Bulk-ingest files from a folder upload — shared by the admin panel
++    and the advisor portal. scope_slugs (a list) restricts every resulting
++    document to just those advisors via the modern many-to-many table;
++    leave it None to fall back to the legacy single-owner field instead
++    (the admin panel's existing behavior, unchanged).
++
++    Each file: duplicate check → extract → chunk → embed → insert. One
++    file failing doesn't stop the batch. Returns a summary dict with a
++    ready-to-flash message plus the raw counts, for callers that want them.
++    """
+     SUPPORTED_EXT = ('.pdf', '.docx', '.txt', '.md')
+     MAX_BATCH = 50   # keep request under Railway 5-min timeout for typical files
+     MAX_BYTES = MAX_UPLOAD_BYTES
+ 
+-    # Filter to supported extensions first
+     supported_files = [f for f in files if f.filename and f.filename.lower().endswith(SUPPORTED_EXT)]
+     unsupported_count = len(files) - len(supported_files)
+ 
+-    # Cap the batch size — anything above the limit is silently skipped for this run
+     over_limit = max(0, len(supported_files) - MAX_BATCH)
+     process_files = supported_files[:MAX_BATCH]
+ 
+-    # Optional label so a batch is recognisable in the knowledge base
+-    folder_title = (request.form.get("folder_title") or "").strip()[:80]
+-    folder_owner = (request.form.get("owner") or "").strip()
+-
+     uploaded = []       # list of (title, chunk_count, doc_id)
+     duplicates = []     # list of (filename, existing_title)
+     failed = []         # list of (filename, error)
+@@ -10809,7 +13384,6 @@ def admin_upload_folder():
+         display_title = f"{folder_title} — {basename}" if folder_title else basename
+ 
+         try:
+-            # Duplicate check first
+             dup = db.find_duplicate_document(title=basename, source=basename)
+             if dup:
+                 duplicates.append((basename, dup["title"]))
+@@ -10838,7 +13412,10 @@ def admin_upload_folder():
+             # Title carries the folder label when given; source stays the
+             # filename so duplicate detection keeps working on re-upload.
+             doc_id = db.insert_document(display_title, basename, pairs)
+-            set_document_owner(display_title, folder_owner)
++            if scope_slugs is not None:
++                set_document_advisors(display_title, scope_slugs)
++            else:
++                set_document_owner(display_title, owner)
+             uploaded.append((display_title, len(chunks), doc_id))
+             app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
+ 
+@@ -10846,14 +13423,12 @@ def admin_upload_folder():
+             app.logger.error(f"Folder upload failed for {basename}: {e}")
+             failed.append((basename, str(e)[:100]))
+ 
+-    # Build a summary flash message
+     parts = []
+     if uploaded:
+         parts.append(f"✓ {len(uploaded)} file{'s' if len(uploaded) != 1 else ''} uploaded")
+     if duplicates:
+         parts.append(f"⏭ {len(duplicates)} skipped as duplicates")
+     if failed:
+-        # Show first 3 failure reasons so the user has something to act on
+         detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
+         parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
+     if unsupported_count:
+@@ -10861,8 +13436,11 @@ def admin_upload_folder():
+     if over_limit:
+         parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
+ 
+-    flash(" · ".join(parts) if parts else "No files were processed.")
+-    return redirect(url_for("admin_dashboard"))
++    return {
++        "message": " · ".join(parts) if parts else "No files were processed.",
++        "uploaded": uploaded, "duplicates": duplicates, "failed": failed,
++        "unsupported_count": unsupported_count, "over_limit": over_limit,
++    }
+ 
+ 
+ @app.route("/admin/upload-text", methods=["POST"])
+@@ -11043,25 +13621,34 @@ def admin_upload_url():
+ 
+     url = (request.form.get("url") or "").strip()
+     custom_title = (request.form.get("url_title") or "").strip()
++    owner = (request.form.get("owner") or "").strip()
++    result = ingest_url_content(url, custom_title=custom_title, owner=owner)
++    flash(result["message"])
++    return redirect(url_for("admin_dashboard"))
++
+ 
++def ingest_url_content(url: str, custom_title: str = "", scope_slugs=None, owner: str = "") -> dict:
++    """Ingest a single URL — an article, or a podcast/blog feed (in which
++    case every recent episode is ingested individually) — shared by the
++    admin panel and the advisor portal. scope_slugs restricts every
++    resulting document to just those advisors; leave it None to fall back
++    to the legacy single-owner field instead (the admin panel's existing
++    behavior, unchanged). Returns {"ok": bool, "message": str}.
++    """
+     if not url:
+-        flash("No URL provided.")
+-        return redirect(url_for("admin_dashboard"))
++        return {"ok": False, "message": "No URL provided."}
+ 
+     # Duplicate check on the URL itself BEFORE fetching/embedding.
+-    # We check the URL as source. Title check happens later if custom_title is set.
+     duplicate = db.find_duplicate_document(source=url)
+     if duplicate:
+-        flash(
++        return {"ok": False, "message": (
+             f"⚠ Duplicate URL — this link was already ingested as "
+             f"'{duplicate['title']}' on {duplicate['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
+             f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
+             f"if you want to re-ingest."
+-        )
+-        return redirect(url_for("admin_dashboard"))
++        )}
+ 
+     # A podcast or blog feed carries the real text; handle it first.
+-    feed_owner = (request.form.get("owner") or "").strip()
+     if looks_like_feed(url):
+         try:
+             show, episodes = fetch_podcast_feed(url)
+@@ -11082,7 +13669,10 @@ def admin_upload_url():
+                         continue
+                     vectors = emb.embed_batch(chunks)
+                     db.insert_document(ep_title, url, list(zip(chunks, vectors)))
+-                    set_document_owner(ep_title, feed_owner)
++                    if scope_slugs is not None:
++                        set_document_advisors(ep_title, scope_slugs)
++                    else:
++                        set_document_owner(ep_title, owner)
+                     added += 1
+                 except Exception as e:
+                     app.logger.error(f"[feed] episode failed: {e}")
+@@ -11090,8 +13680,7 @@ def admin_upload_url():
+             note += f"“{show['title']}”"
+             if skipped:
+                 note += f"; {skipped} already in the knowledge base"
+-            flash(note + ".")
+-            return redirect(url_for("admin_dashboard"))
++            return {"ok": True, "message": note + "."}
+ 
+     try:
+         extracted_title, text = emb.fetch_url_content(url)
+@@ -11101,14 +13690,14 @@ def admin_upload_url():
+         # the article title is the same as something already in the KB).
+         title_dup = db.find_duplicate_document(title=title)
+         if title_dup:
+-            flash(
++            return {"ok": False, "message": (
+                 f"⚠ Duplicate title — '{title}' was already ingested on "
+                 f"{title_dup['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
+                 f"({title_dup['chunk_count']} chunks). Use a different title or "
+                 f"delete the existing entry first."
+-            )
+-            return redirect(url_for("admin_dashboard"))
++            )}
+ 
++        note_prefix = ""
+         if not text.strip():
+             # The page is probably rendered in the browser rather than served
+             # as HTML. Its metadata may still hold a usable description.
+@@ -11121,32 +13710,32 @@ def admin_upload_url():
+             if len(meta_desc) >= 120:
+                 text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
+                 title = custom_title or meta_title or title
+-                flash("Note: this page had no article text, so only its summary "
+-                      "was captured. For a podcast or video, paste the "
+-                      "transcript or show notes below for the full content.")
++                note_prefix = ("Note: this page had no article text, so only its summary "
++                                "was captured. For a podcast or video, paste the "
++                                "transcript or show notes below for the full content. ")
+             else:
+-                flash("Couldn't get any text from that page. Pages built in "
+-                      "JavaScript — podcast players, most social sites — don't "
+-                      "serve readable text. Use \u201cAdd knowledge from text\u201d "
+-                      "below and paste the transcript or show notes instead.")
+-                return redirect(url_for("admin_dashboard"))
++                return {"ok": False, "message": (
++                    "Couldn't get any text from that page. Pages built in "
++                    "JavaScript — podcast players, most social sites — don't "
++                    "serve readable text. Use \u201cAdd knowledge from text\u201d "
++                    "below and paste the transcript or show notes instead."
++                )}
+ 
+         chunks = emb.chunk_text(text)
+         if not chunks:
+-            flash("URL produced no chunks (page too short or empty).")
+-            return redirect(url_for("admin_dashboard"))
++            return {"ok": False, "message": "URL produced no chunks (page too short or empty)."}
+ 
+         vectors = emb.embed_batch(chunks)
+         pairs = list(zip(chunks, vectors))
+         doc_id = db.insert_document(title, url, pairs)
+-        set_document_owner(title, (request.form.get("owner") or "").strip())
+-
+-        flash(f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id}).")
++        if scope_slugs is not None:
++            set_document_advisors(title, scope_slugs)
++        else:
++            set_document_owner(title, owner)
++        return {"ok": True, "message": note_prefix + f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id})."}
+     except Exception as e:
+         app.logger.error(f"URL ingest failed: {e}")
+-        flash(f"URL ingest failed: {str(e)[:200]}")
+-
+-    return redirect(url_for("admin_dashboard"))
++        return {"ok": False, "message": f"URL ingest failed: {str(e)[:200]}"}
+ 
+ 
+ @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
+@@ -11160,6 +13749,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

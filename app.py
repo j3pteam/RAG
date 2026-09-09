@@ -10444,6 +10444,81 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="card">
+      <h2>Add a folder</h2>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
+        Select an entire folder — every supported file inside it (PDF, DOCX,
+        TXT, MD, including subfolders) uploads in one batch. Unsupported
+        files and duplicates are skipped automatically. Up to 50 files per batch.
+      </p>
+      <form method="POST" action="{{ url_for('advisor_portal_upload_folder') }}"
+            enctype="multipart/form-data" id="portal-folder-form">
+        <div class="upload-row">
+          <input type="file" name="files" id="portal-folder-input" webkitdirectory directory multiple required />
+          <input type="text" name="folder_title" placeholder="Folder title (optional)" />
+          <button type="submit" class="btn" id="portal-folder-btn">Upload folder</button>
+        </div>
+      </form>
+      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
+    </div>
+
+    <div class="card">
+      <h2>Add from a URL</h2>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
+        Paste a link to an article, blog post, or web page — the main text
+        gets extracted and embedded. Works best on article-style pages
+        (not paywalled, login-required, or JavaScript-only sites).
+      </p>
+      <form method="POST" action="{{ url_for('advisor_portal_upload_url') }}">
+        <div class="upload-row">
+          <input type="url" name="url" placeholder="https://example.com/article" required
+                 style="flex: 1.5 1 280px;" />
+          <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
+          <button type="submit" class="btn">Fetch &amp; embed</button>
+        </div>
+      </form>
+    </div>
+
+    <script>
+      (function() {
+        const folderInput = document.getElementById("portal-folder-input");
+        const preview = document.getElementById("portal-folder-preview");
+        const btn = document.getElementById("portal-folder-btn");
+        const form = document.getElementById("portal-folder-form");
+        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
+        if (!folderInput) return;
+
+        folderInput.addEventListener("change", () => {
+          const all = Array.from(folderInput.files || []);
+          const supported = all.filter(f => SUPPORTED.test(f.name));
+          const skipped = all.length - supported.length;
+          if (all.length === 0) { preview.style.display = "none"; return; }
+          let msg = `${supported.length} supported file${supported.length === 1 ? '' : 's'} ready to upload`;
+          if (skipped > 0) msg += ` · ${skipped} unsupported file${skipped === 1 ? '' : 's'} will be skipped`;
+          if (supported.length > 50) msg += ` · ⚠ Only the first 50 will be processed`;
+          if (supported.length === 0) {
+            msg = "⚠ No supported files found in this folder (PDF, DOCX, TXT, MD only).";
+            btn.disabled = true;
+          } else {
+            btn.disabled = false;
+          }
+          preview.textContent = msg;
+          preview.style.display = "block";
+        });
+
+        form.addEventListener("submit", (e) => {
+          const supported = Array.from(folderInput.files || []).filter(f => SUPPORTED.test(f.name));
+          if (supported.length === 0) {
+            e.preventDefault();
+            alert("No supported files found in this folder.");
+            return;
+          }
+          btn.textContent = "Uploading… (this may take a while)";
+          btn.disabled = true;
+        });
+      })();
+    </script>
+
+    <div class="card">
       <h2>Your documents</h2>
       {% if documents %}
       <table>
@@ -12869,6 +12944,37 @@ def advisor_portal_upload():
     return redirect(url_for("advisor_portal_view"))
 
 
+@app.route("/advisor-portal/upload-folder", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_upload_folder():
+    slug = session["advisor_owner_slug"]
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot upload: the knowledge base isn't fully configured right now.")
+        return redirect(url_for("advisor_portal_view"))
+    files = request.files.getlist("files")
+    if not files:
+        flash("No files were selected.")
+        return redirect(url_for("advisor_portal_view"))
+    folder_title = (request.form.get("folder_title") or "").strip()[:80]
+    summary = ingest_folder_batch(files, folder_title=folder_title, scope_slugs=[slug])
+    flash(summary["message"])
+    return redirect(url_for("advisor_portal_view"))
+
+
+@app.route("/advisor-portal/upload-url", methods=["POST"])
+@advisor_portal_required
+def advisor_portal_upload_url():
+    slug = session["advisor_owner_slug"]
+    if not (db.is_enabled() and emb.is_enabled()):
+        flash("Cannot ingest URL: the knowledge base isn't fully configured right now.")
+        return redirect(url_for("advisor_portal_view"))
+    url = (request.form.get("url") or "").strip()
+    custom_title = (request.form.get("url_title") or "").strip()
+    result = ingest_url_content(url, custom_title=custom_title, scope_slugs=[slug])
+    flash(result["message"])
+    return redirect(url_for("advisor_portal_view"))
+
+
 @app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
 @advisor_portal_required
 def advisor_portal_delete(doc_id):
@@ -13238,21 +13344,33 @@ def admin_upload_folder():
         flash("No files were selected.")
         return redirect(url_for("admin_dashboard"))
 
+    folder_title = (request.form.get("folder_title") or "").strip()[:80]
+    folder_owner = (request.form.get("owner") or "").strip()
+    summary = ingest_folder_batch(files, folder_title=folder_title, owner=folder_owner)
+    flash(summary["message"])
+    return redirect(url_for("admin_dashboard"))
+
+
+def ingest_folder_batch(files, folder_title: str = "", scope_slugs=None, owner: str = "") -> dict:
+    """Bulk-ingest files from a folder upload — shared by the admin panel
+    and the advisor portal. scope_slugs (a list) restricts every resulting
+    document to just those advisors via the modern many-to-many table;
+    leave it None to fall back to the legacy single-owner field instead
+    (the admin panel's existing behavior, unchanged).
+
+    Each file: duplicate check → extract → chunk → embed → insert. One
+    file failing doesn't stop the batch. Returns a summary dict with a
+    ready-to-flash message plus the raw counts, for callers that want them.
+    """
     SUPPORTED_EXT = ('.pdf', '.docx', '.txt', '.md')
     MAX_BATCH = 50   # keep request under Railway 5-min timeout for typical files
     MAX_BYTES = MAX_UPLOAD_BYTES
 
-    # Filter to supported extensions first
     supported_files = [f for f in files if f.filename and f.filename.lower().endswith(SUPPORTED_EXT)]
     unsupported_count = len(files) - len(supported_files)
 
-    # Cap the batch size — anything above the limit is silently skipped for this run
     over_limit = max(0, len(supported_files) - MAX_BATCH)
     process_files = supported_files[:MAX_BATCH]
-
-    # Optional label so a batch is recognisable in the knowledge base
-    folder_title = (request.form.get("folder_title") or "").strip()[:80]
-    folder_owner = (request.form.get("owner") or "").strip()
 
     uploaded = []       # list of (title, chunk_count, doc_id)
     duplicates = []     # list of (filename, existing_title)
@@ -13266,7 +13384,6 @@ def admin_upload_folder():
         display_title = f"{folder_title} — {basename}" if folder_title else basename
 
         try:
-            # Duplicate check first
             dup = db.find_duplicate_document(title=basename, source=basename)
             if dup:
                 duplicates.append((basename, dup["title"]))
@@ -13295,7 +13412,10 @@ def admin_upload_folder():
             # Title carries the folder label when given; source stays the
             # filename so duplicate detection keeps working on re-upload.
             doc_id = db.insert_document(display_title, basename, pairs)
-            set_document_owner(display_title, folder_owner)
+            if scope_slugs is not None:
+                set_document_advisors(display_title, scope_slugs)
+            else:
+                set_document_owner(display_title, owner)
             uploaded.append((display_title, len(chunks), doc_id))
             app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
 
@@ -13303,14 +13423,12 @@ def admin_upload_folder():
             app.logger.error(f"Folder upload failed for {basename}: {e}")
             failed.append((basename, str(e)[:100]))
 
-    # Build a summary flash message
     parts = []
     if uploaded:
         parts.append(f"✓ {len(uploaded)} file{'s' if len(uploaded) != 1 else ''} uploaded")
     if duplicates:
         parts.append(f"⏭ {len(duplicates)} skipped as duplicates")
     if failed:
-        # Show first 3 failure reasons so the user has something to act on
         detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
         parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
     if unsupported_count:
@@ -13318,8 +13436,11 @@ def admin_upload_folder():
     if over_limit:
         parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
 
-    flash(" · ".join(parts) if parts else "No files were processed.")
-    return redirect(url_for("admin_dashboard"))
+    return {
+        "message": " · ".join(parts) if parts else "No files were processed.",
+        "uploaded": uploaded, "duplicates": duplicates, "failed": failed,
+        "unsupported_count": unsupported_count, "over_limit": over_limit,
+    }
 
 
 @app.route("/admin/upload-text", methods=["POST"])
@@ -13500,25 +13621,34 @@ def admin_upload_url():
 
     url = (request.form.get("url") or "").strip()
     custom_title = (request.form.get("url_title") or "").strip()
+    owner = (request.form.get("owner") or "").strip()
+    result = ingest_url_content(url, custom_title=custom_title, owner=owner)
+    flash(result["message"])
+    return redirect(url_for("admin_dashboard"))
 
+
+def ingest_url_content(url: str, custom_title: str = "", scope_slugs=None, owner: str = "") -> dict:
+    """Ingest a single URL — an article, or a podcast/blog feed (in which
+    case every recent episode is ingested individually) — shared by the
+    admin panel and the advisor portal. scope_slugs restricts every
+    resulting document to just those advisors; leave it None to fall back
+    to the legacy single-owner field instead (the admin panel's existing
+    behavior, unchanged). Returns {"ok": bool, "message": str}.
+    """
     if not url:
-        flash("No URL provided.")
-        return redirect(url_for("admin_dashboard"))
+        return {"ok": False, "message": "No URL provided."}
 
     # Duplicate check on the URL itself BEFORE fetching/embedding.
-    # We check the URL as source. Title check happens later if custom_title is set.
     duplicate = db.find_duplicate_document(source=url)
     if duplicate:
-        flash(
+        return {"ok": False, "message": (
             f"⚠ Duplicate URL — this link was already ingested as "
             f"'{duplicate['title']}' on {duplicate['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
             f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
             f"if you want to re-ingest."
-        )
-        return redirect(url_for("admin_dashboard"))
+        )}
 
     # A podcast or blog feed carries the real text; handle it first.
-    feed_owner = (request.form.get("owner") or "").strip()
     if looks_like_feed(url):
         try:
             show, episodes = fetch_podcast_feed(url)
@@ -13539,7 +13669,10 @@ def admin_upload_url():
                         continue
                     vectors = emb.embed_batch(chunks)
                     db.insert_document(ep_title, url, list(zip(chunks, vectors)))
-                    set_document_owner(ep_title, feed_owner)
+                    if scope_slugs is not None:
+                        set_document_advisors(ep_title, scope_slugs)
+                    else:
+                        set_document_owner(ep_title, owner)
                     added += 1
                 except Exception as e:
                     app.logger.error(f"[feed] episode failed: {e}")
@@ -13547,8 +13680,7 @@ def admin_upload_url():
             note += f"“{show['title']}”"
             if skipped:
                 note += f"; {skipped} already in the knowledge base"
-            flash(note + ".")
-            return redirect(url_for("admin_dashboard"))
+            return {"ok": True, "message": note + "."}
 
     try:
         extracted_title, text = emb.fetch_url_content(url)
@@ -13558,14 +13690,14 @@ def admin_upload_url():
         # the article title is the same as something already in the KB).
         title_dup = db.find_duplicate_document(title=title)
         if title_dup:
-            flash(
+            return {"ok": False, "message": (
                 f"⚠ Duplicate title — '{title}' was already ingested on "
                 f"{title_dup['uploaded_at'].strftime('%Y-%m-%d %H:%M')} "
                 f"({title_dup['chunk_count']} chunks). Use a different title or "
                 f"delete the existing entry first."
-            )
-            return redirect(url_for("admin_dashboard"))
+            )}
 
+        note_prefix = ""
         if not text.strip():
             # The page is probably rendered in the browser rather than served
             # as HTML. Its metadata may still hold a usable description.
@@ -13578,32 +13710,32 @@ def admin_upload_url():
             if len(meta_desc) >= 120:
                 text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                 title = custom_title or meta_title or title
-                flash("Note: this page had no article text, so only its summary "
-                      "was captured. For a podcast or video, paste the "
-                      "transcript or show notes below for the full content.")
+                note_prefix = ("Note: this page had no article text, so only its summary "
+                                "was captured. For a podcast or video, paste the "
+                                "transcript or show notes below for the full content. ")
             else:
-                flash("Couldn't get any text from that page. Pages built in "
-                      "JavaScript — podcast players, most social sites — don't "
-                      "serve readable text. Use \u201cAdd knowledge from text\u201d "
-                      "below and paste the transcript or show notes instead.")
-                return redirect(url_for("admin_dashboard"))
+                return {"ok": False, "message": (
+                    "Couldn't get any text from that page. Pages built in "
+                    "JavaScript — podcast players, most social sites — don't "
+                    "serve readable text. Use \u201cAdd knowledge from text\u201d "
+                    "below and paste the transcript or show notes instead."
+                )}
 
         chunks = emb.chunk_text(text)
         if not chunks:
-            flash("URL produced no chunks (page too short or empty).")
-            return redirect(url_for("admin_dashboard"))
+            return {"ok": False, "message": "URL produced no chunks (page too short or empty)."}
 
         vectors = emb.embed_batch(chunks)
         pairs = list(zip(chunks, vectors))
         doc_id = db.insert_document(title, url, pairs)
-        set_document_owner(title, (request.form.get("owner") or "").strip())
-
-        flash(f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id}).")
+        if scope_slugs is not None:
+            set_document_advisors(title, scope_slugs)
+        else:
+            set_document_owner(title, owner)
+        return {"ok": True, "message": note_prefix + f"✓ Ingested '{title}' from URL — {len(chunks)} chunks embedded (doc #{doc_id})."}
     except Exception as e:
         app.logger.error(f"URL ingest failed: {e}")
-        flash(f"URL ingest failed: {str(e)[:200]}")
-
-    return redirect(url_for("admin_dashboard"))
+        return {"ok": False, "message": f"URL ingest failed: {str(e)[:200]}"}
 
 
 @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
