@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..3da0f35 100644
+index 4b5a702..46671d3 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -506,6 +506,15 @@ index 4b5a702..3da0f35 100644
      .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
      .cta-btn:hover {
        background: var(--navy); color: var(--gold);
+@@ -2389,7 +2695,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+     .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
+     .footer-note a:hover { color: var(--rust); }
+     @media (max-width: 640px) {
+-      .user { margin-left: 8%; } .assistant { margin-right: 6%; }
++      .user { margin-left: 8%; } .assistant { margin-right: 96px; }
+       header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
+       .brand-logo { height: 40px; }
+       .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
 @@ -2397,7 +2703,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
        #chat { padding: 1.5rem 1rem 0.75rem; }

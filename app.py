@@ -2695,7 +2695,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
     .footer-note a:hover { color: var(--rust); }
     @media (max-width: 640px) {
-      .user { margin-left: 8%; } .assistant { margin-right: 6%; }
+      .user { margin-left: 8%; } .assistant { margin-right: 96px; }
       header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
       .brand-logo { height: 40px; }
       .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
