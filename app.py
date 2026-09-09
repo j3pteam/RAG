@@ -2929,13 +2929,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div id="chat-wrap">
     <div id="chat">
       <div class="msg assistant">{{ cfg.opening }}</div>
-      {% if cfg.client_bio or cfg.expertise %}
-      <div class="advisor-bio-note">
-        <strong>About {{ cfg.persona_name }}:</strong>
-        {% if cfg.expertise %}{{ cfg.expertise }}{% endif %}
-        {% if cfg.client_bio %}{{ cfg.client_bio }}{% endif %}
-      </div>
-      {% endif %}
+      {# Advisor bio/expertise note intentionally hidden from participants for
+         now (admin can still see and edit both fields in the admin panel,
+         and they still shape the AI's actual tone via advisor_voice_guard —
+         this only removes the visible text block from the chat itself). #}
     </div>
   </div>
 

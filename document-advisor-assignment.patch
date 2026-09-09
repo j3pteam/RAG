@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..97635cf 100644
+index 4b5a702..a89d84e 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -613,21 +613,18 @@ index 4b5a702..97635cf 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2541,6 +2929,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2541,6 +2929,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div id="chat-wrap">
      <div id="chat">
        <div class="msg assistant">{{ cfg.opening }}</div>
-+      {% if cfg.client_bio or cfg.expertise %}
-+      <div class="advisor-bio-note">
-+        <strong>About {{ cfg.persona_name }}:</strong>
-+        {% if cfg.expertise %}{{ cfg.expertise }}{% endif %}
-+        {% if cfg.client_bio %}{{ cfg.client_bio }}{% endif %}
-+      </div>
-+      {% endif %}
++      {# Advisor bio/expertise note intentionally hidden from participants for
++         now (admin can still see and edit both fields in the admin panel,
++         and they still shape the AI's actual tone via advisor_voice_guard —
++         this only removes the visible text block from the chat itself). #}
      </div>
    </div>
  
-@@ -2575,6 +2970,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2575,6 +2967,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
          </button>
          <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
@@ -641,7 +638,7 @@ index 4b5a702..97635cf 100644
          <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-@@ -2622,9 +3024,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +3021,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -653,7 +650,7 @@ index 4b5a702..97635cf 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +3107,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +3104,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -760,17 +757,17 @@ index 4b5a702..97635cf 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3206,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3203,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -790,7 +787,7 @@ index 4b5a702..97635cf 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3230,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3227,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -810,7 +807,7 @@ index 4b5a702..97635cf 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -2772,6 +3247,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2772,6 +3244,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const resetBtn = document.getElementById("reset-btn");
      const chatWrap = document.getElementById("chat-wrap");
      const OPENING = {{ cfg.opening|tojson }};
@@ -818,7 +815,7 @@ index 4b5a702..97635cf 100644
  
      // -------------------------------------------------------------
      // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
-@@ -3306,13 +3782,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3306,13 +3779,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // Turning OFF should stop anything currently speaking
          if (!autoSpeakEnabled) {
            J3PSpeech.stop();
@@ -835,7 +832,7 @@ index 4b5a702..97635cf 100644
          }
        });
      }
-@@ -3872,7 +4344,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4341,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -844,7 +841,7 @@ index 4b5a702..97635cf 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -4211,8 +4683,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4211,8 +4680,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
              }
            }
  
@@ -854,7 +851,7 @@ index 4b5a702..97635cf 100644
          });
        }
  
-@@ -4293,8 +4764,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4293,8 +4761,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        // browser's own speech, which is instant and free.
        wrap.addEventListener("click", async () => {
          if (!TALKING_AVATAR_ON) {
@@ -864,7 +861,7 @@ index 4b5a702..97635cf 100644
            return;
          }
          if (wrap.classList.contains("is-video")) {
-@@ -4330,8 +4800,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4330,8 +4797,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            // Never leave a dead frame — fall back to browser speech
            wrap.classList.remove("is-loading", "is-video");
            if (hint) hint.textContent = "Click to listen";
@@ -874,7 +871,7 @@ index 4b5a702..97635cf 100644
          }
        });
  
-@@ -4406,7 +4875,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4406,7 +4872,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
      }
  
@@ -883,7 +880,7 @@ index 4b5a702..97635cf 100644
        const div = document.createElement("div");
        div.className = "msg " + role;
        if (interactionId) div.dataset.interactionId = String(interactionId);
-@@ -4420,7 +4889,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4420,7 +4886,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          textNode.textContent = text;
        }
        div.appendChild(textNode);
@@ -892,7 +889,7 @@ index 4b5a702..97635cf 100644
        // Advisor replies are preceded by the avatar, when one is configured.
        // If the image fails to load it removes itself, so a missing file just
        // leaves the reply looking as it did before.
-@@ -4431,17 +4900,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4431,17 +4897,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        chatWrap.scrollTop = chatWrap.scrollHeight;
        // If auto-speak is enabled and this is a fresh assistant reply (with feedback
        // row, meaning it was just received from the API), start reading it aloud.
@@ -913,7 +910,7 @@ index 4b5a702..97635cf 100644
        const wrap = document.createElement("div");
        wrap.className = "feedback";
        wrap.innerHTML = `
-@@ -4456,20 +4924,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4456,20 +4921,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
              <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
            </svg>
          </button>
@@ -948,7 +945,7 @@ index 4b5a702..97635cf 100644
          <span class="download-wrap">
            <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-@@ -4599,13 +5072,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4599,13 +5069,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
            }
          });
        });
@@ -968,7 +965,7 @@ index 4b5a702..97635cf 100644
          // Strip markdown so the reader doesn't literally say "star star bold star star"
          const stripMarkdown = (t) => (t || "")
            .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
-@@ -4625,80 +5097,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4625,80 +5094,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
            .trim();
  
          function resetSpeakUI() {
@@ -1063,7 +1060,7 @@ index 4b5a702..97635cf 100644
        }
  
        // === COPY button ===
-@@ -4728,15 +5156,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4728,15 +5153,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
          }
        });
  
@@ -1148,7 +1145,7 @@ index 4b5a702..97635cf 100644
          downloadMenu.classList.toggle("open");
          if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
        });
-@@ -4862,6 +5358,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4862,6 +5355,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
              Copy link
            </button>
          `;
@@ -1157,7 +1154,7 @@ index 4b5a702..97635cf 100644
          shareMenu.classList.add("open");
          positionMenu(shareMenu);
  
-@@ -5028,6 +5526,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5523,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -1330,7 +1327,7 @@ index 4b5a702..97635cf 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5157,7 +5821,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5157,7 +5818,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          setAvatarThinking(false);
          if (data.reply) {
            const msgDiv = addMessage(data.reply, "assistant", true,
@@ -1339,7 +1336,7 @@ index 4b5a702..97635cf 100644
            // Nothing downloads on its own. When the reply looks like a
            // deliverable, offer a download and let the user decide.
            setAvatarResponding(msgDiv);
-@@ -5208,7 +5872,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5208,7 +5869,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        resetArmed = false;
        // Stop any in-progress speech before wiping the chat
        J3PSpeech.stop();
@@ -1348,7 +1345,7 @@ index 4b5a702..97635cf 100644
        await fetch("/reset", { method: "POST" });
        chat.innerHTML = "";
        const div = document.createElement("div");
-@@ -5823,7 +6487,7 @@ def _did_request(text: str):
+@@ -5823,7 +6484,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -1357,7 +1354,7 @@ index 4b5a702..97635cf 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6594,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6591,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -1399,7 +1396,7 @@ index 4b5a702..97635cf 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6635,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6632,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -1408,7 +1405,7 @@ index 4b5a702..97635cf 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,12 +6666,56 @@ def _advisors_ensure_table(conn):
+@@ -5979,22 +6663,72 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -1418,6 +1415,8 @@ index 4b5a702..97635cf 100644
 -def slugify_advisor(name: str) -> str:
 -    base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
 -    return base[:40] or "advisor"
+-
+-
 +        # Added later: an advisor's own external booking link (Calendly,
 +        # Acuity, etc). Empty means "use the shared J3P scheduling link."
 +        try:
@@ -1468,10 +1467,11 @@ index 4b5a702..97635cf 100644
 +def slugify_advisor(name: str) -> str:
 +    base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
 +    return base[:40] or "advisor"
- 
- 
++
++
  def advisors_with_detail():
-@@ -5993,8 +6724,14 @@ def advisors_with_detail():
+     """Advisor profiles plus their own briefings, for the admin panel."""
+     out = []
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -1488,7 +1488,7 @@ index 4b5a702..97635cf 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6746,28 @@ def list_advisors():
+@@ -6009,13 +6743,28 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -1520,7 +1520,7 @@ index 4b5a702..97635cf 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6784,23 @@ def get_advisor(slug: str):
+@@ -6032,11 +6781,23 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -1547,7 +1547,7 @@ index 4b5a702..97635cf 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,6 +6808,101 @@ def get_advisor(slug: str):
+@@ -6044,6 +6805,101 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -1649,7 +1649,7 @@ index 4b5a702..97635cf 100644
  def get_advisor_photo(slug: str):
      conn = _settings_db_conn()
      if not conn:
-@@ -6065,7 +6924,15 @@ def get_advisor_photo(slug: str):
+@@ -6065,7 +6921,15 @@ def get_advisor_photo(slug: str):
          conn.close()
  
  
@@ -1666,7 +1666,7 @@ index 4b5a702..97635cf 100644
      conn = _settings_db_conn()
      if not conn:
          return False
-@@ -6092,6 +6959,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+@@ -6092,6 +6956,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -1687,7 +1687,7 @@ index 4b5a702..97635cf 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +7129,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +7126,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1696,7 +1696,7 @@ index 4b5a702..97635cf 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,610 +7178,1349 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,608 +7175,1347 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1731,7 +1731,7 @@ index 4b5a702..97635cf 100644
 +_PERSONALITY_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]
  
 -PROFILE_FIELDS = ("first_name", "role", "specialty")
-+
+ 
 +def score_tipi(answers: dict) -> dict:
 +    """answers: {item_id (1-10): raw rating 1-7}. Returns {trait: average}
 +    on TIPI's native 1-7 scale, applying the standard reverse-scoring
@@ -1756,8 +1756,8 @@ index 4b5a702..97635cf 100644
 +    return {trait: round(sum(vals) / len(vals), 1)
 +            for trait, vals in by_trait.items() if vals}
  
- 
 -def _profile_ensure_table(conn):
++
 +def _tipi_bucket(score) -> int:
 +    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
 +    interpretation text below is written for, so a real, continuous TIPI
@@ -2908,8 +2908,6 @@ index 4b5a702..97635cf 100644
  
 -def wants_separate_files(text: str) -> bool:
 -    """True only when the user explicitly asked for more than one file."""
--    import re as _r
--    if not text:
 +def update_profile_from_message(text: str) -> dict:
 +    """Pick up anything the participant volunteers. Never asks, never guesses."""
 +    found = {}
@@ -3475,12 +3473,10 @@ index 4b5a702..97635cf 100644
 +
 +def wants_separate_files(text: str) -> bool:
 +    """True only when the user explicitly asked for more than one file."""
-+    import re as _r
-+    if not text:
+     import re as _r
+     if not text:
          return False
-     low = text.lower()
-     if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
-@@ -7107,14 +8727,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +8724,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -3519,7 +3515,7 @@ index 4b5a702..97635cf 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8766,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8763,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -3531,7 +3527,7 @@ index 4b5a702..97635cf 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8783,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8780,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -3540,7 +3536,7 @@ index 4b5a702..97635cf 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +8791,29 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +8788,29 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
@@ -3572,7 +3568,7 @@ index 4b5a702..97635cf 100644
      )
  
  
-@@ -7173,6 +8822,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8819,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -3585,7 +3581,7 @@ index 4b5a702..97635cf 100644
      return _render_chat()
  
  
-@@ -7182,6 +8837,7 @@ def index():
+@@ -7182,6 +8834,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -3593,7 +3589,7 @@ index 4b5a702..97635cf 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8931,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8928,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -3601,7 +3597,7 @@ index 4b5a702..97635cf 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7506,7 +9163,7 @@ def chat():
+@@ -7506,7 +9160,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -3610,7 +3606,7 @@ index 4b5a702..97635cf 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7903,6 +9560,10 @@ def chat():
+@@ -7903,6 +9557,10 @@ def chat():
          f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
      )
  
@@ -3621,7 +3617,7 @@ index 4b5a702..97635cf 100644
      if context:
          composed_prompt = (
              base_prompt
-@@ -7918,12 +9579,16 @@ def chat():
+@@ -7918,12 +9576,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -3638,7 +3634,7 @@ index 4b5a702..97635cf 100644
          )
  
      try:
-@@ -8207,12 +9872,13 @@ def chat():
+@@ -8207,12 +9869,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -3653,7 +3649,7 @@ index 4b5a702..97635cf 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9943,28 @@ def acknowledge_release():
+@@ -8277,6 +9940,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -3682,7 +3678,7 @@ index 4b5a702..97635cf 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +10043,12 @@ def feedback():
+@@ -8355,12 +10040,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -3697,7 +3693,7 @@ index 4b5a702..97635cf 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +10302,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +10299,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -3708,7 +3704,7 @@ index 4b5a702..97635cf 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +10510,23 @@ def advisor_avatar():
+@@ -8820,8 +10507,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -3733,7 +3729,7 @@ index 4b5a702..97635cf 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +10544,38 @@ def advisor_avatar():
+@@ -8839,28 +10541,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -3790,7 +3786,7 @@ index 4b5a702..97635cf 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -8904,66 +10619,556 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8904,66 +10616,556 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
      background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
      box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
    }
@@ -4396,7 +4392,7 @@ index 4b5a702..97635cf 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9089,15 +11294,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +11291,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -4470,7 +4466,7 @@ index 4b5a702..97635cf 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +11380,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +11377,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -4486,7 +4482,7 @@ index 4b5a702..97635cf 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +11397,13 @@ form.upload {
+@@ -9133,8 +11394,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -4502,7 +4498,7 @@ index 4b5a702..97635cf 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +11439,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +11436,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -4522,7 +4518,7 @@ index 4b5a702..97635cf 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +11508,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +11505,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -4546,7 +4542,7 @@ index 4b5a702..97635cf 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +11623,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +11620,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -4737,7 +4733,7 @@ index 4b5a702..97635cf 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +11839,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11836,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -4790,7 +4786,7 @@ index 4b5a702..97635cf 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +11894,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11891,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -4824,7 +4820,7 @@ index 4b5a702..97635cf 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +11930,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11927,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -4883,7 +4879,7 @@ index 4b5a702..97635cf 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +11979,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +11976,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -4894,7 +4890,7 @@ index 4b5a702..97635cf 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +12030,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +12027,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -4912,7 +4908,7 @@ index 4b5a702..97635cf 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +12047,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +12044,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -4957,7 +4953,7 @@ index 4b5a702..97635cf 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +12114,143 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +12111,143 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -5107,7 +5103,7 @@ index 4b5a702..97635cf 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +12297,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +12294,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -5138,7 +5134,7 @@ index 4b5a702..97635cf 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +12340,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +12337,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -5148,7 +5144,7 @@ index 4b5a702..97635cf 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +12505,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +12502,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -5163,7 +5159,7 @@ index 4b5a702..97635cf 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +12547,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +12544,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -5172,7 +5168,7 @@ index 4b5a702..97635cf 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +12576,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +12573,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -5190,7 +5186,7 @@ index 4b5a702..97635cf 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +12638,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +12635,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -5218,7 +5214,7 @@ index 4b5a702..97635cf 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +12846,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12843,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -5228,7 +5224,7 @@ index 4b5a702..97635cf 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +12867,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12864,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -5251,7 +5247,7 @@ index 4b5a702..97635cf 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +13000,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +12997,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -5262,7 +5258,7 @@ index 4b5a702..97635cf 100644
  
  </div>
  
-@@ -10478,6 +13231,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +13228,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -5278,7 +5274,7 @@ index 4b5a702..97635cf 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +13250,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +13247,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -5559,7 +5555,7 @@ index 4b5a702..97635cf 100644
  </body></html>"""
  
  
-@@ -10511,6 +13547,247 @@ def admin_logout():
+@@ -10511,6 +13544,247 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -5807,7 +5803,7 @@ index 4b5a702..97635cf 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +13800,25 @@ def admin_dashboard():
+@@ -10523,11 +13797,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -5833,7 +5829,7 @@ index 4b5a702..97635cf 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +13826,13 @@ def admin_dashboard():
+@@ -10535,7 +13823,13 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -5848,7 +5844,7 @@ index 4b5a702..97635cf 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +13842,23 @@ def admin_dashboard():
+@@ -10545,9 +13839,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -5872,7 +5868,7 @@ index 4b5a702..97635cf 100644
      )
  
  
-@@ -10631,16 +13942,43 @@ def admin_save_advisor():
+@@ -10631,16 +13939,43 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -5922,7 +5918,7 @@ index 4b5a702..97635cf 100644
      else:
          flash("Could not save the advisor — check the database connection.")
      return redirect(url_for("admin_dashboard"))
-@@ -10657,6 +13995,78 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +13992,78 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -6001,7 +5997,7 @@ index 4b5a702..97635cf 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +14082,14 @@ def admin_settings():
+@@ -10672,21 +14079,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -6025,7 +6021,7 @@ index 4b5a702..97635cf 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +14184,34 @@ def admin_upload_folder():
+@@ -10781,22 +14181,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -6066,7 +6062,7 @@ index 4b5a702..97635cf 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +14224,6 @@ def admin_upload_folder():
+@@ -10809,7 +14221,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -6074,7 +6070,7 @@ index 4b5a702..97635cf 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +14252,10 @@ def admin_upload_folder():
+@@ -10838,7 +14249,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -6086,7 +6082,7 @@ index 4b5a702..97635cf 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +14263,12 @@ def admin_upload_folder():
+@@ -10846,14 +14260,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -6101,7 +6097,7 @@ index 4b5a702..97635cf 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +14276,11 @@ def admin_upload_folder():
+@@ -10861,8 +14273,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -6115,7 +6111,7 @@ index 4b5a702..97635cf 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +14461,34 @@ def admin_upload_url():
+@@ -11043,25 +14458,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -6157,7 +6153,7 @@ index 4b5a702..97635cf 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +14509,10 @@ def admin_upload_url():
+@@ -11082,7 +14506,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -6169,7 +6165,7 @@ index 4b5a702..97635cf 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +14520,7 @@ def admin_upload_url():
+@@ -11090,8 +14517,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -6179,7 +6175,7 @@ index 4b5a702..97635cf 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +14530,14 @@ def admin_upload_url():
+@@ -11101,14 +14527,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -6197,7 +6193,7 @@ index 4b5a702..97635cf 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +14550,32 @@ def admin_upload_url():
+@@ -11121,32 +14547,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -6246,7 +6242,7 @@ index 4b5a702..97635cf 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +14589,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +14586,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
