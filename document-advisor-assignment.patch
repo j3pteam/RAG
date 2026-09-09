@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..46671d3 100644
+index 4b5a702..cbbffc3 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -275,7 +275,7 @@ index 4b5a702..46671d3 100644
                  conn = _settings_db_conn()
                  may_run = True
                  if conn:
-@@ -1279,6 +1497,21 @@ def admin_required(f):
+@@ -1279,6 +1497,41 @@ def admin_required(f):
      return wrapper
  
  
@@ -294,10 +294,30 @@ index 4b5a702..46671d3 100644
 +    return wrapper
 +
 +
++def advisor_portal_onboarded_required(f):
++    """Same login check as advisor_portal_required, plus: the advisor must
++    have completed their personality assessment before reaching anything
++    else in the portal. Applied to every portal route except the
++    assessment page itself and logout — so there's no redirect loop, and
++    no way to reach uploads, deletes, or the document list without
++    completing it first. New and existing advisors alike are held to
++    this the first time they land on a gated route; retaking later, once
++    already completed, is optional."""
++    @wraps(f)
++    def wrapper(*args, **kwargs):
++        slug = session.get("advisor_owner_slug")
++        if not slug or not get_advisor(slug):
++            return redirect(url_for("advisor_portal_login_info"))
++        if not get_advisor_personality(slug):
++            return redirect(url_for("advisor_portal_personality"))
++        return f(*args, **kwargs)
++    return wrapper
++
++
  # ---------------------------------------------------------------------------
  # Main chat HTML
  # ---------------------------------------------------------------------------
-@@ -1651,6 +1884,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1651,6 +1904,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
        content: ""; position: absolute; left: 0; top: 0; bottom: 0;
        width: 3px; background: var(--gold);
      }
@@ -313,7 +333,7 @@ index 4b5a702..46671d3 100644
      /* Acknowledgment gate — shown at the start of every session */
      .ack-overlay {
        position: fixed; inset: 0; z-index: 100;
-@@ -1716,7 +1958,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1716,7 +1978,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        margin: 0.18rem 0 0 0; width: 17px; height: 17px;
        accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
      }
@@ -322,7 +342,7 @@ index 4b5a702..46671d3 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,18 +1966,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,18 +1986,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -369,7 +389,7 @@ index 4b5a702..46671d3 100644
  
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
-@@ -1857,7 +2122,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1857,7 +2142,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
  
      /* Share menu popover */
@@ -378,7 +398,7 @@ index 4b5a702..46671d3 100644
        position: relative; display: inline-flex;
        align-items: center; line-height: 0;
      }
-@@ -1889,7 +2154,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1889,7 +2174,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      /* Persistent avatar presence — always on screen, always animating */
      .presence {
@@ -387,7 +407,7 @@ index 4b5a702..46671d3 100644
        width: 104px; text-align: center; user-select: none;
      }
      .presence-frame {
-@@ -1983,18 +2248,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1983,18 +2268,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {
        /* Smaller, and above the composer — the send button owns the bottom
@@ -408,7 +428,7 @@ index 4b5a702..46671d3 100644
      @media (prefers-reduced-motion: reduce) {
        .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
        .presence.speaking .presence-ring,
-@@ -2200,7 +2461,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2200,7 +2481,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
      .attach-btn:hover { color: var(--navy); background: var(--paper); }
      .attach-btn svg { width: 18px; height: 18px; }
@@ -417,7 +437,7 @@ index 4b5a702..46671d3 100644
        position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
        background: transparent; border: none;
        color: var(--muted); cursor: pointer;
-@@ -2208,6 +2469,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2208,6 +2489,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
        display: flex; align-items: center; justify-content: center;
        transition: all 0.2s ease; padding: 0;
      }
@@ -435,7 +455,7 @@ index 4b5a702..46671d3 100644
      .folder-btn:hover { color: var(--navy); background: var(--paper); }
      .folder-btn svg { width: 18px; height: 18px; }
      #file-input, #folder-input-chat { display: none; }
-@@ -2230,7 +2502,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2230,7 +2522,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .attached-file button:hover { color: var(--rust); }
      .attached-file button svg { width: 14px; height: 14px; }
      input[type="text"] {
@@ -444,7 +464,7 @@ index 4b5a702..46671d3 100644
        border: 1px solid var(--line); border-radius: 2px;
        font-size: 0.95rem; font-family: inherit; outline: none;
        background: var(--paper); color: var(--text); width: 100%;
-@@ -2265,12 +2537,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2265,12 +2557,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        border: 5px solid transparent; border-top-color: var(--navy);
      }
      /* Anchored under each button, which sits at a fixed offset from the right */
@@ -462,7 +482,7 @@ index 4b5a702..46671d3 100644
      .attach-btn:hover ~ .attach-tip,
      .attach-btn:focus-visible ~ .attach-tip {
        opacity: 1; visibility: visible; transform: translateY(0);
-@@ -2340,6 +2616,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2340,6 +2636,35 @@ INDEX_HTML = r"""<!DOCTYPE html>
        .voice-hint { margin: 0 1rem 0.45rem; font-size: 0.76rem; }
      }
  
@@ -498,7 +518,7 @@ index 4b5a702..46671d3 100644
      @keyframes pulse {
        0%, 100% { box-shadow: 0 0 0 0 rgba(157, 67, 44, 0.6); }
        50% { box-shadow: 0 0 0 8px rgba(157, 67, 44, 0); }
-@@ -2371,6 +2676,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2371,6 +2696,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                    box-shadow 0.2s ease, transform 0.12s ease;
      }
      .cta-btn { cursor: pointer; user-select: none; }
@@ -506,7 +526,7 @@ index 4b5a702..46671d3 100644
      .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
      .cta-btn:hover {
        background: var(--navy); color: var(--gold);
-@@ -2389,7 +2695,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2389,7 +2715,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
      .footer-note a:hover { color: var(--rust); }
      @media (max-width: 640px) {
@@ -515,7 +535,7 @@ index 4b5a702..46671d3 100644
        header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
        .brand-logo { height: 40px; }
        .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
-@@ -2397,7 +2703,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2397,7 +2723,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
        #chat { padding: 1.5rem 1rem 0.75rem; }
        form { padding: 0.75rem 1rem; gap: 0.4rem; }
@@ -524,7 +544,7 @@ index 4b5a702..46671d3 100644
        button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
        .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
        .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
-@@ -2490,6 +2796,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2490,6 +2816,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
      </div>
    </div>
  
@@ -593,19 +613,21 @@ index 4b5a702..46671d3 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2541,6 +2909,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2541,6 +2929,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div id="chat-wrap">
      <div id="chat">
        <div class="msg assistant">{{ cfg.opening }}</div>
-+      {% if cfg.client_bio %}
++      {% if cfg.client_bio or cfg.expertise %}
 +      <div class="advisor-bio-note">
-+        <strong>About {{ cfg.persona_name }}:</strong> {{ cfg.client_bio }}
++        <strong>About {{ cfg.persona_name }}:</strong>
++        {% if cfg.expertise %}{{ cfg.expertise }}{% endif %}
++        {% if cfg.client_bio %}{{ cfg.client_bio }}{% endif %}
 +      </div>
 +      {% endif %}
      </div>
    </div>
  
-@@ -2575,6 +2948,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2575,6 +2970,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
          </button>
          <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
@@ -619,7 +641,7 @@ index 4b5a702..46671d3 100644
          <button type="button" id="mic-btn" class="mic-btn" aria-label="Hold to record a voice message" title="Press and hold to record — release to send">
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
-@@ -2622,9 +3002,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +3024,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -631,7 +653,7 @@ index 4b5a702..46671d3 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +3085,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +3107,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -738,17 +760,17 @@ index 4b5a702..46671d3 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3184,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3206,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
 -      if (alreadyAcked) return;
-+      if (alreadyAcked) { openPersonalityGate(); return; }
- 
+-
 -      // Block the composer while the gate is up
 -      const composer = document.querySelector(".composer-wrap");
 -      if (composer) composer.setAttribute("aria-hidden", "true");
--
++      if (alreadyAcked) { openPersonalityGate(); return; }
+ 
 -      overlay.hidden = false;
 -      setTimeout(() => checkbox.focus(), 120);
 +      setComposerBlocked(true);
@@ -768,7 +790,7 @@ index 4b5a702..46671d3 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3208,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3230,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -788,7 +810,7 @@ index 4b5a702..46671d3 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -2772,6 +3225,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2772,6 +3247,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const resetBtn = document.getElementById("reset-btn");
      const chatWrap = document.getElementById("chat-wrap");
      const OPENING = {{ cfg.opening|tojson }};
@@ -796,7 +818,7 @@ index 4b5a702..46671d3 100644
  
      // -------------------------------------------------------------
      // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
-@@ -3872,7 +4326,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4348,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -805,7 +827,7 @@ index 4b5a702..46671d3 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -4406,7 +4860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4406,7 +4882,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
      }
  
@@ -814,7 +836,7 @@ index 4b5a702..46671d3 100644
        const div = document.createElement("div");
        div.className = "msg " + role;
        if (interactionId) div.dataset.interactionId = String(interactionId);
-@@ -4420,7 +4874,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4420,7 +4896,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          textNode.textContent = text;
        }
        div.appendChild(textNode);
@@ -823,7 +845,7 @@ index 4b5a702..46671d3 100644
        // Advisor replies are preceded by the avatar, when one is configured.
        // If the image fails to load it removes itself, so a missing file just
        // leaves the reply looking as it did before.
-@@ -4441,7 +4895,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4441,7 +4917,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return div;
      }
  
@@ -832,7 +854,7 @@ index 4b5a702..46671d3 100644
        const wrap = document.createElement("div");
        wrap.className = "feedback";
        wrap.innerHTML = `
-@@ -4470,6 +4924,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4470,6 +4946,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
            <span class="copy-label">Copy</span>
          </button>
@@ -852,7 +874,7 @@ index 4b5a702..46671d3 100644
          <span class="download-wrap">
            <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-@@ -4728,15 +5195,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4728,15 +5217,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
          }
        });
  
@@ -937,7 +959,7 @@ index 4b5a702..46671d3 100644
          downloadMenu.classList.toggle("open");
          if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
        });
-@@ -4862,6 +5397,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4862,6 +5419,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
              Copy link
            </button>
          `;
@@ -946,7 +968,7 @@ index 4b5a702..46671d3 100644
          shareMenu.classList.add("open");
          positionMenu(shareMenu);
  
-@@ -5028,6 +5565,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5587,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -1119,7 +1141,7 @@ index 4b5a702..46671d3 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5157,7 +5860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5157,7 +5882,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          setAvatarThinking(false);
          if (data.reply) {
            const msgDiv = addMessage(data.reply, "assistant", true,
@@ -1128,7 +1150,7 @@ index 4b5a702..46671d3 100644
            // Nothing downloads on its own. When the reply looks like a
            // deliverable, offer a download and let the user decide.
            setAvatarResponding(msgDiv);
-@@ -5823,7 +6526,7 @@ def _did_request(text: str):
+@@ -5823,7 +6548,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -1137,7 +1159,7 @@ index 4b5a702..46671d3 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6633,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6655,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -1179,7 +1201,7 @@ index 4b5a702..46671d3 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6674,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6696,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -1188,7 +1210,7 @@ index 4b5a702..46671d3 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6705,41 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6727,50 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -1227,10 +1249,19 @@ index 4b5a702..46671d3 100644
 +                        "client_bio TEXT NOT NULL DEFAULT ''")
 +        except Exception:
 +            pass
++        # Added later: this advisor's own subject-matter expertise — distinct
++        # from client_bio (which is about coaching STYLE). Both are fed to
++        # the model itself, not just displayed, so the AI's actual behavior
++        # is accountable to what's promised about this advisor.
++        try:
++            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
++                        "expertise TEXT NOT NULL DEFAULT ''")
++        except Exception:
++            pass
      conn.commit()
  
  
-@@ -5993,8 +6754,14 @@ def advisors_with_detail():
+@@ -5993,8 +6785,14 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -1247,7 +1278,7 @@ index 4b5a702..46671d3 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6776,26 @@ def list_advisors():
+@@ -6009,13 +6807,28 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -1255,14 +1286,15 @@ index 4b5a702..46671d3 100644
 +                SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
 +                       COALESCE(scheduling_url, ''), show_scheduling_override,
 +                       show_avatar_override, allow_materials_override,
-+                       personality_override, portal_token, COALESCE(client_bio, '')
++                       personality_override, portal_token, COALESCE(client_bio, ''),
++                       COALESCE(expertise, '')
                  FROM advisors ORDER BY name
              """)
 -            for slug, name, has_photo, no_photo in cur.fetchall():
 +            for (slug, name, has_photo, no_photo, scheduling_url,
 +                 show_scheduling_override, show_avatar_override,
 +                 allow_materials_override, personality_override,
-+                 portal_token, client_bio) in cur.fetchall():
++                 portal_token, client_bio, expertise) in cur.fetchall():
                  out.append({"slug": slug, "name": name,
                              "has_photo": bool(has_photo),
 -                            "no_photo": bool(no_photo)})
@@ -1273,11 +1305,12 @@ index 4b5a702..46671d3 100644
 +                            "allow_materials_override": allow_materials_override,
 +                            "personality_override": personality_override,
 +                            "portal_token": portal_token or "",
-+                            "client_bio": client_bio or ""})
++                            "client_bio": client_bio or "",
++                            "expertise": expertise or ""})
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6812,21 @@ def get_advisor(slug: str):
+@@ -6032,11 +6845,23 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -1286,7 +1319,8 @@ index 4b5a702..46671d3 100644
 +                                  COALESCE(scheduling_url, ''),
 +                                  show_scheduling_override, show_avatar_override,
 +                                  allow_materials_override, personality_override,
-+                                  portal_token, COALESCE(client_bio, '')
++                                  portal_token, COALESCE(client_bio, ''),
++                                  COALESCE(expertise, '')
                             FROM advisors WHERE slug = %s""", (slug,))
              row = cur.fetchone()
 -        return {"slug": row[0], "name": row[1],
@@ -1298,11 +1332,12 @@ index 4b5a702..46671d3 100644
 +                "allow_materials_override": row[6],
 +                "personality_override": row[7],
 +                "portal_token": row[8] or "",
-+                "client_bio": row[9] or ""} if row else None
++                "client_bio": row[9] or "",
++                "expertise": row[10] or ""} if row else None
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,42 +6834,127 @@ def get_advisor(slug: str):
+@@ -6044,19 +6869,114 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -1328,35 +1363,24 @@ index 4b5a702..46671d3 100644
 -            return None
 -        data = row[0]
 -        return (bytes(data) if not isinstance(data, bytes) else data,
--                row[1] or "image/jpeg")
 +        return {"slug": row[0], "name": row[1]} if row else None
-     except Exception as e:
--        app.logger.error(f"[advisors] photo read failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[advisors] portal token lookup failed: {e}")
-         return None
-     finally:
-         conn.close()
- 
- 
--def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> bool:
++        return None
++    finally:
++        conn.close()
++
++
 +def set_advisor_portal_token(slug: str, token) -> bool:
 +    """Generate/replace (a string) or revoke (None) an advisor's portal
 +    link. Regenerating immediately invalidates whatever link was issued
 +    before — there's only ever one valid token per advisor at a time."""
-     conn = _settings_db_conn()
-     if not conn:
-         return False
-     try:
-         _advisors_ensure_table(conn)
-         with conn.cursor() as cur:
--            if photo is not None:
--                cur.execute("""
--                    INSERT INTO advisors (slug, name, photo, photo_mime)
--                    VALUES (%s, %s, %s, %s)
--                    ON CONFLICT (slug) DO UPDATE
--                    SET name = EXCLUDED.name, photo = EXCLUDED.photo,
--                        photo_mime = EXCLUDED.photo_mime
--                """, (slug, name, photo, mime))
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
 +            cur.execute("UPDATE advisors SET portal_token = %s WHERE slug = %s",
 +                        (token, slug))
 +        conn.commit()
@@ -1381,6 +1405,24 @@ index 4b5a702..46671d3 100644
 +        return True
 +    except Exception as e:
 +        app.logger.error(f"[advisors] bio write failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
++def set_advisor_expertise(slug: str, expertise: str) -> bool:
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("UPDATE advisors SET expertise = %s WHERE slug = %s",
++                        ((expertise or "")[:2000], slug))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[advisors] expertise write failed: {e}")
 +        return False
 +    finally:
 +        conn.close()
@@ -1413,14 +1455,14 @@ index 4b5a702..46671d3 100644
 +            return None
 +        data = row[0]
 +        return (bytes(data) if not isinstance(data, bytes) else data,
-+                row[1] or "image/jpeg")
-+    except Exception as e:
-+        app.logger.error(f"[advisors] photo read failed: {e}")
-+        return None
-+    finally:
-+        conn.close()
-+
-+
+                 row[1] or "image/jpeg")
+     except Exception as e:
+         app.logger.error(f"[advisors] photo read failed: {e}")
+@@ -6065,7 +6985,15 @@ def get_advisor_photo(slug: str):
+         conn.close()
+ 
+ 
+-def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) -> bool:
 +_UNSET = object()  # distinguishes "caller didn't touch this field" from
 +                   # "caller explicitly set it to None" (which, for the
 +                   # override fields below, means "inherit the global setting")
@@ -1430,24 +1472,10 @@ index 4b5a702..46671d3 100644
 +                  scheduling_url=None, show_scheduling_override=_UNSET,
 +                  show_avatar_override=_UNSET, allow_materials_override=_UNSET,
 +                  personality_override=_UNSET) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
-+        _advisors_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            if photo is not None:
-+                cur.execute("""
-+                    INSERT INTO advisors (slug, name, photo, photo_mime)
-+                    VALUES (%s, %s, %s, %s)
-+                    ON CONFLICT (slug) DO UPDATE
-+                    SET name = EXCLUDED.name, photo = EXCLUDED.photo,
-+                        photo_mime = EXCLUDED.photo_mime
-+                """, (slug, name, photo, mime))
-             else:
-                 cur.execute("""
-                     INSERT INTO advisors (slug, name) VALUES (%s, %s)
-@@ -6092,6 +6967,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+     conn = _settings_db_conn()
+     if not conn:
+         return False
+@@ -6092,6 +7020,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
                      # Clear the stored image so the monogram is what's served
                      cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
                                  "WHERE slug = %s", (slug,))
@@ -1468,7 +1496,7 @@ index 4b5a702..46671d3 100644
          conn.commit()
          return True
      except Exception as e:
-@@ -6248,7 +7137,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+@@ -6248,7 +7190,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1477,7 +1505,7 @@ index 4b5a702..46671d3 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,146 +7186,715 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,142 +7239,756 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1512,7 +1540,7 @@ index 4b5a702..46671d3 100644
 +_PERSONALITY_TRAITS = ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]
  
 -PROFILE_FIELDS = ("first_name", "role", "specialty")
-+
+ 
 +def score_tipi(answers: dict) -> dict:
 +    """answers: {item_id (1-10): raw rating 1-7}. Returns {trait: average}
 +    on TIPI's native 1-7 scale, applying the standard reverse-scoring
@@ -1537,8 +1565,8 @@ index 4b5a702..46671d3 100644
 +    return {trait: round(sum(vals) / len(vals), 1)
 +            for trait, vals in by_trait.items() if vals}
  
- 
 -def _profile_ensure_table(conn):
++
 +def _tipi_bucket(score) -> int:
 +    """Rescales a native 1-7 TIPI average onto the 1-5 bucket scale the
 +    interpretation text below is written for, so a real, continuous TIPI
@@ -1937,10 +1965,6 @@ index 4b5a702..46671d3 100644
 +    if not slug:
          return None
 -    patterns = [
--        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
--        r"\bi'?m ([A-Z][a-z]{1,18})\b",
--        r"\bthis is ([A-Z][a-z]{1,18})\b",
--        r"\bcall me ([A-Z][a-z]{1,18})\b",
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return None
@@ -2021,6 +2045,51 @@ index 4b5a702..46671d3 100644
 +        "as a soft steer on tone only — never mention it, never call it a "
 +        "personality type or a score):\n- " + "\n- ".join(notes) + "\n"
 +    )
++
++
++def advisor_voice_guard(active) -> str:
++    """Layers a named advisor's own expertise and coaching style on top of
++    the core J3P voice — additive, never a replacement. VOICE & DIFFERENTIATION
++    RULES and STRICT SCOPE RULES above still govern every reply; this only
++    shapes tone and emphasis within them.
++
++    Both fields fed in here (expertise, client_bio) are also shown directly
++    to the participant in the chat UI. Feeding them to the model too, not
++    just displaying them, is the point: without this, what's promised about
++    an advisor's style and background and what the AI actually does could
++    silently drift apart — matching only by coincidence.
++    """
++    if not active:
++        return ""
++    expertise = (active.get("expertise") or "").strip()
++    bio = (active.get("client_bio") or "").strip()
++    if not expertise and not bio:
++        return ""
++    parts = [
++        f"\n\n---\nTHIS SESSION'S ADVISOR — {active['name']}:\n\n"
++        "Everything above still governs this reply — scope, safety, contact "
++        "rules and the core J3P voice are unchanged. What follows shapes "
++        "tone and emphasis within those rules; it never loosens them.\n"
++    ]
++    if expertise:
++        parts.append(
++            f"\nAREAS OF EXPERTISE: {expertise}\n"
++            "Draw on this background where it's genuinely relevant — it's "
++            "what should make this advisor's answer feel specific rather "
++            "than interchangeable with any other advisor's. This describes "
++            "the ADVISOR's own background, not the participant's — rule 15 "
++            "in the voice rules above still applies to them: never assume "
++            "the participant shares this specialty.\n"
++        )
++    if bio:
++        parts.append(
++            f"\nCOACHING STYLE: {bio}\n"
++            "This is a description already shown to the participant, in "
++            "the chat itself, of how this advisor comes across. Actually "
++            "embody it, don't just stay consistent with the base J3P voice "
++            "— be recognizably this.\n"
++        )
++    return "".join(parts)
 +
 +
 +# ---------------------------------------------------------------------------
@@ -2277,14 +2346,10 @@ index 4b5a702..46671d3 100644
 +    if not text:
 +        return None
 +    patterns = [
-+        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
-+        r"\bi'?m ([A-Z][a-z]{1,18})\b",
-+        r"\bthis is ([A-Z][a-z]{1,18})\b",
-+        r"\bcall me ([A-Z][a-z]{1,18})\b",
-         r"^([A-Z][a-z]{1,18}) here\b",
-     ]
-     # Words that follow "I'm" but aren't names
-@@ -6762,10 +8220,35 @@ def build_briefing() -> str:
+         r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
+         r"\bi'?m ([A-Z][a-z]{1,18})\b",
+         r"\bthis is ([A-Z][a-z]{1,18})\b",
+@@ -6762,10 +8318,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -2321,7 +2386,7 @@ index 4b5a702..46671d3 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,12 +8272,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +8370,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -2343,12 +2408,15 @@ index 4b5a702..46671d3 100644
  
  def _doc_owner_ensure_table(conn):
      with conn.cursor() as cur:
-@@ -6852,19 +8341,113 @@ def document_owners() -> dict:
+@@ -6852,19 +8439,113 @@ def document_owners() -> dict:
          conn.close()
  
  
 -def filter_chunks_for_advisor(results, advisor_slug):
 -    """Shared documents plus this advisor's own. Others are dropped.
+-
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
 +def _doc_advisors_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -2360,9 +2428,7 @@ index 4b5a702..46671d3 100644
 +            )
 +        """)
 +    conn.commit()
- 
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
++
 +
 +def set_document_advisors(title: str, advisor_slugs) -> bool:
 +    """Assign a document to zero or more advisors.
@@ -2465,7 +2531,7 @@ index 4b5a702..46671d3 100644
              keep.append(r)
      return keep
  
-@@ -7107,14 +8690,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7107,14 +8788,37 @@ def _render_chat(force_scheduling=None, advisor=None):
      force_scheduling overrides the admin default; advisor selects a named
      profile so the page shows that person's photo.
      """
@@ -2504,7 +2570,7 @@ index 4b5a702..46671d3 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +8729,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +8827,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -2516,7 +2582,7 @@ index 4b5a702..46671d3 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +8746,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +8844,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -2525,11 +2591,12 @@ index 4b5a702..46671d3 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +8754,28 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +8852,29 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
 +        page_cfg["client_bio"] = active.get("client_bio", "")
++        page_cfg["expertise"] = active.get("expertise", "")
          name_the_advisor(page_cfg, active["name"])
 +        if active.get("scheduling_url"):
 +            page_cfg["footer_cta_url"] = active["scheduling_url"]
@@ -2556,7 +2623,7 @@ index 4b5a702..46671d3 100644
      )
  
  
-@@ -7173,6 +8784,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +8883,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -2569,7 +2636,7 @@ index 4b5a702..46671d3 100644
      return _render_chat()
  
  
-@@ -7182,6 +8799,7 @@ def index():
+@@ -7182,6 +8898,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -2577,7 +2644,7 @@ index 4b5a702..46671d3 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7275,6 +8893,7 @@ def _advisor_not_found(slug):
+@@ -7275,6 +8992,7 @@ def _advisor_not_found(slug):
  def index_without_scheduling():
      """Share this link when you want the advisor with no booking prompt."""
      session.pop("force_scheduling", None)
@@ -2585,7 +2652,7 @@ index 4b5a702..46671d3 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7506,7 +9125,7 @@ def chat():
+@@ -7506,7 +9224,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -2594,11 +2661,23 @@ index 4b5a702..46671d3 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7918,12 +9537,14 @@ def chat():
+@@ -7903,6 +9621,10 @@ def chat():
+         f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
+     )
+ 
++    # This session's named advisor, if any — resolved once and reused both
++    # for the voice/expertise layer below and for the API call's logging.
++    active_advisor = get_advisor(session.get("advisor_slug"))
++
+     if context:
+         composed_prompt = (
+             base_prompt
+@@ -7918,12 +9640,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
 +            + personality_style_block()
++            + advisor_voice_guard(active_advisor)
          )
      else:
          composed_prompt = (
@@ -2606,10 +2685,11 @@ index 4b5a702..46671d3 100644
              + document_guard + contact_guard + profile_guidance()
              + open_commitments_block() + participant_materials_block()
 +            + personality_style_block()
++            + advisor_voice_guard(active_advisor)
          )
  
      try:
-@@ -8207,12 +9828,13 @@ def chat():
+@@ -8207,12 +9933,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -2624,7 +2704,7 @@ index 4b5a702..46671d3 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9899,28 @@ def acknowledge_release():
+@@ -8277,6 +10004,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -2653,7 +2733,7 @@ index 4b5a702..46671d3 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +9999,12 @@ def feedback():
+@@ -8355,12 +10104,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -2668,7 +2748,7 @@ index 4b5a702..46671d3 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +10258,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +10363,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -2679,7 +2759,7 @@ index 4b5a702..46671d3 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +10466,23 @@ def advisor_avatar():
+@@ -8820,8 +10571,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -2704,7 +2784,7 @@ index 4b5a702..46671d3 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8839,28 +10500,38 @@ def advisor_avatar():
+@@ -8839,28 +10605,38 @@ def advisor_avatar():
  @app.route("/admin/avatar", methods=["POST"])
  @admin_required
  def admin_upload_avatar():
@@ -2761,36 +2841,11 @@ index 4b5a702..46671d3 100644
      return redirect(url_for("admin_dashboard"))
  
  
-@@ -8879,11 +10550,464 @@ def admin_delete_avatar():
- # Admin panel
- # ---------------------------------------------------------------------------
- 
--ADMIN_LOGIN_HTML = """<!DOCTYPE html>
-+ADMIN_LOGIN_HTML = """<!DOCTYPE html>
-+<html lang="en"><head>
-+<meta charset="UTF-8" />
-+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-+<title>Admin — {{ cfg.persona_name }}</title>
-+<link rel="icon" href="{{ cfg.favicon_url }}" />
-+<link rel="preconnect" href="https://fonts.googleapis.com">
-+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
-+<style>
-+  :root {
-+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
-+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
-+  }
-+  *, *::before, *::after { box-sizing: border-box; }
-+  body {
-+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
-+    background: var(--paper); color: var(--navy);
-+    display: flex; align-items: center; justify-content: center;
-+    min-height: 100vh; padding: 1.25rem;
-+  }
-+  .box {
-+    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
-+    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
-+  }
+@@ -8904,66 +10680,556 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+     background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
+     box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
+   }
+-  .box-head {
 +  .box-head {
 +    background: var(--navy); border-bottom: 2px solid var(--gold);
 +    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
@@ -3220,28 +3275,24 @@ index 4b5a702..46671d3 100644
 +</body></html>"""
 +
 +ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
- <html lang="en"><head>
- <meta charset="UTF-8" />
- <meta name="viewport" content="width=device-width, initial-scale=1.0" />
--<title>Admin — {{ cfg.persona_name }}</title>
++<html lang="en"><head>
++<meta charset="UTF-8" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 +<title>Personality Assessment — {{ advisor.name }} — {{ cfg.persona_name }}</title>
- <link rel="icon" href="{{ cfg.favicon_url }}" />
- <link rel="preconnect" href="https://fonts.googleapis.com">
- <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8896,74 +11020,108 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
-   *, *::before, *::after { box-sizing: border-box; }
-   body {
-     margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
--    background: var(--paper); color: var(--navy);
--    display: flex; align-items: center; justify-content: center;
--    min-height: 100vh; padding: 1.25rem;
--  }
--  .box {
--    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
--    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
++<link rel="icon" href="{{ cfg.favicon_url }}" />
++<link rel="preconnect" href="https://fonts.googleapis.com">
++<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
++<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
++<style>
++  :root {
++    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
++    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
++  }
++  *, *::before, *::after { box-sizing: border-box; }
++  body {
++    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
 +    background: var(--paper); color: var(--navy); min-height: 100vh;
-   }
--  .box-head {
++  }
 +  header {
      background: var(--navy); border-bottom: 2px solid var(--gold);
 -    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
@@ -3305,12 +3356,12 @@ index 4b5a702..46671d3 100644
 -    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-   }
++  }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .pq-labels {
 +    display: flex; justify-content: space-between; margin-top: 0.4rem;
 +    font-size: 0.64rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
-+  }
+   }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
 +    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
@@ -3354,13 +3405,14 @@ index 4b5a702..46671d3 100644
 +    <span>Advisor Portal</span>
 +  </header>
 +  <div class="container">
-+    <h1>Your personality assessment</h1>
++    <h1>{% if existing %}Your personality assessment{% else %}Complete your personality assessment{% endif %}</h1>
 +    <p class="subtitle">
 +      {% if existing %}You completed this before — answering again replaces your
-+      previous result.{% else %}A short, ten-item self-report (the TIPI, a
-+      published personality measure). It takes about two minutes.{% endif %}
-+      This is used to help present your style to J3P — never scored as a
-+      test, and there's no wrong answer.
++      previous result.{% else %}Required before the rest of your portal opens up
++      — a short, ten-item self-report (the TIPI, a published personality
++      measure). It takes about two minutes.{% endif %}
++      This becomes the basis for the coaching-style description shown to
++      participants — never scored as a test, and there's no wrong answer.
 +    </p>
 +
 +    {% with messages = get_flashed_messages() %}
@@ -3386,14 +3438,16 @@ index 4b5a702..46671d3 100644
 +      {% endfor %}
 +      <div class="actions">
 +        <button type="submit" class="btn">Submit</button>
++        {% if existing %}
 +        <a href="{{ url_for('advisor_portal_view') }}" class="btn-secondary">Cancel</a>
++        {% endif %}
 +      </div>
 +    </form>
 +  </div>
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9089,15 +11247,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +11355,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -3467,7 +3521,7 @@ index 4b5a702..46671d3 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +11333,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +11441,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -3483,7 +3537,7 @@ index 4b5a702..46671d3 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +11350,13 @@ form.upload {
+@@ -9133,8 +11458,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -3499,7 +3553,7 @@ index 4b5a702..46671d3 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +11392,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +11500,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -3519,7 +3573,7 @@ index 4b5a702..46671d3 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +11461,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +11569,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -3543,7 +3597,7 @@ index 4b5a702..46671d3 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +11576,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +11684,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -3734,7 +3788,7 @@ index 4b5a702..46671d3 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +11792,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11900,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -3787,7 +3841,7 @@ index 4b5a702..46671d3 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +11847,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11955,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -3821,7 +3875,7 @@ index 4b5a702..46671d3 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +11883,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11991,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -3880,7 +3934,7 @@ index 4b5a702..46671d3 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +11932,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +12040,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -3891,7 +3945,7 @@ index 4b5a702..46671d3 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +11983,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +12091,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -3909,7 +3963,7 @@ index 4b5a702..46671d3 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +12000,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +12108,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -3954,7 +4008,7 @@ index 4b5a702..46671d3 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +12067,123 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +12175,143 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -4038,12 +4092,32 @@ index 4b5a702..46671d3 100644
 +        </p>
 +
 +        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
++          Areas of expertise
++        </div>
++        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
++          {{ adv.name }}'s own subject-matter background — e.g. "academic
++          surgical leadership; conflict resolution with senior faculty."
++          Shown to participants, and given to the assistant itself so it
++          actually draws on this rather than sounding interchangeable with
++          any other advisor.
++        </p>
++        <form method="POST" action="{{ url_for('admin_save_advisor_expertise', slug=adv.slug) }}">
++          <textarea name="expertise" rows="2"
++                    style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
++                           border-radius: 2px; font-family: inherit; font-size: 0.83rem;
++                           resize: vertical;">{{ adv.expertise }}</textarea>
++          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">Save expertise</button>
++        </form>
++
++        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1rem 0 0.4rem;">
 +          Client-facing bio
 +        </div>
 +        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
-+          Shown to participants as a short "about your advisor" style preview.
-+          Nothing here is written or shown automatically — review and edit
-+          before saving.
++          A short "about your advisor" style preview. Shown to participants
++          in the chat itself, and — like expertise above — given to the
++          assistant too, so its actual tone is accountable to what this
++          promises rather than only coincidentally matching it. Nothing here
++          is written or shown automatically — review and edit before saving.
 +        </p>
 +        <form method="POST" action="{{ url_for('admin_save_advisor_bio', slug=adv.slug) }}">
 +          <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3"
@@ -4084,14 +4158,14 @@ index 4b5a702..46671d3 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +12230,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +12358,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
 -      photo; add a profile below to give someone their own.
 +      photo; add a profile above to give someone their own.
      </p>
--    {% endif %}
+     {% endif %}
 -
 -    <div style="padding-top: 1.1rem; border-top: 1px dashed var(--line);">
 -      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
@@ -4108,7 +4182,6 @@ index 4b5a702..46671d3 100644
 -        <button type="submit" class="btn">Save advisor</button>
 -      </form>
 -    </div>
-+    {% endif %}
 +  </div>
    </div>
  
@@ -4116,7 +4189,7 @@ index 4b5a702..46671d3 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +12273,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +12401,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -4126,7 +4199,7 @@ index 4b5a702..46671d3 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +12438,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +12566,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -4141,7 +4214,7 @@ index 4b5a702..46671d3 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +12480,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +12608,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -4150,7 +4223,7 @@ index 4b5a702..46671d3 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +12509,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +12637,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -4168,7 +4241,7 @@ index 4b5a702..46671d3 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +12571,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +12699,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -4196,7 +4269,7 @@ index 4b5a702..46671d3 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +12779,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12907,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -4206,7 +4279,7 @@ index 4b5a702..46671d3 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +12800,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12928,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -4229,7 +4302,7 @@ index 4b5a702..46671d3 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +12933,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +13061,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -4240,7 +4313,7 @@ index 4b5a702..46671d3 100644
  
  </div>
  
-@@ -10478,6 +13164,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +13292,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -4256,7 +4329,7 @@ index 4b5a702..46671d3 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +13183,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +13311,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -4537,7 +4610,7 @@ index 4b5a702..46671d3 100644
  </body></html>"""
  
  
-@@ -10511,6 +13480,231 @@ def admin_logout():
+@@ -10511,6 +13608,247 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -4570,7 +4643,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal")
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_view():
 +    slug = session["advisor_owner_slug"]
 +    advisor = get_advisor(slug)
@@ -4589,7 +4662,7 @@ index 4b5a702..46671d3 100644
 +    feedback_360 = get_advisor_360_meta(slug)
 +    onboarding_steps = [
 +        ("Add a photo", advisor and (advisor["has_photo"] or advisor.get("no_photo"))),
-+        ("Complete your personality assessment", bool(personality)),
++        ("Complete your personality assessment (required)", bool(personality)),
 +        ("Upload your 360 feedback", bool(feedback_360)),
 +        ("Add at least one knowledge-base document", bool(mine)),
 +    ]
@@ -4604,7 +4677,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/upload", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_upload():
 +    slug = session["advisor_owner_slug"]
 +    if not (db.is_enabled() and emb.is_enabled()):
@@ -4647,7 +4720,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/upload-folder", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_upload_folder():
 +    slug = session["advisor_owner_slug"]
 +    if not (db.is_enabled() and emb.is_enabled()):
@@ -4664,7 +4737,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/upload-url", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_upload_url():
 +    slug = session["advisor_owner_slug"]
 +    if not (db.is_enabled() and emb.is_enabled()):
@@ -4693,6 +4766,22 @@ index 4b5a702..46671d3 100644
 +            flash("Please answer at least one question before submitting.")
 +            return redirect(url_for("advisor_portal_personality"))
 +        save_advisor_personality_scores(slug, scores)
++        # This is the "required, becomes the basis for coaching style" part:
++        # completing the assessment auto-populates the client-facing bio
++        # from these scores whenever that field is still blank — whether
++        # this is a genuine first completion, or a retake before anyone
++        # got around to setting one. It never overwrites a bio that's
++        # already been set, whether hand-written or previously suggested —
++        # silently replacing something an admin (or the advisor) already
++        # reviewed and kept would be a surprise, not a convenience.
++        if not (advisor.get("client_bio") or "").strip():
++            suggested = advisor_style_bio(advisor["name"], scores)
++            if suggested:
++                set_advisor_bio(slug, suggested)
++                flash("✓ Thanks — your personality assessment is saved, and a "
++                      "starting coaching-style bio has been drafted from it. "
++                      "An admin can review and adjust it any time.")
++                return redirect(url_for("advisor_portal_view"))
 +        flash("✓ Thanks — your personality assessment is saved.")
 +        return redirect(url_for("advisor_portal_view"))
 +    existing = get_advisor_personality(slug)
@@ -4703,7 +4792,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/360/upload", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_upload_360():
 +    slug = session["advisor_owner_slug"]
 +    file = request.files.get("file")
@@ -4727,7 +4816,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/360/delete", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_delete_360():
 +    slug = session["advisor_owner_slug"]
 +    delete_advisor_360_feedback(slug)
@@ -4736,7 +4825,7 @@ index 4b5a702..46671d3 100644
 +
 +
 +@app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
-+@advisor_portal_required
++@advisor_portal_onboarded_required
 +def advisor_portal_delete(doc_id):
 +    slug = session["advisor_owner_slug"]
 +    docs = {d["id"]: d for d in (db.list_documents() if db.is_enabled() else [])}
@@ -4769,7 +4858,7 @@ index 4b5a702..46671d3 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +13717,25 @@ def admin_dashboard():
+@@ -10523,11 +13861,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -4795,7 +4884,7 @@ index 4b5a702..46671d3 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +13743,13 @@ def admin_dashboard():
+@@ -10535,7 +13887,13 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -4810,7 +4899,7 @@ index 4b5a702..46671d3 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +13759,23 @@ def admin_dashboard():
+@@ -10545,9 +13903,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -4834,7 +4923,7 @@ index 4b5a702..46671d3 100644
      )
  
  
-@@ -10631,15 +13859,34 @@ def admin_save_advisor():
+@@ -10631,16 +14003,43 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -4854,6 +4943,7 @@ index 4b5a702..46671d3 100644
 -        no_photo = False
  
 -    if save_advisor(slug, name, photo, mime, no_photo=no_photo):
+-        flash(f"✓ {name} saved — links are listed below.")
 +    scheduling_url = (request.form.get("scheduling_url") or "").strip()
 +    if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
 +        flash("The scheduling link needs to start with http:// or https://.")
@@ -4865,16 +4955,25 @@ index 4b5a702..46671d3 100644
 +        raw = request.form.get(field, "")
 +        return {"1": True, "0": False}.get(raw)
 +
++    is_new = get_advisor(slug) is None
 +    if save_advisor(slug, name, photo, mime, no_photo=no_photo,
 +                     scheduling_url=scheduling_url,
 +                     show_scheduling_override=_tristate("show_scheduling_override"),
 +                     show_avatar_override=_tristate("show_avatar_override"),
 +                     allow_materials_override=_tristate("allow_materials_override"),
 +                     personality_override=_tristate("personality_override")):
-         flash(f"✓ {name} saved — links are listed below.")
++        if is_new:
++            flash(f"✓ {name} added. Once their portal link is generated below "
++                  f"and shared with them, their first visit will require "
++                  f"completing a personality assessment before the rest of "
++                  f"the portal opens up — it becomes the basis for their "
++                  f"coaching-style bio.")
++        else:
++            flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10657,6 +13904,61 @@ def admin_delete_advisor(slug):
+     return redirect(url_for("admin_dashboard"))
+@@ -10657,6 +14056,78 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -4933,10 +5032,27 @@ index 4b5a702..46671d3 100644
 +    return redirect(url_for("admin_dashboard") + "#advisors")
 +
 +
++@app.route("/admin/advisors/expertise/<slug>", methods=["POST"])
++@admin_required
++def admin_save_advisor_expertise(slug):
++    """Save this advisor's own subject-matter expertise — fed to the model
++    itself (see advisor_voice_guard), not just displayed, so it actually
++    shapes what the AI draws on rather than only what participants read."""
++    advisor = get_advisor(slug)
++    if not advisor:
++        flash("That advisor no longer exists.")
++        return redirect(url_for("admin_dashboard") + "#advisors")
++    expertise = (request.form.get("expertise") or "").strip()
++    set_advisor_expertise(slug, expertise)
++    flash(f"✓ Saved {advisor['name']}'s areas of expertise." if expertise
++          else f"✓ Cleared {advisor['name']}'s areas of expertise.")
++    return redirect(url_for("admin_dashboard") + "#advisors")
++
++
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +13974,14 @@ def admin_settings():
+@@ -10672,21 +14143,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -4960,7 +5076,7 @@ index 4b5a702..46671d3 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +14076,34 @@ def admin_upload_folder():
+@@ -10781,22 +14245,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -5001,7 +5117,7 @@ index 4b5a702..46671d3 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +14116,6 @@ def admin_upload_folder():
+@@ -10809,7 +14285,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -5009,7 +5125,7 @@ index 4b5a702..46671d3 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +14144,10 @@ def admin_upload_folder():
+@@ -10838,7 +14313,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -5021,7 +5137,7 @@ index 4b5a702..46671d3 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +14155,12 @@ def admin_upload_folder():
+@@ -10846,14 +14324,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -5036,7 +5152,7 @@ index 4b5a702..46671d3 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +14168,11 @@ def admin_upload_folder():
+@@ -10861,8 +14337,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -5050,7 +5166,7 @@ index 4b5a702..46671d3 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +14353,34 @@ def admin_upload_url():
+@@ -11043,25 +14522,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -5092,7 +5208,7 @@ index 4b5a702..46671d3 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +14401,10 @@ def admin_upload_url():
+@@ -11082,7 +14570,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -5104,7 +5220,7 @@ index 4b5a702..46671d3 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +14412,7 @@ def admin_upload_url():
+@@ -11090,8 +14581,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -5114,7 +5230,7 @@ index 4b5a702..46671d3 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +14422,14 @@ def admin_upload_url():
+@@ -11101,14 +14591,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -5132,7 +5248,7 @@ index 4b5a702..46671d3 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +14442,32 @@ def admin_upload_url():
+@@ -11121,32 +14611,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -5181,7 +5297,7 @@ index 4b5a702..46671d3 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +14481,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +14650,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

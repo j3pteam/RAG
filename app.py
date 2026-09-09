@@ -1512,6 +1512,26 @@ def advisor_portal_required(f):
     return wrapper
 
 
+def advisor_portal_onboarded_required(f):
+    """Same login check as advisor_portal_required, plus: the advisor must
+    have completed their personality assessment before reaching anything
+    else in the portal. Applied to every portal route except the
+    assessment page itself and logout — so there's no redirect loop, and
+    no way to reach uploads, deletes, or the document list without
+    completing it first. New and existing advisors alike are held to
+    this the first time they land on a gated route; retaking later, once
+    already completed, is optional."""
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        slug = session.get("advisor_owner_slug")
+        if not slug or not get_advisor(slug):
+            return redirect(url_for("advisor_portal_login_info"))
+        if not get_advisor_personality(slug):
+            return redirect(url_for("advisor_portal_personality"))
+        return f(*args, **kwargs)
+    return wrapper
+
+
 # ---------------------------------------------------------------------------
 # Main chat HTML
 # ---------------------------------------------------------------------------
@@ -2909,9 +2929,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
   <div id="chat-wrap">
     <div id="chat">
       <div class="msg assistant">{{ cfg.opening }}</div>
-      {% if cfg.client_bio %}
+      {% if cfg.client_bio or cfg.expertise %}
       <div class="advisor-bio-note">
-        <strong>About {{ cfg.persona_name }}:</strong> {{ cfg.client_bio }}
+        <strong>About {{ cfg.persona_name }}:</strong>
+        {% if cfg.expertise %}{{ cfg.expertise }}{% endif %}
+        {% if cfg.client_bio %}{{ cfg.client_bio }}{% endif %}
       </div>
       {% endif %}
     </div>
@@ -6740,6 +6762,15 @@ def _advisors_ensure_table(conn):
                         "client_bio TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Added later: this advisor's own subject-matter expertise — distinct
+        # from client_bio (which is about coaching STYLE). Both are fed to
+        # the model itself, not just displayed, so the AI's actual behavior
+        # is accountable to what's promised about this advisor.
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "expertise TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
 
 
@@ -6779,13 +6810,14 @@ def list_advisors():
                 SELECT slug, name, (photo IS NOT NULL), COALESCE(no_photo, FALSE),
                        COALESCE(scheduling_url, ''), show_scheduling_override,
                        show_avatar_override, allow_materials_override,
-                       personality_override, portal_token, COALESCE(client_bio, '')
+                       personality_override, portal_token, COALESCE(client_bio, ''),
+                       COALESCE(expertise, '')
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
                  show_scheduling_override, show_avatar_override,
                  allow_materials_override, personality_override,
-                 portal_token, client_bio) in cur.fetchall():
+                 portal_token, client_bio, expertise) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -6795,7 +6827,8 @@ def list_advisors():
                             "allow_materials_override": allow_materials_override,
                             "personality_override": personality_override,
                             "portal_token": portal_token or "",
-                            "client_bio": client_bio or ""})
+                            "client_bio": client_bio or "",
+                            "expertise": expertise or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -6816,7 +6849,8 @@ def get_advisor(slug: str):
                                   COALESCE(scheduling_url, ''),
                                   show_scheduling_override, show_avatar_override,
                                   allow_materials_override, personality_override,
-                                  portal_token, COALESCE(client_bio, '')
+                                  portal_token, COALESCE(client_bio, ''),
+                                  COALESCE(expertise, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
@@ -6826,7 +6860,8 @@ def get_advisor(slug: str):
                 "allow_materials_override": row[6],
                 "personality_override": row[7],
                 "portal_token": row[8] or "",
-                "client_bio": row[9] or ""} if row else None
+                "client_bio": row[9] or "",
+                "expertise": row[10] or ""} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -6892,6 +6927,24 @@ def set_advisor_bio(slug: str, bio: str) -> bool:
         return True
     except Exception as e:
         app.logger.error(f"[advisors] bio write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_advisor_expertise(slug: str, expertise: str) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET expertise = %s WHERE slug = %s",
+                        ((expertise or "")[:2000], slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] expertise write failed: {e}")
         return False
     finally:
         conn.close()
@@ -7635,6 +7688,51 @@ def personality_style_block() -> str:
         "as a soft steer on tone only — never mention it, never call it a "
         "personality type or a score):\n- " + "\n- ".join(notes) + "\n"
     )
+
+
+def advisor_voice_guard(active) -> str:
+    """Layers a named advisor's own expertise and coaching style on top of
+    the core J3P voice — additive, never a replacement. VOICE & DIFFERENTIATION
+    RULES and STRICT SCOPE RULES above still govern every reply; this only
+    shapes tone and emphasis within them.
+
+    Both fields fed in here (expertise, client_bio) are also shown directly
+    to the participant in the chat UI. Feeding them to the model too, not
+    just displaying them, is the point: without this, what's promised about
+    an advisor's style and background and what the AI actually does could
+    silently drift apart — matching only by coincidence.
+    """
+    if not active:
+        return ""
+    expertise = (active.get("expertise") or "").strip()
+    bio = (active.get("client_bio") or "").strip()
+    if not expertise and not bio:
+        return ""
+    parts = [
+        f"\n\n---\nTHIS SESSION'S ADVISOR — {active['name']}:\n\n"
+        "Everything above still governs this reply — scope, safety, contact "
+        "rules and the core J3P voice are unchanged. What follows shapes "
+        "tone and emphasis within those rules; it never loosens them.\n"
+    ]
+    if expertise:
+        parts.append(
+            f"\nAREAS OF EXPERTISE: {expertise}\n"
+            "Draw on this background where it's genuinely relevant — it's "
+            "what should make this advisor's answer feel specific rather "
+            "than interchangeable with any other advisor's. This describes "
+            "the ADVISOR's own background, not the participant's — rule 15 "
+            "in the voice rules above still applies to them: never assume "
+            "the participant shares this specialty.\n"
+        )
+    if bio:
+        parts.append(
+            f"\nCOACHING STYLE: {bio}\n"
+            "This is a description already shown to the participant, in "
+            "the chat itself, of how this advisor comes across. Actually "
+            "embody it, don't just stay consistent with the base J3P voice "
+            "— be recognizably this.\n"
+        )
+    return "".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -8755,6 +8853,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
         page_cfg["persona_name"] = active["name"]
         page_cfg["client_bio"] = active.get("client_bio", "")
+        page_cfg["expertise"] = active.get("expertise", "")
         name_the_advisor(page_cfg, active["name"])
         if active.get("scheduling_url"):
             page_cfg["footer_cta_url"] = active["scheduling_url"]
@@ -9522,6 +9621,10 @@ def chat():
         f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
     )
 
+    # This session's named advisor, if any — resolved once and reused both
+    # for the voice/expertise layer below and for the API call's logging.
+    active_advisor = get_advisor(session.get("advisor_slug"))
+
     if context:
         composed_prompt = (
             base_prompt
@@ -9538,6 +9641,7 @@ def chat():
             + open_commitments_block()
             + participant_materials_block()
             + personality_style_block()
+            + advisor_voice_guard(active_advisor)
         )
     else:
         composed_prompt = (
@@ -9545,6 +9649,7 @@ def chat():
             + document_guard + contact_guard + profile_guidance()
             + open_commitments_block() + participant_materials_block()
             + personality_style_block()
+            + advisor_voice_guard(active_advisor)
         )
 
     try:
@@ -11086,13 +11191,14 @@ ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
     <span>Advisor Portal</span>
   </header>
   <div class="container">
-    <h1>Your personality assessment</h1>
+    <h1>{% if existing %}Your personality assessment{% else %}Complete your personality assessment{% endif %}</h1>
     <p class="subtitle">
       {% if existing %}You completed this before — answering again replaces your
-      previous result.{% else %}A short, ten-item self-report (the TIPI, a
-      published personality measure). It takes about two minutes.{% endif %}
-      This is used to help present your style to J3P — never scored as a
-      test, and there's no wrong answer.
+      previous result.{% else %}Required before the rest of your portal opens up
+      — a short, ten-item self-report (the TIPI, a published personality
+      measure). It takes about two minutes.{% endif %}
+      This becomes the basis for the coaching-style description shown to
+      participants — never scored as a test, and there's no wrong answer.
     </p>
 
     {% with messages = get_flashed_messages() %}
@@ -11118,7 +11224,9 @@ ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
       {% endfor %}
       <div class="actions">
         <button type="submit" class="btn">Submit</button>
+        {% if existing %}
         <a href="{{ url_for('advisor_portal_view') }}" class="btn-secondary">Cancel</a>
+        {% endif %}
       </div>
     </form>
   </div>
@@ -12142,12 +12250,32 @@ input[type="file"], input[type="text"] {
         </p>
 
         <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
+          Areas of expertise
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          {{ adv.name }}'s own subject-matter background — e.g. "academic
+          surgical leadership; conflict resolution with senior faculty."
+          Shown to participants, and given to the assistant itself so it
+          actually draws on this rather than sounding interchangeable with
+          any other advisor.
+        </p>
+        <form method="POST" action="{{ url_for('admin_save_advisor_expertise', slug=adv.slug) }}">
+          <textarea name="expertise" rows="2"
+                    style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
+                           border-radius: 2px; font-family: inherit; font-size: 0.83rem;
+                           resize: vertical;">{{ adv.expertise }}</textarea>
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">Save expertise</button>
+        </form>
+
+        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1rem 0 0.4rem;">
           Client-facing bio
         </div>
         <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
-          Shown to participants as a short "about your advisor" style preview.
-          Nothing here is written or shown automatically — review and edit
-          before saving.
+          A short "about your advisor" style preview. Shown to participants
+          in the chat itself, and — like expertise above — given to the
+          assistant too, so its actual tone is accountable to what this
+          promises rather than only coincidentally matching it. Nothing here
+          is written or shown automatically — review and edit before saving.
         </p>
         <form method="POST" action="{{ url_for('admin_save_advisor_bio', slug=adv.slug) }}">
           <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3"
@@ -13509,7 +13637,7 @@ def advisor_portal_login_info():
 
 
 @app.route("/advisor-portal")
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_view():
     slug = session["advisor_owner_slug"]
     advisor = get_advisor(slug)
@@ -13528,7 +13656,7 @@ def advisor_portal_view():
     feedback_360 = get_advisor_360_meta(slug)
     onboarding_steps = [
         ("Add a photo", advisor and (advisor["has_photo"] or advisor.get("no_photo"))),
-        ("Complete your personality assessment", bool(personality)),
+        ("Complete your personality assessment (required)", bool(personality)),
         ("Upload your 360 feedback", bool(feedback_360)),
         ("Add at least one knowledge-base document", bool(mine)),
     ]
@@ -13543,7 +13671,7 @@ def advisor_portal_view():
 
 
 @app.route("/advisor-portal/upload", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_upload():
     slug = session["advisor_owner_slug"]
     if not (db.is_enabled() and emb.is_enabled()):
@@ -13586,7 +13714,7 @@ def advisor_portal_upload():
 
 
 @app.route("/advisor-portal/upload-folder", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_upload_folder():
     slug = session["advisor_owner_slug"]
     if not (db.is_enabled() and emb.is_enabled()):
@@ -13603,7 +13731,7 @@ def advisor_portal_upload_folder():
 
 
 @app.route("/advisor-portal/upload-url", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_upload_url():
     slug = session["advisor_owner_slug"]
     if not (db.is_enabled() and emb.is_enabled()):
@@ -13632,6 +13760,22 @@ def advisor_portal_personality():
             flash("Please answer at least one question before submitting.")
             return redirect(url_for("advisor_portal_personality"))
         save_advisor_personality_scores(slug, scores)
+        # This is the "required, becomes the basis for coaching style" part:
+        # completing the assessment auto-populates the client-facing bio
+        # from these scores whenever that field is still blank — whether
+        # this is a genuine first completion, or a retake before anyone
+        # got around to setting one. It never overwrites a bio that's
+        # already been set, whether hand-written or previously suggested —
+        # silently replacing something an admin (or the advisor) already
+        # reviewed and kept would be a surprise, not a convenience.
+        if not (advisor.get("client_bio") or "").strip():
+            suggested = advisor_style_bio(advisor["name"], scores)
+            if suggested:
+                set_advisor_bio(slug, suggested)
+                flash("✓ Thanks — your personality assessment is saved, and a "
+                      "starting coaching-style bio has been drafted from it. "
+                      "An admin can review and adjust it any time.")
+                return redirect(url_for("advisor_portal_view"))
         flash("✓ Thanks — your personality assessment is saved.")
         return redirect(url_for("advisor_portal_view"))
     existing = get_advisor_personality(slug)
@@ -13642,7 +13786,7 @@ def advisor_portal_personality():
 
 
 @app.route("/advisor-portal/360/upload", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_upload_360():
     slug = session["advisor_owner_slug"]
     file = request.files.get("file")
@@ -13666,7 +13810,7 @@ def advisor_portal_upload_360():
 
 
 @app.route("/advisor-portal/360/delete", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_delete_360():
     slug = session["advisor_owner_slug"]
     delete_advisor_360_feedback(slug)
@@ -13675,7 +13819,7 @@ def advisor_portal_delete_360():
 
 
 @app.route("/advisor-portal/delete/<int:doc_id>", methods=["POST"])
-@advisor_portal_required
+@advisor_portal_onboarded_required
 def advisor_portal_delete(doc_id):
     slug = session["advisor_owner_slug"]
     docs = {d["id"]: d for d in (db.list_documents() if db.is_enabled() else [])}
@@ -13881,13 +14025,21 @@ def admin_save_advisor():
         raw = request.form.get(field, "")
         return {"1": True, "0": False}.get(raw)
 
+    is_new = get_advisor(slug) is None
     if save_advisor(slug, name, photo, mime, no_photo=no_photo,
                      scheduling_url=scheduling_url,
                      show_scheduling_override=_tristate("show_scheduling_override"),
                      show_avatar_override=_tristate("show_avatar_override"),
                      allow_materials_override=_tristate("allow_materials_override"),
                      personality_override=_tristate("personality_override")):
-        flash(f"✓ {name} saved — links are listed below.")
+        if is_new:
+            flash(f"✓ {name} added. Once their portal link is generated below "
+                  f"and shared with them, their first visit will require "
+                  f"completing a personality assessment before the rest of "
+                  f"the portal opens up — it becomes the basis for their "
+                  f"coaching-style bio.")
+        else:
+            flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")
     return redirect(url_for("admin_dashboard"))
@@ -13956,6 +14108,23 @@ def admin_save_advisor_bio(slug):
     set_advisor_bio(slug, bio)
     flash(f"✓ Saved {advisor['name']}'s client-facing bio." if bio
           else f"✓ Cleared {advisor['name']}'s client-facing bio.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/expertise/<slug>", methods=["POST"])
+@admin_required
+def admin_save_advisor_expertise(slug):
+    """Save this advisor's own subject-matter expertise — fed to the model
+    itself (see advisor_voice_guard), not just displayed, so it actually
+    shapes what the AI draws on rather than only what participants read."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    expertise = (request.form.get("expertise") or "").strip()
+    set_advisor_expertise(slug, expertise)
+    flash(f"✓ Saved {advisor['name']}'s areas of expertise." if expertise
+          else f"✓ Cleared {advisor['name']}'s areas of expertise.")
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
