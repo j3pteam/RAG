@@ -2678,7 +2678,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
       #chat { padding: 1.5rem 1rem 0.75rem; }
       form { padding: 0.75rem 1rem; gap: 0.4rem; }
-      input[type="text"] { padding: 0.75rem 7.2rem 0.75rem 0.9rem; font-size: 16px; }
+      input[type="text"] { padding: 0.75rem 9.6rem 0.75rem 0.9rem; font-size: 16px; }
       button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
       .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
       .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
