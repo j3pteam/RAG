@@ -2122,7 +2122,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
 
     /* Share menu popover */
-    .share-wrap, .download-wrap {
+    .share-wrap, .download-wrap, .cite-wrap {
       position: relative; display: inline-flex;
       align-items: center; line-height: 0;
     }
@@ -3225,6 +3225,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const resetBtn = document.getElementById("reset-btn");
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
+    const PERSONA_NAME = {{ cfg.persona_name|tojson }};
 
     // -------------------------------------------------------------
     // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
@@ -4859,7 +4860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       });
     }
 
-    function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
+    function addMessage(text, role, withFeedback = false, interactionId = null, documents = null, userPrompt = null) {
       const div = document.createElement("div");
       div.className = "msg " + role;
       if (interactionId) div.dataset.interactionId = String(interactionId);
@@ -4873,7 +4874,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         textNode.textContent = text;
       }
       div.appendChild(textNode);
-      if (withFeedback) attachFeedback(div, text, interactionId, documents);
+      if (withFeedback) attachFeedback(div, text, interactionId, documents, userPrompt);
       // Advisor replies are preceded by the avatar, when one is configured.
       // If the image fails to load it removes itself, so a missing file just
       // leaves the reply looking as it did before.
@@ -4894,7 +4895,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return div;
     }
 
-    function attachFeedback(msgDiv, replyText, interactionId, documents) {
+    function attachFeedback(msgDiv, replyText, interactionId, documents, userPrompt) {
       const wrap = document.createElement("div");
       wrap.className = "feedback";
       wrap.innerHTML = `
@@ -4923,6 +4924,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
           </svg>
           <span class="copy-label">Copy</span>
         </button>
+        <span class="cite-wrap">
+          <button class="action-btn cite-btn" aria-label="Cite this answer" title="Copy an APA or MLA citation">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.76-2-2-2H4c-1.25 0-2 .75-2 2v6c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 0-1 1v1c0 .5.5 1 1 1z"/>
+              <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.76-2-2-2h-4c-1.25 0-2 .75-2 2v6c0 1.25.75 2 2 2h1c0 2-.25 4-3 4v3c0 .5.5 1 1 1z"/>
+            </svg>
+            <span class="cite-label">Cite</span>
+          </button>
+          <div class="share-menu cite-menu" role="menu">
+            <button type="button" data-style="apa" role="menuitem">APA citation</button>
+            <button type="button" data-style="mla" role="menuitem">MLA citation</button>
+          </div>
+        </span>
         <span class="download-wrap">
           <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -5181,15 +5195,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       });
 
+      // === CITE button — copies an APA or MLA citation for this exchange ===
+      const citeBtn = wrap.querySelector(".cite-btn");
+      const citeMenu = wrap.querySelector(".cite-menu");
+      const citeLabel = citeBtn.querySelector(".cite-label");
+
+      function formatCiteDate(d, style) {
+        const months = ["Jan.","Feb.","Mar.","Apr.","May","June",
+                         "July","Aug.","Sept.","Oct.","Nov.","Dec."];
+        return style === "mla"
+          ? `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
+          : String(d.getFullYear());
+      }
+
+      function buildCitation(style) {
+        const now = new Date();
+        const url = window.location.origin + window.location.pathname;
+        const org = "J3P Health";
+        const tool = PERSONA_NAME || "J3P Advisor";
+        if (style === "apa") {
+          // OpenAI-style APA 7 format for a large language model tool:
+          // Publisher. (Year). Tool [Large language model]. URL
+          return `${org}. (${formatCiteDate(now, "apa")}). ${tool} [Large language model]. ${url}`;
+        }
+        // MLA 9 format for AI tools: "Prompt." Tool, Publisher, Date, URL.
+        const prompt = (userPrompt || "").trim().replace(/\s+/g, " ");
+        const truncated = prompt.length > 200 ? prompt.slice(0, 197) + "\u2026" : prompt;
+        const quoted = truncated ? `\u201c${truncated}.\u201d ` : "";
+        return `${quoted}${tool}, ${org}, ${formatCiteDate(now, "mla")}, ${url}.`;
+      }
+
+      citeBtn.addEventListener("click", () => {
+        // Close the other popovers if open, then toggle this one
+        const sm = wrap.querySelector(".share-wrap > .share-menu");
+        const dm = wrap.querySelector(".download-menu");
+        if (sm) sm.classList.remove("open");
+        if (dm) dm.classList.remove("open");
+        citeMenu.classList.toggle("open");
+        if (citeMenu.classList.contains("open")) positionMenu(citeMenu);
+      });
+
+      citeMenu.querySelectorAll("[data-style]").forEach(item => {
+        item.addEventListener("click", async () => {
+          const citation = buildCitation(item.dataset.style);
+          citeMenu.classList.remove("open");
+          try {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              await navigator.clipboard.writeText(citation);
+            } else {
+              const ta = document.createElement("textarea");
+              ta.value = citation; ta.style.position = "fixed"; ta.style.opacity = "0";
+              document.body.appendChild(ta); ta.select();
+              document.execCommand("copy"); document.body.removeChild(ta);
+            }
+            citeBtn.classList.add("copied");
+            citeLabel.textContent = "Copied";
+          } catch (err) {
+            console.error("Citation copy failed:", err);
+            citeLabel.textContent = "Failed";
+          } finally {
+            setTimeout(() => {
+              citeBtn.classList.remove("copied");
+              citeLabel.textContent = "Cite";
+            }, 1600);
+          }
+        });
+      });
+
       // === SAVE / DOWNLOAD button ===
       const downloadBtn = wrap.querySelector(".download-btn");
       const downloadMenu = wrap.querySelector(".download-menu");
       const downloadLabel = downloadBtn.querySelector(".download-label");
 
       downloadBtn.addEventListener("click", () => {
-        // Close the share menu if it's open, then toggle this one
+        // Close the other popovers if open, then toggle this one
         const sm = wrap.querySelector(".share-wrap > .share-menu");
         if (sm) sm.classList.remove("open");
+        citeMenu.classList.remove("open");
         downloadMenu.classList.toggle("open");
         if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
       });
@@ -5315,6 +5397,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
             Copy link
           </button>
         `;
+        downloadMenu.classList.remove("open");
+        citeMenu.classList.remove("open");
         shareMenu.classList.add("open");
         positionMenu(shareMenu);
 
@@ -5776,7 +5860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         setAvatarThinking(false);
         if (data.reply) {
           const msgDiv = addMessage(data.reply, "assistant", true,
-                                    data.interaction_id || null, data.documents || null);
+                                    data.interaction_id || null, data.documents || null, text);
           // Nothing downloads on its own. When the reply looks like a
           // deliverable, offer a download and let the user decide.
           setAvatarResponding(msgDiv);

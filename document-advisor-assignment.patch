@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..1d9b7f6 100644
+index 4b5a702..3da0f35 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -369,6 +369,15 @@ index 4b5a702..1d9b7f6 100644
  
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
+@@ -1857,7 +2122,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+     }
+ 
+     /* Share menu popover */
+-    .share-wrap, .download-wrap {
++    .share-wrap, .download-wrap, .cite-wrap {
+       position: relative; display: inline-flex;
+       align-items: center; line-height: 0;
+     }
 @@ -1889,7 +2154,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      /* Persistent avatar presence — always on screen, always animating */
@@ -770,7 +779,15 @@ index 4b5a702..1d9b7f6 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -3872,7 +4325,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2772,6 +3225,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+     const resetBtn = document.getElementById("reset-btn");
+     const chatWrap = document.getElementById("chat-wrap");
+     const OPENING = {{ cfg.opening|tojson }};
++    const PERSONA_NAME = {{ cfg.persona_name|tojson }};
+ 
+     // -------------------------------------------------------------
+     // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
+@@ -3872,7 +4326,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -779,7 +796,148 @@ index 4b5a702..1d9b7f6 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -5028,6 +5481,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4406,7 +4860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       });
+     }
+ 
+-    function addMessage(text, role, withFeedback = false, interactionId = null, documents = null) {
++    function addMessage(text, role, withFeedback = false, interactionId = null, documents = null, userPrompt = null) {
+       const div = document.createElement("div");
+       div.className = "msg " + role;
+       if (interactionId) div.dataset.interactionId = String(interactionId);
+@@ -4420,7 +4874,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         textNode.textContent = text;
+       }
+       div.appendChild(textNode);
+-      if (withFeedback) attachFeedback(div, text, interactionId, documents);
++      if (withFeedback) attachFeedback(div, text, interactionId, documents, userPrompt);
+       // Advisor replies are preceded by the avatar, when one is configured.
+       // If the image fails to load it removes itself, so a missing file just
+       // leaves the reply looking as it did before.
+@@ -4441,7 +4895,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       return div;
+     }
+ 
+-    function attachFeedback(msgDiv, replyText, interactionId, documents) {
++    function attachFeedback(msgDiv, replyText, interactionId, documents, userPrompt) {
+       const wrap = document.createElement("div");
+       wrap.className = "feedback";
+       wrap.innerHTML = `
+@@ -4470,6 +4924,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
+           </svg>
+           <span class="copy-label">Copy</span>
+         </button>
++        <span class="cite-wrap">
++          <button class="action-btn cite-btn" aria-label="Cite this answer" title="Copy an APA or MLA citation">
++            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
++              <path d="M3 21c3 0 7-1 7-8V5c0-1.25-.76-2-2-2H4c-1.25 0-2 .75-2 2v6c0 1.25.75 2 2 2 1 0 1 0 1 1v1c0 1-1 2-2 2s-1 0-1 1v1c0 .5.5 1 1 1z"/>
++              <path d="M15 21c3 0 7-1 7-8V5c0-1.25-.76-2-2-2h-4c-1.25 0-2 .75-2 2v6c0 1.25.75 2 2 2h1c0 2-.25 4-3 4v3c0 .5.5 1 1 1z"/>
++            </svg>
++            <span class="cite-label">Cite</span>
++          </button>
++          <div class="share-menu cite-menu" role="menu">
++            <button type="button" data-style="apa" role="menuitem">APA citation</button>
++            <button type="button" data-style="mla" role="menuitem">MLA citation</button>
++          </div>
++        </span>
+         <span class="download-wrap">
+           <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
+             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+@@ -4728,15 +5195,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         }
+       });
+ 
++      // === CITE button — copies an APA or MLA citation for this exchange ===
++      const citeBtn = wrap.querySelector(".cite-btn");
++      const citeMenu = wrap.querySelector(".cite-menu");
++      const citeLabel = citeBtn.querySelector(".cite-label");
++
++      function formatCiteDate(d, style) {
++        const months = ["Jan.","Feb.","Mar.","Apr.","May","June",
++                         "July","Aug.","Sept.","Oct.","Nov.","Dec."];
++        return style === "mla"
++          ? `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
++          : String(d.getFullYear());
++      }
++
++      function buildCitation(style) {
++        const now = new Date();
++        const url = window.location.origin + window.location.pathname;
++        const org = "J3P Health";
++        const tool = PERSONA_NAME || "J3P Advisor";
++        if (style === "apa") {
++          // OpenAI-style APA 7 format for a large language model tool:
++          // Publisher. (Year). Tool [Large language model]. URL
++          return `${org}. (${formatCiteDate(now, "apa")}). ${tool} [Large language model]. ${url}`;
++        }
++        // MLA 9 format for AI tools: "Prompt." Tool, Publisher, Date, URL.
++        const prompt = (userPrompt || "").trim().replace(/\s+/g, " ");
++        const truncated = prompt.length > 200 ? prompt.slice(0, 197) + "\u2026" : prompt;
++        const quoted = truncated ? `\u201c${truncated}.\u201d ` : "";
++        return `${quoted}${tool}, ${org}, ${formatCiteDate(now, "mla")}, ${url}.`;
++      }
++
++      citeBtn.addEventListener("click", () => {
++        // Close the other popovers if open, then toggle this one
++        const sm = wrap.querySelector(".share-wrap > .share-menu");
++        const dm = wrap.querySelector(".download-menu");
++        if (sm) sm.classList.remove("open");
++        if (dm) dm.classList.remove("open");
++        citeMenu.classList.toggle("open");
++        if (citeMenu.classList.contains("open")) positionMenu(citeMenu);
++      });
++
++      citeMenu.querySelectorAll("[data-style]").forEach(item => {
++        item.addEventListener("click", async () => {
++          const citation = buildCitation(item.dataset.style);
++          citeMenu.classList.remove("open");
++          try {
++            if (navigator.clipboard && navigator.clipboard.writeText) {
++              await navigator.clipboard.writeText(citation);
++            } else {
++              const ta = document.createElement("textarea");
++              ta.value = citation; ta.style.position = "fixed"; ta.style.opacity = "0";
++              document.body.appendChild(ta); ta.select();
++              document.execCommand("copy"); document.body.removeChild(ta);
++            }
++            citeBtn.classList.add("copied");
++            citeLabel.textContent = "Copied";
++          } catch (err) {
++            console.error("Citation copy failed:", err);
++            citeLabel.textContent = "Failed";
++          } finally {
++            setTimeout(() => {
++              citeBtn.classList.remove("copied");
++              citeLabel.textContent = "Cite";
++            }, 1600);
++          }
++        });
++      });
++
+       // === SAVE / DOWNLOAD button ===
+       const downloadBtn = wrap.querySelector(".download-btn");
+       const downloadMenu = wrap.querySelector(".download-menu");
+       const downloadLabel = downloadBtn.querySelector(".download-label");
+ 
+       downloadBtn.addEventListener("click", () => {
+-        // Close the share menu if it's open, then toggle this one
++        // Close the other popovers if open, then toggle this one
+         const sm = wrap.querySelector(".share-wrap > .share-menu");
+         if (sm) sm.classList.remove("open");
++        citeMenu.classList.remove("open");
+         downloadMenu.classList.toggle("open");
+         if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
+       });
+@@ -4862,6 +5397,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+             Copy link
+           </button>
+         `;
++        downloadMenu.classList.remove("open");
++        citeMenu.classList.remove("open");
+         shareMenu.classList.add("open");
+         positionMenu(shareMenu);
+ 
+@@ -5028,6 +5565,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -952,7 +1110,16 @@ index 4b5a702..1d9b7f6 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5823,7 +6442,7 @@ def _did_request(text: str):
+@@ -5157,7 +5860,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         setAvatarThinking(false);
+         if (data.reply) {
+           const msgDiv = addMessage(data.reply, "assistant", true,
+-                                    data.interaction_id || null, data.documents || null);
++                                    data.interaction_id || null, data.documents || null, text);
+           // Nothing downloads on its own. When the reply looks like a
+           // deliverable, offer a download and let the user decide.
+           setAvatarResponding(msgDiv);
+@@ -5823,7 +6526,7 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -961,7 +1128,7 @@ index 4b5a702..1d9b7f6 100644
  _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
                   "image/webp": "webp", "image/gif": "gif"}
  
-@@ -5930,13 +6549,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6633,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -1003,7 +1170,7 @@ index 4b5a702..1d9b7f6 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6590,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6674,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -1012,7 +1179,7 @@ index 4b5a702..1d9b7f6 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5979,6 +6621,41 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6705,41 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -1054,7 +1221,7 @@ index 4b5a702..1d9b7f6 100644
      conn.commit()
  
  
-@@ -5993,8 +6670,14 @@ def advisors_with_detail():
+@@ -5993,8 +6754,14 @@ def advisors_with_detail():
      for adv in list_advisors():
          adv = dict(adv)
          adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
@@ -1071,7 +1238,7 @@ index 4b5a702..1d9b7f6 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6692,26 @@ def list_advisors():
+@@ -6009,13 +6776,26 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -1101,7 +1268,7 @@ index 4b5a702..1d9b7f6 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6728,21 @@ def get_advisor(slug: str):
+@@ -6032,11 +6812,21 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -1126,7 +1293,7 @@ index 4b5a702..1d9b7f6 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,89 +6750,188 @@ def get_advisor(slug: str):
+@@ -6044,42 +6834,127 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -1181,60 +1348,35 @@ index 4b5a702..1d9b7f6 100644
 -                    SET name = EXCLUDED.name, photo = EXCLUDED.photo,
 -                        photo_mime = EXCLUDED.photo_mime
 -                """, (slug, name, photo, mime))
--            else:
--                cur.execute("""
--                    INSERT INTO advisors (slug, name) VALUES (%s, %s)
--                    ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
--                """, (slug, name))
--            if no_photo is not None:
--                cur.execute("UPDATE advisors SET no_photo = %s WHERE slug = %s",
--                            (bool(no_photo), slug))
--                if no_photo:
--                    # Clear the stored image so the monogram is what's served
--                    cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
--                                "WHERE slug = %s", (slug,))
 +            cur.execute("UPDATE advisors SET portal_token = %s WHERE slug = %s",
 +                        (token, slug))
-         conn.commit()
-         return True
-     except Exception as e:
--        app.logger.error(f"[advisors] save failed: {e}")
++        conn.commit()
++        return True
++    except Exception as e:
 +        app.logger.error(f"[advisors] portal token write failed: {e}")
-         return False
-     finally:
-         conn.close()
- 
- 
--def delete_advisor(slug: str) -> bool:
++        return False
++    finally:
++        conn.close()
++
++
 +def set_advisor_bio(slug: str, bio: str) -> bool:
-     conn = _settings_db_conn()
-     if not conn:
-         return False
-     try:
-         _advisors_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("DELETE FROM advisors WHERE slug = %s", (slug,))
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisors_ensure_table(conn)
++        with conn.cursor() as cur:
 +            cur.execute("UPDATE advisors SET client_bio = %s WHERE slug = %s",
 +                        ((bio or "")[:2000], slug))
-         conn.commit()
-         return True
-     except Exception as e:
--        app.logger.error(f"[advisors] delete failed: {e}")
++        conn.commit()
++        return True
++    except Exception as e:
 +        app.logger.error(f"[advisors] bio write failed: {e}")
-         return False
-     finally:
-         conn.close()
- 
- 
--# ---------------------------------------------------------------------------
--# Participant materials
--# ---------------------------------------------------------------------------
--# Participants can add their own documents and writing — a CV, a strategic
--# plan, a blog post, notes they've drafted. These are PRIVATE to that
--# participant: they are used only in that person's own sessions and never
--# enter the shared knowledge base, because these transcripts contain
--# personnel and institutional detail that must not surface for anyone else.
--# Sharing with J3P is a separate, explicit opt-in.
++        return False
++    finally:
++        conn.close()
++
++
 +def active_persona_name() -> str:
 +    """The name to log against this interaction — the named advisor this
 +    session is with, if any, else the shared default persona name. Used so
@@ -1293,18 +1435,13 @@ index 4b5a702..1d9b7f6 100644
 +                    SET name = EXCLUDED.name, photo = EXCLUDED.photo,
 +                        photo_mime = EXCLUDED.photo_mime
 +                """, (slug, name, photo, mime))
-+            else:
-+                cur.execute("""
-+                    INSERT INTO advisors (slug, name) VALUES (%s, %s)
-+                    ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
-+                """, (slug, name))
-+            if no_photo is not None:
-+                cur.execute("UPDATE advisors SET no_photo = %s WHERE slug = %s",
-+                            (bool(no_photo), slug))
-+                if no_photo:
-+                    # Clear the stored image so the monogram is what's served
-+                    cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
-+                                "WHERE slug = %s", (slug,))
+             else:
+                 cur.execute("""
+                     INSERT INTO advisors (slug, name) VALUES (%s, %s)
+@@ -6092,6 +6967,20 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None) ->
+                     # Clear the stored image so the monogram is what's served
+                     cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL "
+                                 "WHERE slug = %s", (slug,))
 +            if scheduling_url is not None:
 +                cur.execute("UPDATE advisors SET scheduling_url = %s WHERE slug = %s",
 +                            (scheduling_url[:500], slug))
@@ -1319,45 +1456,10 @@ index 4b5a702..1d9b7f6 100644
 +                    continue
 +                cur.execute(f"UPDATE advisors SET {col} = %s WHERE slug = %s",
 +                            (val, slug))
-+        conn.commit()
-+        return True
-+    except Exception as e:
-+        app.logger.error(f"[advisors] save failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
-+def delete_advisor(slug: str) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
-+        _advisors_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("DELETE FROM advisors WHERE slug = %s", (slug,))
-+        conn.commit()
-+        return True
-+    except Exception as e:
-+        app.logger.error(f"[advisors] delete failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
-+
-+
-+# ---------------------------------------------------------------------------
-+# Participant materials
-+# ---------------------------------------------------------------------------
-+# Participants can add their own documents and writing — a CV, a strategic
-+# plan, a blog post, notes they've drafted. These are PRIVATE to that
-+# participant: they are used only in that person's own sessions and never
-+# enter the shared knowledge base, because these transcripts contain
-+# personnel and institutional detail that must not surface for anyone else.
-+# Sharing with J3P is a separate, explicit opt-in.
- 
- PARTICIPANT_DOC_MAX_BYTES = 20 * 1024 * 1024
- PARTICIPANT_DOC_MAX_CHARS = 60000      # per item, kept in the prompt budget
-@@ -6248,7 +7053,7 @@ def delete_participant_doc(doc_id: int) -> bool:
+         conn.commit()
+         return True
+     except Exception as e:
+@@ -6248,7 +7137,7 @@ def delete_participant_doc(doc_id: int) -> bool:
  
  def participant_materials_block(budget=24000) -> str:
      """The participant's own materials, for their prompt only."""
@@ -1366,7 +1468,7 @@ index 4b5a702..1d9b7f6 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,1036 +7102,1766 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,146 +7186,715 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -1659,8 +1761,6 @@ index 4b5a702..1d9b7f6 100644
          with conn.cursor() as cur:
 -            cur.execute("DELETE FROM participant_profile WHERE token = %s",
 -                        (participant_token(),))
--        conn.commit()
--        return True
 +            cur.execute("""
 +                SELECT openness, conscientiousness, extraversion,
 +                       agreeableness, stability, completed_at
@@ -1673,36 +1773,13 @@ index 4b5a702..1d9b7f6 100644
 +        if not scores:
 +            return {}
 +        return {"scores": scores, "completed_at": row[5]}
-     except Exception as e:
--        app.logger.error(f"[profile] forget failed: {e}")
--        return False
++    except Exception as e:
 +        app.logger.error(f"[advisor-personality] read failed: {e}")
 +        return {}
-     finally:
-         conn.close()
- 
- 
--# Leadership roles worth recognising, longest first so "associate program
--# director" wins over "program director".
--_ROLE_PATTERNS = [
--    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
--    (r"\b(vice chair|associate chair)\b", "vice chair"),
--    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
--    (r"\b(section chief|section head)\b", "section chief"),
--    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
--    (r"\b(associate program director)\b", "associate program director"),
--    (r"\b(program director)\b", "program director"),
--    (r"\b(fellowship director)\b", "fellowship director"),
--    (r"\b(residency director)\b", "residency director"),
--    (r"\b(medical director)\b", "medical director"),
--    (r"\b(chief medical officer|\bCMO\b)", "chief medical officer"),
--    (r"\b(chief of staff)\b", "chief of staff"),
--    (r"\b(vice president|\bVP\b)", "vice president"),
--    (r"\b(dean|associate dean|vice dean)\b", "dean"),
--    (r"\b(clinical director)\b", "clinical director"),
--    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
--    (r"\b(attending|faculty member|staff physician)\b", "attending"),
--]
++    finally:
++        conn.close()
++
++
 +def advisor_style_bio(name: str, scores: dict) -> str:
 +    """A warm, third-person, client-facing style blurb built from the
 +    advisor's own personality self-report — meant as a starting point an
@@ -1740,14 +1817,8 @@ index 4b5a702..1d9b7f6 100644
 +    first_name = (name or "Your advisor").split()[0]
 +    body = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + ", and " + phrases[-1]
 +    return f"{first_name} {body}."
- 
- 
--def detect_role(text: str):
--    low = (text or "").lower()
--    for pattern, label in _ROLE_PATTERNS:
--        if re.search(pattern, low, re.IGNORECASE):
--            return label
--    return None
++
++
 +def _advisor_360_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -1766,153 +1837,19 @@ index 4b5a702..1d9b7f6 100644
 +            ON advisor_360_feedback (advisor_slug)
 +        """)
 +    conn.commit()
- 
- 
--def detect_first_name(text: str):
--    """Only from an explicit self-introduction — never inferred."""
--    if not text:
--        return None
--    patterns = [
--        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
--        r"\bi'?m ([A-Z][a-z]{1,18})\b",
--        r"\bthis is ([A-Z][a-z]{1,18})\b",
--        r"\bcall me ([A-Z][a-z]{1,18})\b",
--        r"^([A-Z][a-z]{1,18}) here\b",
--    ]
--    # Words that follow "I'm" but aren't names
--    stop = {"a", "an", "the", "not", "in", "on", "at", "trying", "looking",
--            "working", "going", "just", "still", "also", "happy", "glad",
--            "sorry", "new", "here", "chief", "chair", "director", "faculty",
--            "attending", "concerned", "worried", "curious", "hoping"}
--    for pattern in patterns:
--        # Case-insensitive so "My name is" matches as well as "my name is",
--        # but the captured word must still be capitalised in the original —
--        # that's what separates a name from "I'm trying".
--        m = re.search(pattern, text, re.IGNORECASE)
--        if m:
--            candidate = m.group(1).strip()
--            if not candidate[:1].isupper():
--                continue
--            if candidate.lower() in stop:
--                continue
--            return candidate
--    return None
--
--
--def update_profile_from_message(text: str) -> dict:
--    """Pick up anything the participant volunteers. Never asks, never guesses."""
--    found = {}
--    name = detect_first_name(text)
--    role = detect_role(text)
--    specialty = detect_specialty(text)
--    current = load_profile()
--    if name and not current.get("first_name"):
--        found["first_name"] = name
--    if role and not current.get("role"):
--        found["role"] = role
--    if specialty and not current.get("specialty"):
--        found["specialty"] = specialty
--    if found:
--        save_profile(**found)
--        app.logger.info(f"[profile] learned: {', '.join(found.keys())}")
--    return found
--
--
--def profile_guidance() -> str:
--    """Tell the model what it knows, and what it may ask for next."""
--    prof = load_profile()
--    known = [f"{k.replace('_', ' ')}: {prof[k]}"
--             for k in PROFILE_FIELDS if prof.get(k)]
--    asked = set((prof.get("asked") or "").split(","))
--    missing = [k for k in PROFILE_FIELDS if not prof.get(k) and k not in asked]
--
--    lines = ["\n\n---\nWHAT YOU KNOW ABOUT THIS PARTICIPANT"]
--    if known:
--        lines.append("  " + "; ".join(known))
--        lines.append("  Use this. Address them by first name occasionally — not "
--                     "every message. Write for their role and specialty "
--                     "specifically. Never ask again for anything listed here.")
--    else:
--        lines.append("  Nothing yet.")
--
--    if missing:
--        nice = {"first_name": "their first name", "role": "their leadership role",
--                "specialty": "their specialty"}
--        lines.append(
--            "  Not yet known: " + ", ".join(nice[m] for m in missing) + ". "
--            "You may ask for ONE of these, as a short closing question AFTER a "
--            "substantive answer — never as a gate, never before helping, and "
--            "never when they have asked for a document or a revision. At most "
--            "one such question per conversation."
--        )
--
--    lines.append(
--        "  NEVER ask for, and never record, their institution, hospital, "
--        "employer, city, surname, or anything else that would identify them or "
--        "their organisation. If they volunteer such detail, use it in the reply "
--        "if helpful but do not treat it as something to collect. Keep what you "
--        "hold to first name, role and specialty."
--    )
--    return "\n".join(lines) + "\n"
--
--
--# ---------------------------------------------------------------------------
--# Follow-up plans
--# ---------------------------------------------------------------------------
--# At the end of a session the participant can ask for an accountability plan:
--# what they said they'd do, by when, and what to watch for. It's built from
--# the conversation, saved against their profile, and surfaced at the start of
--# the next session so the advisor can follow up rather than start cold.
--
--PLAN_PROMPT = (
--    "Build a short accountability plan from this conversation.\n\n"
--    "Rules:\n"
--    "- Only include commitments THEY made or clearly accepted. Do not invent "
--    "actions they never agreed to, and do not pad the list.\n"
--    "- If they committed to nothing concrete, say so plainly in one line and "
--    "suggest at most two things they could commit to. Do not fabricate a plan.\n"
--    "- Use their own words for what they're doing where you can.\n"
--    "- Give each item a realistic timeframe. If they named one, use theirs; "
--    "otherwise suggest one and mark it as a suggestion.\n"
--    "- End with one line on the single thing most likely to derail this, drawn "
--    "from what they actually told you.\n\n"
--    "Format as markdown with a '# Follow-up Plan' heading, then a short "
--    "'## What you're doing' list, then '## Watch for'. Keep the whole thing "
--    "under 350 words. No preamble, no closing pleasantries."
--)
--
--
--def _plans_ensure_table(conn):
--    with conn.cursor() as cur:
--        cur.execute("""
--            CREATE TABLE IF NOT EXISTS participant_plans (
--                id          BIGSERIAL PRIMARY KEY,
--                token       TEXT NOT NULL,
--                content     TEXT NOT NULL,
--                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
--            )
--        """)
--        cur.execute("""CREATE INDEX IF NOT EXISTS participant_plans_token
--                       ON participant_plans (token)""")
--    conn.commit()
--
--
--def save_plan(content: str) -> bool:
++
++
 +def save_advisor_360_feedback(slug: str, filename: str, mime: str, content: bytes) -> bool:
 +    """One 360 file per advisor — a fresh upload replaces whatever was
 +    there before, same as the photo-upload pattern elsewhere."""
 +    if not slug or not content:
 +        return False
-     conn = _settings_db_conn()
-     if not conn:
-         return False
-     try:
--        _plans_ensure_table(conn)
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
 +        _advisor_360_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("""INSERT INTO participant_plans (token, content)
--                           VALUES (%s, %s)""",
--                        (participant_token(), content[:20000]))
++        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
 +            cur.execute("""
 +                INSERT INTO advisor_360_feedback
@@ -1922,33 +1859,52 @@ index 4b5a702..1d9b7f6 100644
          conn.commit()
          return True
      except Exception as e:
--        app.logger.error(f"[plans] save failed: {e}")
+-        app.logger.error(f"[profile] forget failed: {e}")
 +        app.logger.error(f"[advisor-360] write failed: {e}")
          return False
      finally:
          conn.close()
  
  
--def list_plans(limit=10):
+-# Leadership roles worth recognising, longest first so "associate program
+-# director" wins over "program director".
+-_ROLE_PATTERNS = [
+-    (r"\b(department chair|chair of the department|chairman)\b", "department chair"),
+-    (r"\b(vice chair|associate chair)\b", "vice chair"),
+-    (r"\b(division chief|chief of the division|division head)\b", "division chief"),
+-    (r"\b(section chief|section head)\b", "section chief"),
+-    (r"\b(service line (?:director|lead|chief))\b", "service line director"),
+-    (r"\b(associate program director)\b", "associate program director"),
+-    (r"\b(program director)\b", "program director"),
+-    (r"\b(fellowship director)\b", "fellowship director"),
+-    (r"\b(residency director)\b", "residency director"),
+-    (r"\b(medical director)\b", "medical director"),
+-    (r"\b(chief medical officer|\bCMO\b)", "chief medical officer"),
+-    (r"\b(chief of staff)\b", "chief of staff"),
+-    (r"\b(vice president|\bVP\b)", "vice president"),
+-    (r"\b(dean|associate dean|vice dean)\b", "dean"),
+-    (r"\b(clinical director)\b", "clinical director"),
+-    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
+-    (r"\b(attending|faculty member|staff physician)\b", "attending"),
+-]
+-
+-
+-def detect_role(text: str):
+-    low = (text or "").lower()
+-    for pattern, label in _ROLE_PATTERNS:
+-        if re.search(pattern, low, re.IGNORECASE):
+-            return label
+-    return None
 +def get_advisor_360_meta(slug: str):
 +    """Filename/size/date only — for display, never the content itself."""
 +    if not slug:
 +        return None
-     conn = _settings_db_conn()
-     if not conn:
--        return []
--    out = []
++    conn = _settings_db_conn()
++    if not conn:
 +        return None
-     try:
--        _plans_ensure_table(conn)
++    try:
 +        _advisor_360_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("""SELECT id, content, created_at FROM participant_plans
--                           WHERE token = %s ORDER BY id DESC LIMIT %s""",
--                        (participant_token(), limit))
--            for row in cur.fetchall():
--                out.append({"id": row[0], "content": row[1],
--                            "when": _fmt_ts(row[2])})
++        with conn.cursor() as cur:
 +            cur.execute("""
 +                SELECT id, filename, size_bytes, uploaded_at
 +                FROM advisor_360_feedback WHERE advisor_slug = %s
@@ -1957,20 +1913,25 @@ index 4b5a702..1d9b7f6 100644
 +        if not row:
 +            return None
 +        return {"id": row[0], "filename": row[1], "size_bytes": row[2] or 0, "uploaded_at": row[3]}
-     except Exception as e:
--        app.logger.error(f"[plans] list failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[advisor-360] meta read failed: {e}")
 +        return None
-     finally:
-         conn.close()
--    return out
++    finally:
++        conn.close()
  
  
--def delete_plan(plan_id: int) -> bool:
+-def detect_first_name(text: str):
+-    """Only from an explicit self-introduction — never inferred."""
+-    if not text:
 +def get_advisor_360_content(slug: str):
 +    """(bytes, mime, filename) for a download, or None."""
 +    if not slug:
-+        return None
+         return None
+-    patterns = [
+-        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
+-        r"\bi'?m ([A-Z][a-z]{1,18})\b",
+-        r"\bthis is ([A-Z][a-z]{1,18})\b",
+-        r"\bcall me ([A-Z][a-z]{1,18})\b",
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return None
@@ -1997,31 +1958,22 @@ index 4b5a702..1d9b7f6 100644
 +def delete_advisor_360_feedback(slug: str) -> bool:
 +    if not slug:
 +        return False
-     conn = _settings_db_conn()
-     if not conn:
-         return False
-     try:
--        _plans_ensure_table(conn)
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
 +        _advisor_360_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("""DELETE FROM participant_plans
--                           WHERE id = %s AND token = %s""",
--                        (plan_id, participant_token()))
++        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM advisor_360_feedback WHERE advisor_slug = %s", (slug,))
-         conn.commit()
-         return True
-     except Exception as e:
--        app.logger.error(f"[plans] delete failed: {e}")
++        conn.commit()
++        return True
++    except Exception as e:
 +        app.logger.error(f"[advisor-360] delete failed: {e}")
-         return False
-     finally:
-         conn.close()
- 
- 
--def open_commitments_block() -> str:
--    """The most recent plan, so the advisor can follow up next session."""
--    plans = list_plans(limit=1)
--    if not plans:
++        return False
++    finally:
++        conn.close()
++
++
 +def personality_style_block() -> str:
 +    """Turns a few self-report scores into brief, private tone guidance.
 +    Never surfaced to the participant as a score, a label, or a type."""
@@ -2054,67 +2006,29 @@ index 4b5a702..1d9b7f6 100644
 +    elif scores.get("stability", 3) <= 2:
 +        notes.append("extra gentleness around stress or setbacks — avoid alarming language")
 +    if not notes:
-         return ""
--    plan = plans[0]
-     return (
--        "\n\n---\n"
--        f"COMMITMENTS FROM THEIR LAST SESSION ({plan['when']}) — they asked for "
--        "this plan themselves. Early in this conversation, ask how one of these "
--        "went, naming it specifically. Ask once, briefly, and then get on with "
--        "whatever they've come with; do not work through the list or nag. If "
--        "they say it slipped, treat that as information, not failure.\n\n"
--        + plan["content"][:4000] + "\n"
++        return ""
++    return (
 +        "\n\n---\nCOMMUNICATION STYLE (from a short opt-in self-report; treat "
 +        "as a soft steer on tone only — never mention it, never call it a "
 +        "personality type or a score):\n- " + "\n- ".join(notes) + "\n"
-     )
- 
- 
- # ---------------------------------------------------------------------------
--# Pre-session briefings
++    )
++
++
++# ---------------------------------------------------------------------------
 +# Biometric data files
- # ---------------------------------------------------------------------------
--# When a participant books time, the advisor gets a short brief on what the
--# participant has been working through — so the call starts where the
--# conversation left off rather than from scratch.
--#
--# The brief is always stored in the admin panel. It is emailed as well when a
--# mail transport is configured; without one the panel is the delivery route.
++# ---------------------------------------------------------------------------
 +# Admin-side only: J3P staff upload a wearable or lab export (CSV, PDF, XLSX,
 +# whatever the participant's device or provider produces) and tag it with
 +# that participant's email so it's easy to find later. This is storage and
 +# review for the J3P team — nothing here is read into the advisor's prompt
 +# or retrieval; it never reaches the AI.
- 
--BRIEFING_PROMPT = (
--    "Write a pre-call brief for an advisor about to meet this person. The "
--    "advisor has not seen this conversation.\n\n"
--    "Rules:\n"
--    "- Lead with the single thing they most want help with, in one sentence.\n"
--    "- Then the specifics that matter: what they've tried, who else is "
--    "involved (by role, not name), any dates or constraints they mentioned.\n"
--    "- Note anything they seemed hesitant or guarded about — useful for the "
--    "advisor to handle carefully.\n"
--    "- End with two or three questions the advisor could open with.\n"
--    "- Only what they actually said. No speculation about motives, no "
--    "diagnosis, no advice to the advisor about what to recommend.\n"
--    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
--)
++
 +BIOMETRIC_FILE_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — generous for a CSV/PDF export
- 
- 
--def _briefings_ensure_table(conn):
++
++
 +def _biometric_files_ensure_table(conn):
-     with conn.cursor() as cur:
-         cur.execute("""
--            CREATE TABLE IF NOT EXISTS session_briefings (
--                id            BIGSERIAL PRIMARY KEY,
--                advisor_slug  TEXT,
--                advisor_name  TEXT,
--                participant   TEXT,
--                summary       TEXT NOT NULL,
--                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
--                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    with conn.cursor() as cur:
++        cur.execute("""
 +            CREATE TABLE IF NOT EXISTS participant_biometric_files (
 +                id                BIGSERIAL PRIMARY KEY,
 +                participant_email TEXT NOT NULL,
@@ -2124,77 +2038,44 @@ index 4b5a702..1d9b7f6 100644
 +                content           BYTEA NOT NULL,
 +                size_bytes        INTEGER NOT NULL,
 +                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )
-         """)
++            )
++        """)
 +        cur.execute("""CREATE INDEX IF NOT EXISTS participant_biometric_files_email
 +                       ON participant_biometric_files (participant_email)""")
-     conn.commit()
- 
- 
--def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
++    conn.commit()
++
++
 +def add_biometric_file(participant_email: str, title: str, notes: str,
 +                        mime: str, content: bytes) -> bool:
-     conn = _settings_db_conn()
-     if not conn:
-         return False
-     try:
--        _briefings_ensure_table(conn)
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
 +        _biometric_files_ensure_table(conn)
-         with conn.cursor() as cur:
-             cur.execute("""
--                INSERT INTO session_briefings
--                    (advisor_slug, advisor_name, participant, summary, emailed)
--                VALUES (%s, %s, %s, %s, %s)
--            """, (advisor_slug, advisor_name, participant, summary[:12000], emailed))
++        with conn.cursor() as cur:
++            cur.execute("""
 +                INSERT INTO participant_biometric_files
 +                    (participant_email, title, notes, mime, content, size_bytes)
 +                VALUES (%s, %s, %s, %s, %s, %s)
 +            """, (participant_email[:200], title[:200], (notes or "")[:2000],
 +                  mime, content, len(content)))
-         conn.commit()
-         return True
-     except Exception as e:
--        app.logger.error(f"[briefing] save failed: {e}")
++        conn.commit()
++        return True
++    except Exception as e:
 +        app.logger.error(f"[biometric] upload failed: {e}")
-         return False
-     finally:
-         conn.close()
- 
- 
--def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
--    """Briefings, optionally just one advisor's — or just the unassigned ones."""
++        return False
++    finally:
++        conn.close()
++
++
 +def list_biometric_files() -> list:
 +    """Every uploaded file, grouped by participant (then newest first)."""
-     conn = _settings_db_conn()
-     if not conn:
-         return []
--    out = []
-     try:
--        _briefings_ensure_table(conn)
++    conn = _settings_db_conn()
++    if not conn:
++        return []
++    try:
 +        _biometric_files_ensure_table(conn)
-         with conn.cursor() as cur:
--            if advisor_slug:
--                cur.execute("""
--                    SELECT id, advisor_name, participant, summary, emailed, created_at
--                    FROM session_briefings WHERE advisor_slug = %s
--                    ORDER BY id DESC LIMIT %s
--                """, (advisor_slug, limit))
--            elif unassigned_only:
--                cur.execute("""
--                    SELECT id, advisor_name, participant, summary, emailed, created_at
--                    FROM session_briefings
--                    WHERE advisor_slug IS NULL OR advisor_slug = ''
--                    ORDER BY id DESC LIMIT %s
--                """, (limit,))
--            else:
--                cur.execute("""
--                    SELECT id, advisor_name, participant, summary, emailed, created_at
--                    FROM session_briefings ORDER BY id DESC LIMIT %s
--                """, (limit,))
--            for row in cur.fetchall():
--                out.append({"id": row[0], "advisor": row[1] or "—",
--                            "participant": row[2] or "—", "summary": row[3],
--                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
++        with conn.cursor() as cur:
 +            cur.execute("""
 +                SELECT id, participant_email, title, notes, size_bytes, uploaded_at
 +                FROM participant_biometric_files
@@ -2204,49 +2085,19 @@ index 4b5a702..1d9b7f6 100644
 +        return [{"id": r[0], "participant_email": r[1], "title": r[2],
 +                 "notes": r[3], "size_bytes": r[4], "uploaded_at": r[5]}
 +                for r in rows]
-     except Exception as e:
--        app.logger.error(f"[briefing] list failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[biometric] list failed: {e}")
 +        return []
-     finally:
-         conn.close()
--    return out
- 
- 
--def participant_label() -> str:
--    """How the participant appears on the brief — no more than they've given."""
--    prof = load_profile()
--    bits = [prof.get(k) for k in ("first_name", "role", "specialty") if prof.get(k)]
--    email = session.get("user_email", "")
--    if email:
--        bits.append(email)
--    return " · ".join(bits) if bits else "Anonymous participant"
--
--
--def build_briefing() -> str:
--    """Summarise the conversation for the advisor. Empty string if too thin."""
--    history = load_history()
--    if len(history) < 2:
--        return ""
--    lines = []
--    for turn in history[-30:]:
--        who = "Participant" if turn.get("role") == "user" else "Advisor (AI)"
--        lines.append(f"{who}: {(turn.get('content') or '')[:1800]}")
++    finally:
++        conn.close()
++
++
 +def get_biometric_file(file_id: int):
 +    """(content, mime, title) for download, or None."""
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return None
-     try:
--        resp = client.messages.create(
--            model=CONFIG["model"],
--            max_tokens=900,
--            system=[{"type": "text", "text": BRIEFING_PROMPT}],
--            messages=[{"role": "user",
--                       "content": "Conversation:\n\n" + "\n\n".join(lines)}],
--        )
--        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
--        return scrub_internal_emails("\n".join(parts).strip())
++    try:
 +        _biometric_files_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            cur.execute("""
@@ -2255,71 +2106,45 @@ index 4b5a702..1d9b7f6 100644
 +            """, (file_id,))
 +            row = cur.fetchone()
 +        return (row[0], row[1], row[2]) if row else None
-     except Exception as e:
--        app.logger.error(f"[briefing] generation failed: {e}")
--        return ""
++    except Exception as e:
 +        app.logger.error(f"[biometric] fetch failed: {e}")
 +        return None
 +    finally:
 +        conn.close()
- 
- 
--def email_briefing(advisor_name, participant, summary) -> bool:
--    if not mail_transport_configured():
++
++
 +def delete_biometric_file(file_id: int) -> bool:
 +    conn = _settings_db_conn()
 +    if not conn:
-         return False
--    to_addr = os.environ.get("BRIEFING_EMAIL") or os.environ.get(
--        "SAFETY_ALERT_EMAIL") or CONFIG["contact_email"]
--    subject = f"Pre-call brief — {participant}"
--    body = (f"A participant has just booked time"
--            f"{' with ' + advisor_name if advisor_name and advisor_name != '—' else ''}.\n\n"
--            f"Participant: {participant}\n\n{summary}\n\n"
--            f"— Generated automatically from their session with the J3P Advisor.")
-     try:
--        return bool(send_email(to_addr, subject, body))
++        return False
++    try:
 +        _biometric_files_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM participant_biometric_files WHERE id = %s",
 +                        (file_id,))
 +        conn.commit()
 +        return True
-     except Exception as e:
--        app.logger.error(f"[briefing] email failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[biometric] delete failed: {e}")
-         return False
++        return False
 +    finally:
 +        conn.close()
- 
- 
- # ---------------------------------------------------------------------------
--# Per-advisor knowledge
++
++
++# ---------------------------------------------------------------------------
 +# Participant profile
- # ---------------------------------------------------------------------------
--# Two tiers. The shared J3P base is the framework every advisor draws on. On
--# top of that, a document can be assigned to one advisor, and then only that
--# advisor's sessions retrieve it.
--#
--# Ownership is tracked here rather than in the documents table, so database.py
--# is untouched: documents keep unique titles (the duplicate check enforces it),
--# and a title-to-advisor map is enough to filter retrieval.
++# ---------------------------------------------------------------------------
 +# A deliberately thin profile: first name, role, specialty. No institution, no
 +# surname, no email beyond what sign-in already holds, nothing that would
 +# identify the person or their organisation. Enough for the advisor to stop
 +# being generic; not enough to be a personnel record.
- 
--def _doc_owner_ensure_table(conn):
++
 +PROFILE_FIELDS = ("first_name", "role", "specialty")
 +
 +
 +def _profile_ensure_table(conn):
-     with conn.cursor() as cur:
-         cur.execute("""
--            CREATE TABLE IF NOT EXISTS document_owner (
--                title        TEXT PRIMARY KEY,
--                advisor_slug TEXT NOT NULL,
--                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
++    with conn.cursor() as cur:
++        cur.execute("""
 +            CREATE TABLE IF NOT EXISTS participant_profile (
 +                token       TEXT PRIMARY KEY,
 +                first_name  TEXT,
@@ -2327,32 +2152,18 @@ index 4b5a702..1d9b7f6 100644
 +                specialty   TEXT,
 +                asked       TEXT,
 +                updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )
-         """)
-     conn.commit()
- 
- 
--def set_document_owner(title: str, advisor_slug: str) -> bool:
--    """Assign a document to one advisor. Empty slug means the shared base."""
--    if not title:
--        return False
++            )
++        """)
++    conn.commit()
++
++
 +def load_profile() -> dict:
-     conn = _settings_db_conn()
-     if not conn:
--        return False
++    conn = _settings_db_conn()
++    if not conn:
 +        return dict(session.get("profile_fallback") or {})
-     try:
--        _doc_owner_ensure_table(conn)
++    try:
 +        _profile_ensure_table(conn)
-         with conn.cursor() as cur:
--            if advisor_slug:
--                cur.execute("""
--                    INSERT INTO document_owner (title, advisor_slug)
--                    VALUES (%s, %s)
--                    ON CONFLICT (title) DO UPDATE SET advisor_slug = EXCLUDED.advisor_slug
--                """, (title[:200], advisor_slug))
--            else:
--                cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
++        with conn.cursor() as cur:
 +            cur.execute("""SELECT first_name, role, specialty, asked
 +                           FROM participant_profile WHERE token = %s""",
 +                        (participant_token(),))
@@ -2393,45 +2204,34 @@ index 4b5a702..1d9b7f6 100644
 +                ON CONFLICT (token) DO UPDATE
 +                SET {updates}, updated_at = NOW()
 +            """, (participant_token(), *fields.values()))
-         conn.commit()
-         return True
-     except Exception as e:
--        app.logger.error(f"[kb] owner write failed: {e}")
++        conn.commit()
++        return True
++    except Exception as e:
 +        app.logger.error(f"[profile] save failed: {e}")
-         return False
-     finally:
-         conn.close()
- 
- 
--def document_owners() -> dict:
--    """{title: advisor_slug} for every assigned document."""
++        return False
++    finally:
++        conn.close()
++
++
 +def forget_profile() -> bool:
 +    session.pop("profile_fallback", None)
-     conn = _settings_db_conn()
-     if not conn:
--        return {}
++    conn = _settings_db_conn()
++    if not conn:
 +        return True
-     try:
--        _doc_owner_ensure_table(conn)
++    try:
 +        _profile_ensure_table(conn)
-         with conn.cursor() as cur:
--            cur.execute("SELECT title, advisor_slug FROM document_owner")
--            return {row[0]: row[1] for row in cur.fetchall()}
++        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM participant_profile WHERE token = %s",
 +                        (participant_token(),))
 +        conn.commit()
 +        return True
-     except Exception as e:
--        app.logger.error(f"[kb] owner read failed: {e}")
--        return {}
++    except Exception as e:
 +        app.logger.error(f"[profile] forget failed: {e}")
 +        return False
-     finally:
-         conn.close()
- 
- 
--def filter_chunks_for_advisor(results, advisor_slug):
--    """Shared documents plus this advisor's own. Others are dropped.
++    finally:
++        conn.close()
++
++
 +# Leadership roles worth recognising, longest first so "associate program
 +# director" wins over "program director".
 +_ROLE_PATTERNS = [
@@ -2453,557 +2253,37 @@ index 4b5a702..1d9b7f6 100644
 +    (r"\b(quality (?:director|officer|lead))\b", "quality director"),
 +    (r"\b(attending|faculty member|staff physician)\b", "attending"),
 +]
- 
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
--    """
--    owners = document_owners()
--    if not owners:
--        return results
--    keep = []
--    for r in results:
--        owner = owners.get(r.get("title"))
--        if not owner or owner == advisor_slug:
--            keep.append(r)
--    return keep
- 
++
++
 +def detect_role(text: str):
 +    low = (text or "").lower()
 +    for pattern, label in _ROLE_PATTERNS:
 +        if re.search(pattern, low, re.IGNORECASE):
 +            return label
 +    return None
- 
--def detect_deliverable_request(text: str) -> bool:
--    """True when the user is asking for a written document of some kind."""
--    import re as _r
++
 +
 +def detect_first_name(text: str):
 +    """Only from an explicit self-introduction — never inferred."""
-     if not text:
--        return False
--    low = text.lower()
--    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
++    if not text:
 +        return None
 +    patterns = [
 +        r"\bmy name'?s? (?:is )?([A-Z][a-z]{1,18})\b",
 +        r"\bi'?m ([A-Z][a-z]{1,18})\b",
 +        r"\bthis is ([A-Z][a-z]{1,18})\b",
 +        r"\bcall me ([A-Z][a-z]{1,18})\b",
-+        r"^([A-Z][a-z]{1,18}) here\b",
-+    ]
-+    # Words that follow "I'm" but aren't names
-+    stop = {"a", "an", "the", "not", "in", "on", "at", "trying", "looking",
-+            "working", "going", "just", "still", "also", "happy", "glad",
-+            "sorry", "new", "here", "chief", "chair", "director", "faculty",
-+            "attending", "concerned", "worried", "curious", "hoping"}
-+    for pattern in patterns:
-+        # Case-insensitive so "My name is" matches as well as "my name is",
-+        # but the captured word must still be capitalised in the original —
-+        # that's what separates a name from "I'm trying".
-+        m = re.search(pattern, text, re.IGNORECASE)
-+        if m:
-+            candidate = m.group(1).strip()
-+            if not candidate[:1].isupper():
-+                continue
-+            if candidate.lower() in stop:
-+                continue
-+            return candidate
-+    return None
- 
- 
--# "one pdf", "a single document", "not separate files" — the user wants
--# everything in one file rather than one file per deliverable.
--_SINGLE_FILE_RE = (
--    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
--    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
--    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
--    r"\bas one\b|\bsingle file\b)"
--)
-+def update_profile_from_message(text: str) -> dict:
-+    """Pick up anything the participant volunteers. Never asks, never guesses."""
-+    found = {}
-+    name = detect_first_name(text)
-+    role = detect_role(text)
-+    specialty = detect_specialty(text)
-+    current = load_profile()
-+    if name and not current.get("first_name"):
-+        found["first_name"] = name
-+    if role and not current.get("role"):
-+        found["role"] = role
-+    if specialty and not current.get("specialty"):
-+        found["specialty"] = specialty
-+    if found:
-+        save_profile(**found)
-+        app.logger.info(f"[profile] learned: {', '.join(found.keys())}")
-+    return found
- 
- 
--_SEPARATE_FILES_RE = (
--    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
--    r"\bindividual\s+(?:files?|documents?)\b|"
--    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
--    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
--    r"\bsplit\s+(?:them|it|into)\b)"
--)
--
-+def profile_guidance() -> str:
-+    """Tell the model what it knows, and what it may ask for next."""
-+    prof = load_profile()
-+    known = [f"{k.replace('_', ' ')}: {prof[k]}"
-+             for k in PROFILE_FIELDS if prof.get(k)]
-+    asked = set((prof.get("asked") or "").split(","))
-+    missing = [k for k in PROFILE_FIELDS if not prof.get(k) and k not in asked]
- 
--def wants_separate_files(text: str) -> bool:
--    """True only when the user explicitly asked for more than one file."""
--    import re as _r
--    if not text:
--        return False
--    low = text.lower()
--    if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
--        return False
--    return bool(_r.search(_SEPARATE_FILES_RE, low))
-+    lines = ["\n\n---\nWHAT YOU KNOW ABOUT THIS PARTICIPANT"]
-+    if known:
-+        lines.append("  " + "; ".join(known))
-+        lines.append("  Use this. Address them by first name occasionally — not "
-+                     "every message. Write for their role and specialty "
-+                     "specifically. Never ask again for anything listed here.")
-+    else:
-+        lines.append("  Nothing yet.")
- 
-+    if missing:
-+        nice = {"first_name": "their first name", "role": "their leadership role",
-+                "specialty": "their specialty"}
-+        lines.append(
-+            "  Not yet known: " + ", ".join(nice[m] for m in missing) + ". "
-+            "You may ask for ONE of these, as a short closing question AFTER a "
-+            "substantive answer — never as a gate, never before helping, and "
-+            "never when they have asked for a document or a revision. At most "
-+            "one such question per conversation."
-+        )
- 
--def wants_single_file(text: str) -> bool:
--    """True when the user explicitly asked for one combined file."""
--    import re as _r
--    return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
-+    lines.append(
-+        "  NEVER ask for, and never record, their institution, hospital, "
-+        "employer, city, surname, or anything else that would identify them or "
-+        "their organisation. If they volunteer such detail, use it in the reply "
-+        "if helpful but do not treat it as something to collect. Keep what you "
-+        "hold to first name, role and specialty."
-+    )
-+    return "\n".join(lines) + "\n"
- 
- 
- # ---------------------------------------------------------------------------
--# Attachment text extraction
-+# Follow-up plans
- # ---------------------------------------------------------------------------
--# embeddings.extract_text_from_upload handles PDF, DOCX, TXT and MD. Spreadsheets
--# and slide decks are read here so people can attach the formats they actually
--# work in — an Excel model, a PowerPoint deck, a CSV export.
--
--SPREADSHEET_EXTS = ('.xlsx', '.xlsm', '.xltx')
--SLIDES_EXTS = ('.pptx', '.potx')
--DELIMITED_EXTS = ('.csv', '.tsv')
--LEGACY_OFFICE_EXTS = ('.doc', '.xls', '.ppt')
-+# At the end of a session the participant can ask for an accountability plan:
-+# what they said they'd do, by when, and what to watch for. It's built from
-+# the conversation, saved against their profile, and surfaced at the start of
-+# the next session so the advisor can follow up rather than start cold.
- 
-+PLAN_PROMPT = (
-+    "Build a short accountability plan from this conversation.\n\n"
-+    "Rules:\n"
-+    "- Only include commitments THEY made or clearly accepted. Do not invent "
-+    "actions they never agreed to, and do not pad the list.\n"
-+    "- If they committed to nothing concrete, say so plainly in one line and "
-+    "suggest at most two things they could commit to. Do not fabricate a plan.\n"
-+    "- Use their own words for what they're doing where you can.\n"
-+    "- Give each item a realistic timeframe. If they named one, use theirs; "
-+    "otherwise suggest one and mark it as a suggestion.\n"
-+    "- End with one line on the single thing most likely to derail this, drawn "
-+    "from what they actually told you.\n\n"
-+    "Format as markdown with a '# Follow-up Plan' heading, then a short "
-+    "'## What you're doing' list, then '## Watch for'. Keep the whole thing "
-+    "under 350 words. No preamble, no closing pleasantries."
-+)
- 
--def _extract_spreadsheet(file_bytes: bytes, max_chars: int = 40000) -> str:
--    """Flatten a workbook to text, one row per line, sheet by sheet."""
--    import io as _io
--    from openpyxl import load_workbook
--    wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
--    out, total = [], 0
--    for ws in wb.worksheets:
--        out.append(f"--- SHEET: {ws.title} ---")
--        for row in ws.iter_rows(values_only=True):
--            cells = ["" if c is None else str(c) for c in row]
--            if not any(c.strip() for c in cells):
--                continue
--            line = " | ".join(cells).rstrip(" |")
--            out.append(line)
--            total += len(line)
--            if total > max_chars:
--                out.append("[... spreadsheet truncated for length ...]")
--                return "\n".join(out)
--    return "\n".join(out)
- 
-+def _plans_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
-+            CREATE TABLE IF NOT EXISTS participant_plans (
-+                id          BIGSERIAL PRIMARY KEY,
-+                token       TEXT NOT NULL,
-+                content     TEXT NOT NULL,
-+                created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+        cur.execute("""CREATE INDEX IF NOT EXISTS participant_plans_token
-+                       ON participant_plans (token)""")
-+    conn.commit()
- 
--def _extract_slides(file_bytes: bytes) -> str:
--    """Pull the text of every slide, including speaker notes."""
--    import io as _io
--    from pptx import Presentation
--    prs = Presentation(_io.BytesIO(file_bytes))
--    out = []
--    def walk(shapes, out):
--        """Collect text from shapes, tables, and grouped shapes alike."""
--        for shape in shapes:
--            # Grouped shapes hide their contents one level down
--            if shape.shape_type == 6 and hasattr(shape, "shapes"):
--                walk(shape.shapes, out)
--                continue
--            if getattr(shape, "has_table", False):
--                for row in shape.table.rows:
--                    cells = [c.text.strip().replace("\n", " ") for c in row.cells]
--                    if any(cells):
--                        out.append(" | ".join(cells))
--                continue
--            if shape.has_text_frame and shape.text_frame.text.strip():
--                out.append(shape.text_frame.text.strip())
--            # Charts carry their categories/series names
--            if getattr(shape, "has_chart", False):
--                try:
--                    plot = shape.chart.plots[0]
--                    cats = [str(c) for c in plot.categories]
--                    if cats:
--                        out.append("Chart categories: " + ", ".join(cats))
--                    for series in plot.series:
--                        vals = ", ".join("" if v is None else str(v) for v in series.values)
--                        out.append(f"Chart series {series.name}: {vals}")
--                except Exception:
--                    pass
- 
--    for i, slide in enumerate(prs.slides, 1):
--        out.append(f"--- SLIDE {i} ---")
--        walk(slide.shapes, out)
--        try:
--            if slide.has_notes_slide:
--                notes = slide.notes_slide.notes_text_frame.text.strip()
--                if notes:
--                    out.append(f"[Speaker notes: {notes}]")
--        except Exception:
--            pass
--    return "\n".join(out)
-+def save_plan(content: str) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
-+        _plans_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""INSERT INTO participant_plans (token, content)
-+                           VALUES (%s, %s)""",
-+                        (participant_token(), content[:20000]))
-+        conn.commit()
-+        return True
-+    except Exception as e:
-+        app.logger.error(f"[plans] save failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
- 
- 
--def _extract_delimited(file_bytes: bytes) -> str:
--    text = file_bytes.decode("utf-8", errors="replace")
--    return text if len(text) <= 40000 else text[:40000] + "\n[... truncated ...]"
-+def list_plans(limit=10):
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return []
-+    out = []
-+    try:
-+        _plans_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""SELECT id, content, created_at FROM participant_plans
-+                           WHERE token = %s ORDER BY id DESC LIMIT %s""",
-+                        (participant_token(), limit))
-+            for row in cur.fetchall():
-+                out.append({"id": row[0], "content": row[1],
-+                            "when": _fmt_ts(row[2])})
-+    except Exception as e:
-+        app.logger.error(f"[plans] list failed: {e}")
-+    finally:
-+        conn.close()
-+    return out
- 
- 
--def extract_attachment_text(filename: str, file_bytes: bytes) -> str:
--    """Extract text from any supported attachment type.
-+def delete_plan(plan_id: int) -> bool:
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
-+        _plans_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""DELETE FROM participant_plans
-+                           WHERE id = %s AND token = %s""",
-+                        (plan_id, participant_token()))
-+        conn.commit()
-+        return True
-+    except Exception as e:
-+        app.logger.error(f"[plans] delete failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
- 
--    Raises ValueError with a user-facing message for formats we can't read.
--    """
--    name = (filename or "").lower()
--    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
- 
--    if ext in SPREADSHEET_EXTS:
--        return _extract_spreadsheet(file_bytes)
--    if ext in SLIDES_EXTS:
--        return _extract_slides(file_bytes)
--    if ext in DELIMITED_EXTS:
--        return _extract_delimited(file_bytes)
--    if ext in LEGACY_OFFICE_EXTS:
--        raise ValueError(
--            f"{filename} is in an older Office format. Please re-save it as "
--            f".docx, .xlsx or .pptx and attach it again."
--        )
--    # PDF / DOCX / TXT / MD go through the existing pipeline
--    return emb.extract_text_from_upload(filename, file_bytes)
-+def open_commitments_block() -> str:
-+    """The most recent plan, so the advisor can follow up next session."""
-+    plans = list_plans(limit=1)
-+    if not plans:
-+        return ""
-+    plan = plans[0]
-+    return (
-+        "\n\n---\n"
-+        f"COMMITMENTS FROM THEIR LAST SESSION ({plan['when']}) — they asked for "
-+        "this plan themselves. Early in this conversation, ask how one of these "
-+        "went, naming it specifically. Ask once, briefly, and then get on with "
-+        "whatever they've come with; do not work through the list or nag. If "
-+        "they say it slipped, treat that as information, not failure.\n\n"
-+        + plan["content"][:4000] + "\n"
-+    )
- 
- 
--def _fit_history(messages: list) -> list:
--    """Trim conversation history so the session cookie stays under the browser limit.
-+# ---------------------------------------------------------------------------
-+# Pre-session briefings
-+# ---------------------------------------------------------------------------
-+# When a participant books time, the advisor gets a short brief on what the
-+# participant has been working through — so the call starts where the
-+# conversation left off rather than from scratch.
-+#
-+# The brief is always stored in the admin panel. It is emailed as well when a
-+# mail transport is configured; without one the panel is the delivery route.
- 
--    Keeps the most recent turns intact and drops the oldest ones. If even the
--    newest message is over budget it's truncated rather than dropped, so a
--    follow-up like "now send that as Word" still has something to refer to.
--    """
--    trimmed = []
--    used = 0
--    for msg in reversed(messages):
--        content = msg.get("content")
--        if not isinstance(content, str):
--            # Multi-part (image) content is never persisted as-is
--            content = "[Attachment]"
--        if len(content) > SESSION_MSG_CAP:
--            content = content[:SESSION_MSG_CAP].rstrip() + "\n[… truncated …]"
--        if used + len(content) > SESSION_HISTORY_BUDGET:
--            if trimmed:
--                break
--            # Newest message alone exceeds the budget — keep a truncated head
--            content = content[:SESSION_HISTORY_BUDGET].rstrip() + "\n[… truncated …]"
--        trimmed.append({"role": msg.get("role", "user"), "content": content})
--        used += len(content)
--    trimmed.reverse()
--    return trimmed
-+BRIEFING_PROMPT = (
-+    "Write a pre-call brief for an advisor about to meet this person. The "
-+    "advisor has not seen this conversation.\n\n"
-+    "Rules:\n"
-+    "- Lead with the single thing they most want help with, in one sentence.\n"
-+    "- Then the specifics that matter: what they've tried, who else is "
-+    "involved (by role, not name), any dates or constraints they mentioned.\n"
-+    "- Note anything they seemed hesitant or guarded about — useful for the "
-+    "advisor to handle carefully.\n"
-+    "- End with two or three questions the advisor could open with.\n"
-+    "- Only what they actually said. No speculation about motives, no "
-+    "diagnosis, no advice to the advisor about what to recommend.\n"
-+    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
-+)
- 
- 
--def retrieve_context_and_lessons(query: str) -> tuple:
--    """Search knowledge base AND approved lessons for material relevant to the query.
-+def _briefings_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
-+            CREATE TABLE IF NOT EXISTS session_briefings (
-+                id            BIGSERIAL PRIMARY KEY,
-+                advisor_slug  TEXT,
-+                advisor_name  TEXT,
-+                participant   TEXT,
-+                summary       TEXT NOT NULL,
-+                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
-+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+    conn.commit()
- 
--    Returns (context_string, lessons_list).
--    - context_string: formatted KB chunks (or "")
--    - lessons_list: list of dicts with user_message/bot_reply/comment for top-3
--      semantically similar past failures (or [])
- 
--    Computing the embedding once and reusing it for both lookups saves one
--    Voyage API call per chat turn.
--    """
--    if not (db.is_enabled() and emb.is_enabled()):
--        return ("", [])
-+def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-     try:
--        query_embedding = emb.embed_text(query)
-+        _briefings_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("""
-+                INSERT INTO session_briefings
-+                    (advisor_slug, advisor_name, participant, summary, emailed)
-+                VALUES (%s, %s, %s, %s, %s)
-+            """, (advisor_slug, advisor_name, participant, summary[:12000], emailed))
-+        conn.commit()
-+        return True
-     except Exception as e:
--        app.logger.error(f"Embedding failed: {e}")
--        return ("", [])
-+        app.logger.error(f"[briefing] save failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
- 
--    # --- Knowledge base ---
--    context = ""
--    try:
--        # Over-fetch, then drop other advisors' material before trimming to
--        # the configured top-k, so filtering can't leave us short.
--        top_k = CONFIG["rag_top_k"]
--        results = db.search_chunks(query_embedding, limit=top_k * 4)
--        results = filter_chunks_for_advisor(results, session.get("advisor_slug"))
--        relevant = [r for r in results
--                    if r["similarity"] >= CONFIG["rag_min_similarity"]][:top_k]
--        if relevant:
--            sections = [f"[Source: {r['title']}]\n{r['content']}" for r in relevant]
--            context = "\n\n---\n\n".join(sections)
--    except Exception as e:
--        app.logger.error(f"RAG retrieval failed: {e}")
- 
--    # --- Approved lessons (negative-feedback memory) ---
--    lessons = []
-+def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
-+    """Briefings, optionally just one advisor's — or just the unassigned ones."""
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return []
-+    out = []
-     try:
--        lessons = db.search_lessons(query_embedding, limit=3, min_similarity=0.5)
-+        _briefings_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            if advisor_slug:
-+                cur.execute("""
-+                    SELECT id, advisor_name, participant, summary, emailed, created_at
-+                    FROM session_briefings WHERE advisor_slug = %s
-+                    ORDER BY id DESC LIMIT %s
-+                """, (advisor_slug, limit))
-+            elif unassigned_only:
-+                cur.execute("""
-+                    SELECT id, advisor_name, participant, summary, emailed, created_at
-+                    FROM session_briefings
-+                    WHERE advisor_slug IS NULL OR advisor_slug = ''
-+                    ORDER BY id DESC LIMIT %s
-+                """, (limit,))
-+            else:
-+                cur.execute("""
-+                    SELECT id, advisor_name, participant, summary, emailed, created_at
-+                    FROM session_briefings ORDER BY id DESC LIMIT %s
-+                """, (limit,))
-+            for row in cur.fetchall():
-+                out.append({"id": row[0], "advisor": row[1] or "—",
-+                            "participant": row[2] or "—", "summary": row[3],
-+                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
-     except Exception as e:
--        app.logger.error(f"Lesson retrieval failed: {e}")
-+        app.logger.error(f"[briefing] list failed: {e}")
-+    finally:
-+        conn.close()
-+    return out
- 
--    return (context, lessons)
- 
-+def participant_label() -> str:
-+    """How the participant appears on the brief — no more than they've given."""
-+    prof = load_profile()
-+    bits = [prof.get(k) for k in ("first_name", "role", "specialty") if prof.get(k)]
-+    email = session.get("user_email", "")
-+    if email:
-+        bits.append(email)
-+    return " · ".join(bits) if bits else "Anonymous participant"
- 
--def retrieve_context(query: str) -> str:
--    """Backward-compatible wrapper — returns only KB context."""
--    context, _ = retrieve_context_and_lessons(query)
--    return context
- 
-+def build_briefing() -> str:
-+    """Summarise the conversation for the advisor. Empty string if too thin."""
-+    history = load_history()
-+    if len(history) < 2:
-+        return ""
-+    lines = []
-+    for turn in history[-30:]:
-+        who = "Participant" if turn.get("role") == "user" else "Advisor (AI)"
-+        lines.append(f"{who}: {(turn.get('content') or '')[:1800]}")
-+    try:
-+        resp = client.messages.create(
-+            model=CONFIG["model"],
-+            max_tokens=900,
-+            system=[{"type": "text", "text": BRIEFING_PROMPT}],
-+            messages=[{"role": "user",
-+                       "content": "Conversation:\n\n" + "\n\n".join(lines)}],
-+        )
-+        parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+         r"^([A-Z][a-z]{1,18}) here\b",
+     ]
+     # Words that follow "I'm" but aren't names
+@@ -6762,10 +8220,35 @@ def build_briefing() -> str:
+                        "content": "Conversation:\n\n" + "\n\n".join(lines)}],
+         )
+         parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
+-        return scrub_internal_emails("\n".join(parts).strip())
 +        summary = "\n".join(parts).strip()
-+    except Exception as e:
-+        app.logger.error(f"[briefing] generation failed: {e}")
-+        return ""
+     except Exception as e:
+         app.logger.error(f"[briefing] generation failed: {e}")
+         return ""
 +    # A separate, deterministic section — not handed to the model, so it's
 +    # never paraphrased, garbled, or quietly dropped the way something
 +    # folded into the AI's own summary could be.
@@ -3030,62 +2310,20 @@ index 4b5a702..1d9b7f6 100644
 +    )
 +    return "\n".join(parts)
  
--def _render_chat(force_scheduling=None, advisor=None):
--    """Render the chat page.
  
--    force_scheduling overrides the admin default; advisor selects a named
--    profile so the page shows that person's photo.
--    """
--    # Anonymous visitors start fresh each visit. Signed-in participants keep
--    # their history — that continuity is the point of signing in.
--    if not current_user():
--        clear_history()
--    else:
--        session["messages"] = []
--    if force_scheduling is None:
--        show = load_settings()["show_scheduling_button"]
--    else:
--        show = bool(force_scheduling)
--        # Remember the choice so a reset or refresh keeps the same experience
--        session["force_scheduling"] = show
--    # A visitor who arrived on a fixed link keeps that variant for the session
--    if force_scheduling is None and "force_scheduling" in session:
--        show = bool(session["force_scheduling"])
-+def email_briefing(advisor_name, participant, summary) -> bool:
-+    if not mail_transport_configured():
-+        return False
-+    to_addr = os.environ.get("BRIEFING_EMAIL") or os.environ.get(
-+        "SAFETY_ALERT_EMAIL") or CONFIG["contact_email"]
-+    subject = f"Pre-call brief — {participant}"
-+    body = (f"A participant has just booked time"
-+            f"{' with ' + advisor_name if advisor_name and advisor_name != '—' else ''}.\n\n"
-+            f"Participant: {participant}\n\n{summary}\n\n"
-+            f"— Generated automatically from their session with the J3P Advisor.")
-+    try:
-+        return bool(send_email(to_addr, subject, body))
-+    except Exception as e:
-+        app.logger.error(f"[briefing] email failed: {e}")
-+        return False
- 
--    # Remember which advisor this visitor is with, so a reset keeps the photo
--    if advisor:
--        session["advisor_slug"] = advisor["slug"]
--    active = advisor or get_advisor(session.get("advisor_slug"))
- 
--    page_cfg = dict(CONFIG)
--    # A name for the default photo, so the general link can read "Alan
--    # Friedman" rather than the app's own name.
--    def name_the_advisor(cfg_out, person_name):
--        """Put a person's name in the greeting in place of the app's name.
-+# ---------------------------------------------------------------------------
-+# Per-advisor knowledge
-+# ---------------------------------------------------------------------------
-+# Two tiers. The shared J3P base is the framework every advisor draws on. On
+ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,12 +8272,18 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+ # Per-advisor knowledge
+ # ---------------------------------------------------------------------------
+ # Two tiers. The shared J3P base is the framework every advisor draws on. On
+-# top of that, a document can be assigned to one advisor, and then only that
+-# advisor's sessions retrieve it.
 +# top of that, a document can be assigned to one or more advisors, and then
 +# only those advisors' sessions retrieve it.
-+#
-+# Ownership is tracked here rather than in the documents table, so database.py
-+# is untouched: documents keep unique titles (the duplicate check enforces it),
+ #
+ # Ownership is tracked here rather than in the documents table, so database.py
+ # is untouched: documents keep unique titles (the duplicate check enforces it),
+-# and a title-to-advisor map is enough to filter retrieval.
 +# and a title-to-advisor(s) map is enough to filter retrieval.
 +#
 +# document_owner (legacy, single advisor per title) is kept for backward
@@ -3094,106 +2332,14 @@ index 4b5a702..1d9b7f6 100644
 +# it's what the admin "Base" column reads and writes, and it lets a document
 +# be shared with several advisors at once rather than exactly one.
  
--        Dropping the article matters: "with the J3P Advisor" reads correctly,
--        "with the Alan Friedman" does not.
--        """
--        cfg_out["avatar_name"] = person_name
--        opening = CONFIG.get("opening") or ""
--        if CONFIG["persona_name"] in opening:
--            cfg_out["opening"] = re.sub(
--                r"\bthe\s+" + re.escape(CONFIG["persona_name"]),
--                person_name, opening).replace(
--                CONFIG["persona_name"], person_name)
-+def _doc_owner_ensure_table(conn):
-+    with conn.cursor() as cur:
-+        cur.execute("""
-+            CREATE TABLE IF NOT EXISTS document_owner (
-+                title        TEXT PRIMARY KEY,
-+                advisor_slug TEXT NOT NULL,
-+                created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-+            )
-+        """)
-+    conn.commit()
+ def _doc_owner_ensure_table(conn):
+     with conn.cursor() as cur:
+@@ -6852,19 +8341,113 @@ def document_owners() -> dict:
+         conn.close()
  
--    default_name = (load_settings().get("avatar_name") or "").strip()
--    if default_name and not active:
--        name_the_advisor(page_cfg, default_name)
--    photo_override = False
--    if active:
--        photo_override = True      # their own photo or monogram, not the loop
--        page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
--        page_cfg["persona_name"] = active["name"]
--        name_the_advisor(page_cfg, active["name"])
--
--    return render_template_string(
--        INDEX_HTML,
--        cfg=page_cfg,
--        show_avatar=bool(load_settings().get("show_avatar")),
--        advisor_photo_override=photo_override,
--        allow_materials=bool(load_settings().get("allow_materials")),
--        show_scheduling_button=show,
--        release_heading=RELEASE_HEADING,
--        release_body=RELEASE_BODY_HTML,
--        release_checkbox_label=RELEASE_CHECKBOX_LABEL,
--    )
  
-+def set_document_owner(title: str, advisor_slug: str) -> bool:
-+    """Assign a document to one advisor. Empty slug means the shared base."""
-+    if not title:
-+        return False
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return False
-+    try:
-+        _doc_owner_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            if advisor_slug:
-+                cur.execute("""
-+                    INSERT INTO document_owner (title, advisor_slug)
-+                    VALUES (%s, %s)
-+                    ON CONFLICT (title) DO UPDATE SET advisor_slug = EXCLUDED.advisor_slug
-+                """, (title[:200], advisor_slug))
-+            else:
-+                cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
-+        conn.commit()
-+        return True
-+    except Exception as e:
-+        app.logger.error(f"[kb] owner write failed: {e}")
-+        return False
-+    finally:
-+        conn.close()
- 
--@app.route("/")
--@paywall.paywall_required
--@login_required
--def index():
--    """Default entry point — follows the admin panel's Display Settings."""
--    return _render_chat()
- 
-+def document_owners() -> dict:
-+    """{title: advisor_slug} for every assigned document."""
-+    conn = _settings_db_conn()
-+    if not conn:
-+        return {}
-+    try:
-+        _doc_owner_ensure_table(conn)
-+        with conn.cursor() as cur:
-+            cur.execute("SELECT title, advisor_slug FROM document_owner")
-+            return {row[0]: row[1] for row in cur.fetchall()}
-+    except Exception as e:
-+        app.logger.error(f"[kb] owner read failed: {e}")
-+        return {}
-+    finally:
-+        conn.close()
- 
--@app.route("/scheduling")
--@paywall.paywall_required
--@login_required
--def index_with_scheduling():
--    """Share this link when you want the booking button shown."""
--    session.pop("force_scheduling", None)
--    return _render_chat(force_scheduling=True)
- 
+-def filter_chunks_for_advisor(results, advisor_slug):
+-    """Shared documents plus this advisor's own. Others are dropped.
 +def _doc_advisors_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -3206,28 +2352,12 @@ index 4b5a702..1d9b7f6 100644
 +        """)
 +    conn.commit()
  
--@app.route("/a/<slug>")
--@paywall.paywall_required
--@login_required
--def advisor_index(slug):
--    """A named advisor's link — follows the admin scheduling default."""
--    advisor = get_advisor(slug)
--    if not advisor:
--        return _advisor_not_found(slug)
--    session.pop("force_scheduling", None)
--    return _render_chat(advisor=advisor)
- 
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
++
 +def set_document_advisors(title: str, advisor_slugs) -> bool:
 +    """Assign a document to zero or more advisors.
- 
--@app.route("/a/<slug>/scheduling")
--@paywall.paywall_required
--@login_required
--def advisor_index_with_scheduling(slug):
--    advisor = get_advisor(slug)
--    if not advisor:
--        return _advisor_not_found(slug)
--    return _render_chat(force_scheduling=True, advisor=advisor)
++
 +    An empty list clears any restriction — the document returns to the
 +    shared J3P base, available to every advisor. A non-empty list restricts
 +    retrieval to just those advisors (one, several, or — by checking every
@@ -3260,20 +2390,12 @@ index 4b5a702..1d9b7f6 100644
 +        return False
 +    finally:
 +        conn.close()
- 
- 
--@app.route("/a/<slug>/no-scheduling")
--@paywall.paywall_required
--@login_required
--def advisor_index_without_scheduling(slug):
--    advisor = get_advisor(slug)
--    if not advisor:
--        return _advisor_not_found(slug)
--    return _render_chat(force_scheduling=False, advisor=advisor)
++
++
 +def document_advisor_map() -> dict:
 +    """{title: [advisor_slug, ...]} for every document with a restricted
 +    audience. A title absent from this dict belongs to the shared J3P base.
- 
++
 +    Merges the current many-to-many table with any legacy single-owner rows
 +    that predate it and haven't been touched since (a title present in the
 +    new table always wins over its legacy row).
@@ -3300,20 +2422,8 @@ index 4b5a702..1d9b7f6 100644
 +        return {}
 +    finally:
 +        conn.close()
- 
--@app.route("/a/<slug>/<path:rest>")
--@paywall.paywall_required
--@login_required
--def advisor_index_tolerant(slug, rest):
--    """Catch a link that arrived with stray text attached.
- 
--    Copying a link out of the admin panel could pick up the descriptive label
--    beside it, producing /a/slug/no-scheduling%20—%20without and a bare 404.
--    The intent is unambiguous, so honour it rather than failing.
--    """
--    advisor = get_advisor(slug)
--    if not advisor:
--        return _advisor_not_found(slug)
++
++
 +def document_advisor_labels(advisor_map: dict, advisor_names: dict) -> dict:
 +    """{title: display label} for the admin 'Base' column, e.g. 'Shared' or
 +    'Dr. Kim, Dr. Patel'."""
@@ -3322,347 +2432,34 @@ index 4b5a702..1d9b7f6 100644
 +        names = [advisor_names.get(s, s) for s in slugs]
 +        out[title] = ", ".join(names) if names else "Shared"
 +    return out
- 
--    first = (rest or "").split("/")[0].strip().lower()
--    if first.startswith("no-scheduling") or first.startswith("no%20scheduling"):
--        return _render_chat(force_scheduling=False, advisor=advisor)
--    if first.startswith("scheduling"):
--        return _render_chat(force_scheduling=True, advisor=advisor)
--    # Anything else: send them to the advisor's default link
--    return redirect(url_for("advisor_index", slug=slug))
- 
++
++
 +def filter_chunks_for_advisor(results, advisor_slug):
 +    """Shared documents plus every advisor this doc is assigned to. Others
 +    are dropped.
- 
--@app.route("/a/<slug>/photo.jpg")
--def advisor_photo(slug):
--    """A named advisor's photo, their monogram, or the default photo."""
--    stored = get_advisor_photo(slug)
--    if stored:
--        data, mime = stored
--        resp = app.response_class(data, mimetype=mime)
--        resp.headers["Cache-Control"] = "no-cache"
--        return resp
++
 +    A document with no assignments belongs to the shared J3P base and is
 +    always available; an assigned one is reachable only to the advisor(s)
 +    it's been given to.
-+    """
+     """
+-    owners = document_owners()
+-    if not owners:
 +    advisor_map = document_advisor_map()
 +    if not advisor_map:
-+        return results
-+    keep = []
-+    for r in results:
+         return results
+     keep = []
+     for r in results:
+-        owner = owners.get(r.get("title"))
+-        if not owner or owner == advisor_slug:
 +        slugs = advisor_map.get(r.get("title"))
 +        if not slugs or advisor_slug in slugs:
-+            keep.append(r)
-+    return keep
+             keep.append(r)
+     return keep
  
--    advisor = get_advisor(slug)
--    if advisor and advisor.get("no_photo"):
--        resp = app.response_class(placeholder_avatar_svg(advisor["name"]),
--                                  mimetype="image/svg+xml")
--        resp.headers["Cache-Control"] = "no-cache"
--        return resp
--    return redirect(url_for("advisor_avatar"))
- 
-+def detect_deliverable_request(text: str) -> bool:
-+    """True when the user is asking for a written document of some kind."""
-+    import re as _r
-+    if not text:
-+        return False
-+    low = text.lower()
-+    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
- 
--def _advisor_not_found(slug):
--    app.logger.info(f"[advisors] unknown slug requested: {slug}")
--    return (f"<div style='font-family:sans-serif;padding:2.5rem;max-width:34rem'>"
--            f"<h2 style='color:#27334A'>No advisor at that link</h2>"
--            f"<p style='color:#6B7280'>The link <code>/a/{slug}</code> doesn't match "
--            f"an advisor profile. Check the Advisors section of the admin panel.</p>"
--            f"<p><a href='/' style='color:#9D432C'>Go to the default advisor</a></p>"
--            f"</div>"), 404
- 
-+# "one pdf", "a single document", "not separate files" — the user wants
-+# everything in one file rather than one file per deliverable.
-+_SINGLE_FILE_RE = (
-+    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
-+    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
-+    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
-+    r"\bas one\b|\bsingle file\b)"
-+)
- 
--@app.route("/no-scheduling")
--@paywall.paywall_required
--@login_required
--def index_without_scheduling():
--    """Share this link when you want the advisor with no booking prompt."""
--    session.pop("force_scheduling", None)
--    return _render_chat(force_scheduling=False)
- 
-+_SEPARATE_FILES_RE = (
-+    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
-+    r"\bindividual\s+(?:files?|documents?)\b|"
-+    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
-+    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
-+    r"\bsplit\s+(?:them|it|into)\b)"
-+)
- 
--@app.route("/chat", methods=["POST"])
--@paywall.paywall_required
--@login_required
--def chat():
--    # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
--    # Attachment paths:
--    #   - Single document (PDF/DOCX/TXT/MD): extract text, prepend as context
--    #   - Single image (JPG/PNG/GIF/WEBP): send to Claude as vision content
--    #   - Folder of documents: concatenate extracted text from all supported files
--    # All attachments are ephemeral — used only in this turn.
--    uploaded_file = None
--    folder_files = []
--    folder_name = ""
--    if request.files:
--        if "file" in request.files:
--            uploaded_file = request.files["file"]
--        if "files" in request.files:
--            folder_files = request.files.getlist("files")
--            # Prefer the explicit folder_name; fall back to attachment_label
--            # (used when the paperclip sends multiple files rather than a folder).
--            folder_name = (
--                request.form.get("folder_name")
--                or request.form.get("attachment_label")
--                or "Attachments"
--            ).strip()
- 
--    if uploaded_file or folder_files:
--        user_input = (request.form.get("message") or "").strip()
--    else:
--        data = request.get_json(silent=True) or {}
--        user_input = (data.get("message") or "").strip()
-+def wants_separate_files(text: str) -> bool:
-+    """True only when the user explicitly asked for more than one file."""
-+    import re as _r
-+    if not text:
-+        return False
-+    low = text.lower()
-+    if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
-+        return False
-+    return bool(_r.search(_SEPARATE_FILES_RE, low))
- 
--    if not user_input and not uploaded_file and not folder_files:
--        return jsonify({"error": "Empty message"}), 400
- 
--    # Extension-based routing between document vs image
--    DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
--                '.csv', '.tsv', '.txt', '.md', '.rtf')
--    IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
--    IMAGE_MEDIA_TYPES = {
--        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
--        '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
--    }
-+def wants_single_file(text: str) -> bool:
-+    """True when the user explicitly asked for one combined file."""
-+    import re as _r
-+    return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
- 
--    attachment_context = ""    # Text extracted from a document, if any
--    image_blocks = []          # List of Anthropic image content blocks
--    attachment_display_name = ""
- 
--    if uploaded_file:
-+# ---------------------------------------------------------------------------
-+# Attachment text extraction
-+# ---------------------------------------------------------------------------
-+# embeddings.extract_text_from_upload handles PDF, DOCX, TXT and MD. Spreadsheets
-+# and slide decks are read here so people can attach the formats they actually
-+# work in — an Excel model, a PowerPoint deck, a CSV export.
-+
-+SPREADSHEET_EXTS = ('.xlsx', '.xlsm', '.xltx')
-+SLIDES_EXTS = ('.pptx', '.potx')
-+DELIMITED_EXTS = ('.csv', '.tsv')
-+LEGACY_OFFICE_EXTS = ('.doc', '.xls', '.ppt')
-+
-+
-+def _extract_spreadsheet(file_bytes: bytes, max_chars: int = 40000) -> str:
-+    """Flatten a workbook to text, one row per line, sheet by sheet."""
-+    import io as _io
-+    from openpyxl import load_workbook
-+    wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
-+    out, total = [], 0
-+    for ws in wb.worksheets:
-+        out.append(f"--- SHEET: {ws.title} ---")
-+        for row in ws.iter_rows(values_only=True):
-+            cells = ["" if c is None else str(c) for c in row]
-+            if not any(c.strip() for c in cells):
-+                continue
-+            line = " | ".join(cells).rstrip(" |")
-+            out.append(line)
-+            total += len(line)
-+            if total > max_chars:
-+                out.append("[... spreadsheet truncated for length ...]")
-+                return "\n".join(out)
-+    return "\n".join(out)
-+
-+
-+def _extract_slides(file_bytes: bytes) -> str:
-+    """Pull the text of every slide, including speaker notes."""
-+    import io as _io
-+    from pptx import Presentation
-+    prs = Presentation(_io.BytesIO(file_bytes))
-+    out = []
-+    def walk(shapes, out):
-+        """Collect text from shapes, tables, and grouped shapes alike."""
-+        for shape in shapes:
-+            # Grouped shapes hide their contents one level down
-+            if shape.shape_type == 6 and hasattr(shape, "shapes"):
-+                walk(shape.shapes, out)
-+                continue
-+            if getattr(shape, "has_table", False):
-+                for row in shape.table.rows:
-+                    cells = [c.text.strip().replace("\n", " ") for c in row.cells]
-+                    if any(cells):
-+                        out.append(" | ".join(cells))
-+                continue
-+            if shape.has_text_frame and shape.text_frame.text.strip():
-+                out.append(shape.text_frame.text.strip())
-+            # Charts carry their categories/series names
-+            if getattr(shape, "has_chart", False):
-+                try:
-+                    plot = shape.chart.plots[0]
-+                    cats = [str(c) for c in plot.categories]
-+                    if cats:
-+                        out.append("Chart categories: " + ", ".join(cats))
-+                    for series in plot.series:
-+                        vals = ", ".join("" if v is None else str(v) for v in series.values)
-+                        out.append(f"Chart series {series.name}: {vals}")
-+                except Exception:
-+                    pass
-+
-+    for i, slide in enumerate(prs.slides, 1):
-+        out.append(f"--- SLIDE {i} ---")
-+        walk(slide.shapes, out)
-+        try:
-+            if slide.has_notes_slide:
-+                notes = slide.notes_slide.notes_text_frame.text.strip()
-+                if notes:
-+                    out.append(f"[Speaker notes: {notes}]")
-+        except Exception:
-+            pass
-+    return "\n".join(out)
-+
-+
-+def _extract_delimited(file_bytes: bytes) -> str:
-+    text = file_bytes.decode("utf-8", errors="replace")
-+    return text if len(text) <= 40000 else text[:40000] + "\n[... truncated ...]"
-+
-+
-+def extract_attachment_text(filename: str, file_bytes: bytes) -> str:
-+    """Extract text from any supported attachment type.
-+
-+    Raises ValueError with a user-facing message for formats we can't read.
-+    """
-+    name = (filename or "").lower()
-+    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
-+
-+    if ext in SPREADSHEET_EXTS:
-+        return _extract_spreadsheet(file_bytes)
-+    if ext in SLIDES_EXTS:
-+        return _extract_slides(file_bytes)
-+    if ext in DELIMITED_EXTS:
-+        return _extract_delimited(file_bytes)
-+    if ext in LEGACY_OFFICE_EXTS:
-+        raise ValueError(
-+            f"{filename} is in an older Office format. Please re-save it as "
-+            f".docx, .xlsx or .pptx and attach it again."
-+        )
-+    # PDF / DOCX / TXT / MD go through the existing pipeline
-+    return emb.extract_text_from_upload(filename, file_bytes)
-+
-+
-+def _fit_history(messages: list) -> list:
-+    """Trim conversation history so the session cookie stays under the browser limit.
-+
-+    Keeps the most recent turns intact and drops the oldest ones. If even the
-+    newest message is over budget it's truncated rather than dropped, so a
-+    follow-up like "now send that as Word" still has something to refer to.
-+    """
-+    trimmed = []
-+    used = 0
-+    for msg in reversed(messages):
-+        content = msg.get("content")
-+        if not isinstance(content, str):
-+            # Multi-part (image) content is never persisted as-is
-+            content = "[Attachment]"
-+        if len(content) > SESSION_MSG_CAP:
-+            content = content[:SESSION_MSG_CAP].rstrip() + "\n[… truncated …]"
-+        if used + len(content) > SESSION_HISTORY_BUDGET:
-+            if trimmed:
-+                break
-+            # Newest message alone exceeds the budget — keep a truncated head
-+            content = content[:SESSION_HISTORY_BUDGET].rstrip() + "\n[… truncated …]"
-+        trimmed.append({"role": msg.get("role", "user"), "content": content})
-+        used += len(content)
-+    trimmed.reverse()
-+    return trimmed
-+
-+
-+def retrieve_context_and_lessons(query: str) -> tuple:
-+    """Search knowledge base AND approved lessons for material relevant to the query.
-+
-+    Returns (context_string, lessons_list).
-+    - context_string: formatted KB chunks (or "")
-+    - lessons_list: list of dicts with user_message/bot_reply/comment for top-3
-+      semantically similar past failures (or [])
-+
-+    Computing the embedding once and reusing it for both lookups saves one
-+    Voyage API call per chat turn.
-+    """
-+    if not (db.is_enabled() and emb.is_enabled()):
-+        return ("", [])
-+    try:
-+        query_embedding = emb.embed_text(query)
-+    except Exception as e:
-+        app.logger.error(f"Embedding failed: {e}")
-+        return ("", [])
-+
-+    # --- Knowledge base ---
-+    context = ""
-+    try:
-+        # Over-fetch, then drop other advisors' material before trimming to
-+        # the configured top-k, so filtering can't leave us short.
-+        top_k = CONFIG["rag_top_k"]
-+        results = db.search_chunks(query_embedding, limit=top_k * 4)
-+        results = filter_chunks_for_advisor(results, session.get("advisor_slug"))
-+        relevant = [r for r in results
-+                    if r["similarity"] >= CONFIG["rag_min_similarity"]][:top_k]
-+        if relevant:
-+            sections = [f"[Source: {r['title']}]\n{r['content']}" for r in relevant]
-+            context = "\n\n---\n\n".join(sections)
-+    except Exception as e:
-+        app.logger.error(f"RAG retrieval failed: {e}")
-+
-+    # --- Approved lessons (negative-feedback memory) ---
-+    lessons = []
-+    try:
-+        lessons = db.search_lessons(query_embedding, limit=3, min_similarity=0.5)
-+    except Exception as e:
-+        app.logger.error(f"Lesson retrieval failed: {e}")
-+
-+    return (context, lessons)
-+
-+
-+def retrieve_context(query: str) -> str:
-+    """Backward-compatible wrapper — returns only KB context."""
-+    context, _ = retrieve_context_and_lessons(query)
-+    return context
-+
-+
-+def _render_chat(force_scheduling=None, advisor=None):
-+    """Render the chat page.
-+
-+    force_scheduling overrides the admin default; advisor selects a named
-+    profile so the page shows that person's photo.
-+    """
+@@ -7107,14 +8690,37 @@ def _render_chat(force_scheduling=None, advisor=None):
+     force_scheduling overrides the admin default; advisor selects a named
+     profile so the page shows that person's photo.
+     """
 +    # One fresh read for the whole request — this runs on every page load
 +    # across every worker process, and the module-level settings cache is
 +    # per-process. Trusting a possibly-stale cached copy here means an
@@ -3671,12 +2468,12 @@ index 4b5a702..1d9b7f6 100644
 +    # happens to serve a given visitor, sometimes indefinitely.
 +    settings = load_settings(force=True)
 +
-+    # Anonymous visitors start fresh each visit. Signed-in participants keep
-+    # their history — that continuity is the point of signing in.
-+    if not current_user():
-+        clear_history()
-+    else:
-+        session["messages"] = []
+     # Anonymous visitors start fresh each visit. Signed-in participants keep
+     # their history — that continuity is the point of signing in.
+     if not current_user():
+         clear_history()
+     else:
+         session["messages"] = []
 +
 +    # Remember which advisor this visitor is with, so a reset keeps the photo
 +    if advisor:
@@ -3692,237 +2489,94 @@ index 4b5a702..1d9b7f6 100644
 +                return bool(override)
 +        return bool(settings.get(settings_key, default))
 +
-+    if force_scheduling is None:
+     if force_scheduling is None:
+-        show = load_settings()["show_scheduling_button"]
 +        show = _effective("show_scheduling_override", "show_scheduling_button")
-+    else:
-+        show = bool(force_scheduling)
-+        # Remember the choice so a reset or refresh keeps the same experience
-+        session["force_scheduling"] = show
-+    # A visitor who arrived on a fixed link keeps that variant for the session
-+    if force_scheduling is None and "force_scheduling" in session:
-+        show = bool(session["force_scheduling"])
-+
-+    page_cfg = dict(CONFIG)
-+    # A name for the default photo, so the general link can read "Alan
-+    # Friedman" rather than the app's own name.
-+    def name_the_advisor(cfg_out, person_name):
-+        """Put a person's name in the greeting in place of the app's name.
-+
-+        Dropping the article matters: "with the J3P Advisor" reads correctly,
-+        "with the Alan Friedman" does not.
-+        """
-+        cfg_out["avatar_name"] = person_name
-+        opening = CONFIG.get("opening") or ""
-+        if CONFIG["persona_name"] in opening:
-+            cfg_out["opening"] = re.sub(
-+                r"\bthe\s+" + re.escape(CONFIG["persona_name"]),
-+                person_name, opening).replace(
-+                CONFIG["persona_name"], person_name)
-+
+     else:
+         show = bool(force_scheduling)
+         # Remember the choice so a reset or refresh keeps the same experience
+@@ -7123,11 +8729,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+     if force_scheduling is None and "force_scheduling" in session:
+         show = bool(session["force_scheduling"])
+ 
+-    # Remember which advisor this visitor is with, so a reset keeps the photo
+-    if advisor:
+-        session["advisor_slug"] = advisor["slug"]
+-    active = advisor or get_advisor(session.get("advisor_slug"))
+-
+     page_cfg = dict(CONFIG)
+     # A name for the default photo, so the general link can read "Alan
+     # Friedman" rather than the app's own name.
+@@ -7145,7 +8746,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+                 person_name, opening).replace(
+                 CONFIG["persona_name"], person_name)
+ 
+-    default_name = (load_settings().get("avatar_name") or "").strip()
 +    default_name = (settings.get("avatar_name") or "").strip()
-+    if default_name and not active:
-+        name_the_advisor(page_cfg, default_name)
-+    photo_override = False
-+    if active:
-+        photo_override = True      # their own photo or monogram, not the loop
-+        page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
-+        page_cfg["persona_name"] = active["name"]
+     if default_name and not active:
+         name_the_advisor(page_cfg, default_name)
+     photo_override = False
+@@ -7153,18 +8754,28 @@ def _render_chat(force_scheduling=None, advisor=None):
+         photo_override = True      # their own photo or monogram, not the loop
+         page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
+         page_cfg["persona_name"] = active["name"]
 +        page_cfg["client_bio"] = active.get("client_bio", "")
-+        name_the_advisor(page_cfg, active["name"])
+         name_the_advisor(page_cfg, active["name"])
 +        if active.get("scheduling_url"):
 +            page_cfg["footer_cta_url"] = active["scheduling_url"]
 +    elif (settings.get("default_scheduling_url") or "").strip():
 +        page_cfg["footer_cta_url"] = settings["default_scheduling_url"].strip()
-+
-+    return render_template_string(
-+        INDEX_HTML,
-+        cfg=page_cfg,
+ 
+     return render_template_string(
+         INDEX_HTML,
+         cfg=page_cfg,
+-        show_avatar=bool(load_settings().get("show_avatar")),
 +        show_avatar=_effective("show_avatar_override", "show_avatar"),
-+        advisor_photo_override=photo_override,
+         advisor_photo_override=photo_override,
+-        allow_materials=bool(load_settings().get("allow_materials")),
 +        avatar_no_photo=bool(settings.get("avatar_no_photo")),
 +        allow_materials=_effective("allow_materials_override", "allow_materials"),
-+        show_scheduling_button=show,
-+        release_heading=RELEASE_HEADING,
-+        release_body=RELEASE_BODY_HTML,
-+        release_checkbox_label=RELEASE_CHECKBOX_LABEL,
+         show_scheduling_button=show,
+         release_heading=RELEASE_HEADING,
+         release_body=RELEASE_BODY_HTML,
+         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
 +        personality_questions=TIPI_ITEMS,
 +        personality_enabled=_effective("personality_override",
 +                                        "personality_assessment_enabled", True),
 +        avatar_version=int(datetime.now().timestamp()),
-+    )
-+
-+
-+@app.route("/")
-+@paywall.paywall_required
-+@login_required
-+def index():
-+    """Default entry point — follows the admin panel's Display Settings."""
+     )
+ 
+ 
+@@ -7173,6 +8784,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+ @login_required
+ def index():
+     """Default entry point — follows the admin panel's Display Settings."""
 +    # A previous visit to a named advisor's own link (/a/<slug>) leaves that
 +    # advisor's slug sticky in the session so a reload keeps their photo.
 +    # The plain link must never inherit that — otherwise it can silently
 +    # show someone else's name and, more importantly, restrict retrieval to
 +    # that advisor's knowledge base instead of the shared default.
 +    session.pop("advisor_slug", None)
-+    return _render_chat()
-+
-+
-+@app.route("/scheduling")
-+@paywall.paywall_required
-+@login_required
-+def index_with_scheduling():
-+    """Share this link when you want the booking button shown."""
-+    session.pop("force_scheduling", None)
+     return _render_chat()
+ 
+ 
+@@ -7182,6 +8799,7 @@ def index():
+ def index_with_scheduling():
+     """Share this link when you want the booking button shown."""
+     session.pop("force_scheduling", None)
 +    session.pop("advisor_slug", None)
-+    return _render_chat(force_scheduling=True)
-+
-+
-+@app.route("/a/<slug>")
-+@paywall.paywall_required
-+@login_required
-+def advisor_index(slug):
-+    """A named advisor's link — follows the admin scheduling default."""
-+    advisor = get_advisor(slug)
-+    if not advisor:
-+        return _advisor_not_found(slug)
-+    session.pop("force_scheduling", None)
-+    return _render_chat(advisor=advisor)
-+
-+
-+@app.route("/a/<slug>/scheduling")
-+@paywall.paywall_required
-+@login_required
-+def advisor_index_with_scheduling(slug):
-+    advisor = get_advisor(slug)
-+    if not advisor:
-+        return _advisor_not_found(slug)
-+    return _render_chat(force_scheduling=True, advisor=advisor)
-+
-+
-+@app.route("/a/<slug>/no-scheduling")
-+@paywall.paywall_required
-+@login_required
-+def advisor_index_without_scheduling(slug):
-+    advisor = get_advisor(slug)
-+    if not advisor:
-+        return _advisor_not_found(slug)
-+    return _render_chat(force_scheduling=False, advisor=advisor)
-+
-+
-+@app.route("/a/<slug>/<path:rest>")
-+@paywall.paywall_required
-+@login_required
-+def advisor_index_tolerant(slug, rest):
-+    """Catch a link that arrived with stray text attached.
-+
-+    Copying a link out of the admin panel could pick up the descriptive label
-+    beside it, producing /a/slug/no-scheduling%20—%20without and a bare 404.
-+    The intent is unambiguous, so honour it rather than failing.
-+    """
-+    advisor = get_advisor(slug)
-+    if not advisor:
-+        return _advisor_not_found(slug)
-+
-+    first = (rest or "").split("/")[0].strip().lower()
-+    if first.startswith("no-scheduling") or first.startswith("no%20scheduling"):
-+        return _render_chat(force_scheduling=False, advisor=advisor)
-+    if first.startswith("scheduling"):
-+        return _render_chat(force_scheduling=True, advisor=advisor)
-+    # Anything else: send them to the advisor's default link
-+    return redirect(url_for("advisor_index", slug=slug))
-+
-+
-+@app.route("/a/<slug>/photo.jpg")
-+def advisor_photo(slug):
-+    """A named advisor's photo, their monogram, or the default photo."""
-+    stored = get_advisor_photo(slug)
-+    if stored:
-+        data, mime = stored
-+        resp = app.response_class(data, mimetype=mime)
-+        resp.headers["Cache-Control"] = "no-cache"
-+        return resp
-+
-+    advisor = get_advisor(slug)
-+    if advisor and advisor.get("no_photo"):
-+        resp = app.response_class(placeholder_avatar_svg(advisor["name"]),
-+                                  mimetype="image/svg+xml")
-+        resp.headers["Cache-Control"] = "no-cache"
-+        return resp
-+    return redirect(url_for("advisor_avatar"))
-+
-+
-+def _advisor_not_found(slug):
-+    app.logger.info(f"[advisors] unknown slug requested: {slug}")
-+    return (f"<div style='font-family:sans-serif;padding:2.5rem;max-width:34rem'>"
-+            f"<h2 style='color:#27334A'>No advisor at that link</h2>"
-+            f"<p style='color:#6B7280'>The link <code>/a/{slug}</code> doesn't match "
-+            f"an advisor profile. Check the Advisors section of the admin panel.</p>"
-+            f"<p><a href='/' style='color:#9D432C'>Go to the default advisor</a></p>"
-+            f"</div>"), 404
-+
-+
-+@app.route("/no-scheduling")
-+@paywall.paywall_required
-+@login_required
-+def index_without_scheduling():
-+    """Share this link when you want the advisor with no booking prompt."""
-+    session.pop("force_scheduling", None)
+     return _render_chat(force_scheduling=True)
+ 
+ 
+@@ -7275,6 +8893,7 @@ def _advisor_not_found(slug):
+ def index_without_scheduling():
+     """Share this link when you want the advisor with no booking prompt."""
+     session.pop("force_scheduling", None)
 +    session.pop("advisor_slug", None)
-+    return _render_chat(force_scheduling=False)
-+
-+
-+@app.route("/chat", methods=["POST"])
-+@paywall.paywall_required
-+@login_required
-+def chat():
-+    # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
-+    # Attachment paths:
-+    #   - Single document (PDF/DOCX/TXT/MD): extract text, prepend as context
-+    #   - Single image (JPG/PNG/GIF/WEBP): send to Claude as vision content
-+    #   - Folder of documents: concatenate extracted text from all supported files
-+    # All attachments are ephemeral — used only in this turn.
-+    uploaded_file = None
-+    folder_files = []
-+    folder_name = ""
-+    if request.files:
-+        if "file" in request.files:
-+            uploaded_file = request.files["file"]
-+        if "files" in request.files:
-+            folder_files = request.files.getlist("files")
-+            # Prefer the explicit folder_name; fall back to attachment_label
-+            # (used when the paperclip sends multiple files rather than a folder).
-+            folder_name = (
-+                request.form.get("folder_name")
-+                or request.form.get("attachment_label")
-+                or "Attachments"
-+            ).strip()
-+
-+    if uploaded_file or folder_files:
-+        user_input = (request.form.get("message") or "").strip()
-+    else:
-+        data = request.get_json(silent=True) or {}
-+        user_input = (data.get("message") or "").strip()
-+
-+    if not user_input and not uploaded_file and not folder_files:
-+        return jsonify({"error": "Empty message"}), 400
-+
-+    # Extension-based routing between document vs image
-+    DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
-+                '.csv', '.tsv', '.txt', '.md', '.rtf')
-+    IMAGE_EXTS = ('.jpg', '.jpeg', '.png', '.gif', '.webp')
-+    IMAGE_MEDIA_TYPES = {
-+        '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
-+        '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
-+    }
-+
-+    attachment_context = ""    # Text extracted from a document, if any
-+    image_blocks = []          # List of Anthropic image content blocks
-+    attachment_display_name = ""
-+
-+    if uploaded_file:
-         try:
-             file_bytes = uploaded_file.read()
-             if len(file_bytes) > MAX_UPLOAD_BYTES:
-@@ -7506,7 +9041,7 @@ def chat():
+     return _render_chat(force_scheduling=False)
+ 
+ 
+@@ -7506,7 +9125,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -3931,7 +2585,7 @@ index 4b5a702..1d9b7f6 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7918,12 +9453,14 @@ def chat():
+@@ -7918,12 +9537,14 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -3946,7 +2600,7 @@ index 4b5a702..1d9b7f6 100644
          )
  
      try:
-@@ -8207,12 +9744,13 @@ def chat():
+@@ -8207,12 +9828,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -3961,7 +2615,7 @@ index 4b5a702..1d9b7f6 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +9815,28 @@ def acknowledge_release():
+@@ -8277,6 +9899,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -3990,7 +2644,7 @@ index 4b5a702..1d9b7f6 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +9915,12 @@ def feedback():
+@@ -8355,12 +9999,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -4005,7 +2659,7 @@ index 4b5a702..1d9b7f6 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +10174,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +10258,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -4016,18 +2670,11 @@ index 4b5a702..1d9b7f6 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8815,75 +10377,553 @@ def materials_delete(doc_id):
-     return jsonify({"ok": False, "error": "Could not remove that item."}), 400
+@@ -8820,8 +10466,23 @@ def advisor_avatar():
+     """The photo shown beside advisor replies.
  
- 
--@app.route("/advisor_avatar.jpg")
--def advisor_avatar():
--    """The photo shown beside advisor replies.
-+@app.route("/advisor_avatar.jpg")
-+def advisor_avatar():
-+    """The photo shown beside advisor replies.
-+
-+    An uploaded photo lives in Postgres so it survives redeploys; the bundled
+     An uploaded photo lives in Postgres so it survives redeploys; the bundled
+-    file is the fallback when nothing has been uploaded.
 +    file is the fallback when nothing has been uploaded. "No photo — show
 +    initials instead" (a setting, since the default advisor isn't a row in
 +    the advisors table) takes priority over both.
@@ -4036,7 +2683,7 @@ index 4b5a702..1d9b7f6 100644
 +    cache — this route runs on every page load across every worker, and a
 +    stale cache here means the admin can toggle this setting all day and
 +    some (or all) visitors keep seeing the old photo indefinitely.
-+    """
+     """
 +    settings = load_settings(force=True)
 +    if settings.get("avatar_no_photo"):
 +        name = settings.get("avatar_name") or CONFIG["persona_name"]
@@ -4045,30 +2692,29 @@ index 4b5a702..1d9b7f6 100644
 +        resp.headers["Cache-Control"] = "no-cache"
 +        return resp
 +
-+    stored = load_avatar()
-+    if stored:
-+        data, mime, updated = stored
-+        resp = app.response_class(data, mimetype=mime or "image/jpeg")
-+        # Change the tag when the photo changes so browsers refetch it
-+        try:
-+            resp.headers["ETag"] = f'"{int(updated.timestamp())}"'
-+        except Exception:
-+            pass
-+        resp.headers["Cache-Control"] = "no-cache"
-+        return resp
-+    return send_from_directory(".", "advisor_avatar.jpg")
-+
-+
-+@app.route("/admin/avatar", methods=["POST"])
-+@admin_required
-+def admin_upload_avatar():
+     stored = load_avatar()
+     if stored:
+         data, mime, updated = stored
+@@ -8839,28 +10500,38 @@ def advisor_avatar():
+ @app.route("/admin/avatar", methods=["POST"])
+ @admin_required
+ def admin_upload_avatar():
+-    """Replace the advisor photo."""
+-    file = request.files.get("avatar")
+-    if not file or not file.filename:
+-        flash("Choose an image first.")
 +    """Save the default advisor's photo, name, initials toggle and
 +    scheduling link — one form, same shape as a named advisor's save."""
 +    scheduling_url = (request.form.get("default_scheduling_url") or "").strip()
 +    if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
 +        flash("The scheduling link needs to start with http:// or https://.")
-+        return redirect(url_for("admin_dashboard"))
-+
+         return redirect(url_for("admin_dashboard"))
+ 
+-    raw = file.read()
+-    if len(raw) > AVATAR_MAX_BYTES:
+-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
+-        return redirect(url_for("admin_dashboard"))
 +    file = request.files.get("avatar")
 +    if file and file.filename:
 +        raw = file.read()
@@ -4082,10 +2728,19 @@ index 4b5a702..1d9b7f6 100644
 +            return redirect(url_for("admin_dashboard"))
 +        data, mime = prepare_avatar(raw)
 +        store_avatar(data, mime)
-+
+ 
+-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+-        flash("Use a JPG, PNG, WEBP or GIF image.")
+-        return redirect(url_for("admin_dashboard"))
 +    name = (request.form.get("avatar_name") or "").strip()[:60]
 +    save_setting("avatar_name", name)
-+
+ 
+-    data, mime = prepare_avatar(raw)
+-    if store_avatar(data, mime):
+-        flash("✓ Advisor photo updated. Participants will see it immediately.")
+-    else:
+-        flash("Could not save the photo — check the database connection.")
 +    # An uploaded file always wins over a stale "no photo" checkbox — same
 +    # priority as a named advisor's form.
 +    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
@@ -4094,24 +2749,14 @@ index 4b5a702..1d9b7f6 100644
 +    save_setting("default_scheduling_url", scheduling_url[:500])
 +
 +    flash("✓ Default advisor saved.")
-+    return redirect(url_for("admin_dashboard"))
-+
-+
-+@app.route("/admin/avatar/delete", methods=["POST"])
-+@admin_required
-+def admin_delete_avatar():
-+    """Revert to the photo bundled with the app."""
-+    if clear_avatar():
-+        flash("Reverted to the bundled advisor photo.")
-+    else:
-+        flash("Could not revert the photo.")
-+    return redirect(url_for("admin_dashboard"))
-+
-+
-+# ---------------------------------------------------------------------------
-+# Admin panel
-+# ---------------------------------------------------------------------------
-+
+     return redirect(url_for("admin_dashboard"))
+ 
+ 
+@@ -8879,11 +10550,464 @@ def admin_delete_avatar():
+ # Admin panel
+ # ---------------------------------------------------------------------------
+ 
+-ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 +ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 +<html lang="en"><head>
 +<meta charset="UTF-8" />
@@ -4371,22 +3016,7 @@ index 4b5a702..1d9b7f6 100644
 +      assistant or to other advisors unless you're explicitly told otherwise.
 +      They're used only in your own sessions, alongside the shared J3P base.
 +    </p>
- 
--    An uploaded photo lives in Postgres so it survives redeploys; the bundled
--    file is the fallback when nothing has been uploaded.
--    """
--    stored = load_avatar()
--    if stored:
--        data, mime, updated = stored
--        resp = app.response_class(data, mimetype=mime or "image/jpeg")
--        # Change the tag when the photo changes so browsers refetch it
--        try:
--            resp.headers["ETag"] = f'"{int(updated.timestamp())}"'
--        except Exception:
--            pass
--        resp.headers["Cache-Control"] = "no-cache"
--        return resp
--    return send_from_directory(".", "advisor_avatar.jpg")
++
 +    {% with messages = get_flashed_messages() %}
 +      {% if messages %}
 +        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
@@ -4406,7 +3036,7 @@ index 4b5a702..1d9b7f6 100644
 +        {% endfor %}
 +      </ul>
 +    </div>
- 
++
 +    <div class="card">
 +      <h2>Your personality assessment</h2>
 +      {% if personality %}
@@ -4428,15 +3058,7 @@ index 4b5a702..1d9b7f6 100644
 +        {% if personality %}Retake assessment{% else %}Take assessment{% endif %}
 +      </a>
 +    </div>
- 
--@app.route("/admin/avatar", methods=["POST"])
--@admin_required
--def admin_upload_avatar():
--    """Replace the advisor photo."""
--    file = request.files.get("avatar")
--    if not file or not file.filename:
--        flash("Choose an image first.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Your 360 feedback</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
@@ -4465,12 +3087,7 @@ index 4b5a702..1d9b7f6 100644
 +        </form>
 +      {% endif %}
 +    </div>
- 
--    raw = file.read()
--    if len(raw) > AVATAR_MAX_BYTES:
--        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
--              f"{AVATAR_MAX_BYTES // 1048576} MB.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add a document</h2>
 +      <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
@@ -4481,11 +3098,7 @@ index 4b5a702..1d9b7f6 100644
 +        </div>
 +      </form>
 +    </div>
- 
--    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
--    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
--        flash("Use a JPG, PNG, WEBP or GIF image.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add a folder</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -4503,13 +3116,7 @@ index 4b5a702..1d9b7f6 100644
 +      </form>
 +      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
 +    </div>
- 
--    data, mime = prepare_avatar(raw)
--    if store_avatar(data, mime):
--        flash("✓ Advisor photo updated. Participants will see it immediately.")
--    else:
--        flash("Could not save the photo — check the database connection.")
--    return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add from a URL</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -4526,7 +3133,7 @@ index 4b5a702..1d9b7f6 100644
 +        </div>
 +      </form>
 +    </div>
- 
++
 +    <script>
 +      (function() {
 +        const folderInput = document.getElementById("portal-folder-input");
@@ -4535,16 +3142,7 @@ index 4b5a702..1d9b7f6 100644
 +        const form = document.getElementById("portal-folder-form");
 +        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
 +        if (!folderInput) return;
- 
--@app.route("/admin/avatar/delete", methods=["POST"])
--@admin_required
--def admin_delete_avatar():
--    """Revert to the photo bundled with the app."""
--    if clear_avatar():
--        flash("Reverted to the bundled advisor photo.")
--    else:
--        flash("Could not revert the photo.")
--    return redirect(url_for("admin_dashboard"))
++
 +        folderInput.addEventListener("change", () => {
 +          const all = Array.from(folderInput.files || []);
 +          const supported = all.filter(f => SUPPORTED.test(f.name));
@@ -4562,7 +3160,7 @@ index 4b5a702..1d9b7f6 100644
 +          preview.textContent = msg;
 +          preview.style.display = "block";
 +        });
- 
++
 +        form.addEventListener("submit", (e) => {
 +          const supported = Array.from(folderInput.files || []).filter(f => SUPPORTED.test(f.name));
 +          if (supported.length === 0) {
@@ -4575,10 +3173,7 @@ index 4b5a702..1d9b7f6 100644
 +        });
 +      })();
 +    </script>
- 
--# ---------------------------------------------------------------------------
--# Admin panel
--# ---------------------------------------------------------------------------
++
 +    <div class="card">
 +      <h2>Your documents</h2>
 +      {% if documents %}
@@ -4614,8 +3209,7 @@ index 4b5a702..1d9b7f6 100644
 +    </div>
 +  </div>
 +</body></html>"""
- 
--ADMIN_LOGIN_HTML = """<!DOCTYPE html>
++
 +ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
  <html lang="en"><head>
  <meta charset="UTF-8" />
@@ -4625,7 +3219,7 @@ index 4b5a702..1d9b7f6 100644
  <link rel="icon" href="{{ cfg.favicon_url }}" />
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8896,74 +10936,108 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8896,74 +11020,108 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
    *, *::before, *::after { box-sizing: border-box; }
    body {
      margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -4790,7 +3384,7 @@ index 4b5a702..1d9b7f6 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9089,15 +11163,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +11247,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -4864,7 +3458,7 @@ index 4b5a702..1d9b7f6 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +11249,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +11333,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -4880,7 +3474,7 @@ index 4b5a702..1d9b7f6 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +11266,13 @@ form.upload {
+@@ -9133,8 +11350,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -4896,7 +3490,7 @@ index 4b5a702..1d9b7f6 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +11308,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +11392,19 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -4916,7 +3510,7 @@ index 4b5a702..1d9b7f6 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +11377,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +11461,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -4940,7 +3534,7 @@ index 4b5a702..1d9b7f6 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +11492,189 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +11576,189 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -5131,7 +3725,7 @@ index 4b5a702..1d9b7f6 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +11708,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +11792,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -5184,7 +3778,7 @@ index 4b5a702..1d9b7f6 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +11763,33 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +11847,33 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -5218,7 +3812,7 @@ index 4b5a702..1d9b7f6 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +11799,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +11883,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -5277,7 +3871,7 @@ index 4b5a702..1d9b7f6 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +11848,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +11932,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -5288,7 +3882,7 @@ index 4b5a702..1d9b7f6 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +11899,15 @@ input[type="file"], input[type="text"] {
+@@ -9466,12 +11983,15 @@ input[type="file"], input[type="text"] {
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -5306,7 +3900,7 @@ index 4b5a702..1d9b7f6 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +11916,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,6 +12000,44 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -5351,7 +3945,7 @@ index 4b5a702..1d9b7f6 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9509,14 +11983,123 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +12067,123 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -5481,7 +4075,7 @@ index 4b5a702..1d9b7f6 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +12146,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +12230,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -5513,7 +4107,7 @@ index 4b5a702..1d9b7f6 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +12189,9 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +12273,9 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -5523,7 +4117,7 @@ index 4b5a702..1d9b7f6 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +12354,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +12438,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -5538,7 +4132,7 @@ index 4b5a702..1d9b7f6 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +12396,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +12480,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -5547,7 +4141,7 @@ index 4b5a702..1d9b7f6 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +12425,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +12509,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -5565,7 +4159,7 @@ index 4b5a702..1d9b7f6 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +12487,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +12571,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -5593,7 +4187,7 @@ index 4b5a702..1d9b7f6 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +12695,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +12779,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -5603,7 +4197,7 @@ index 4b5a702..1d9b7f6 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +12716,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +12800,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -5626,7 +4220,7 @@ index 4b5a702..1d9b7f6 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +12849,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +12933,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -5637,7 +4231,7 @@ index 4b5a702..1d9b7f6 100644
  
  </div>
  
-@@ -10478,6 +13080,15 @@ input[type="file"], input[type="text"] {
+@@ -10478,6 +13164,15 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -5653,7 +4247,7 @@ index 4b5a702..1d9b7f6 100644
            open(form, {
              message: "Delete this document and every embedded chunk from the "
                     + "knowledge base? The advisor will stop drawing on it. "
-@@ -10488,6 +13099,280 @@ input[type="file"], input[type="text"] {
+@@ -10488,6 +13183,280 @@ input[type="file"], input[type="text"] {
          }, true);
        })();
      </script>
@@ -5934,7 +4528,7 @@ index 4b5a702..1d9b7f6 100644
  </body></html>"""
  
  
-@@ -10511,6 +13396,231 @@ def admin_logout():
+@@ -10511,6 +13480,231 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -6166,7 +4760,7 @@ index 4b5a702..1d9b7f6 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +13633,25 @@ def admin_dashboard():
+@@ -10523,11 +13717,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -6192,7 +4786,7 @@ index 4b5a702..1d9b7f6 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +13659,13 @@ def admin_dashboard():
+@@ -10535,7 +13743,13 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -6207,7 +4801,7 @@ index 4b5a702..1d9b7f6 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +13675,23 @@ def admin_dashboard():
+@@ -10545,9 +13759,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -6231,7 +4825,7 @@ index 4b5a702..1d9b7f6 100644
      )
  
  
-@@ -10631,15 +13775,34 @@ def admin_save_advisor():
+@@ -10631,15 +13859,34 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -6271,7 +4865,7 @@ index 4b5a702..1d9b7f6 100644
          flash(f"✓ {name} saved — links are listed below.")
      else:
          flash("Could not save the advisor — check the database connection.")
-@@ -10657,6 +13820,61 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +13904,61 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -6333,7 +4927,7 @@ index 4b5a702..1d9b7f6 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +13890,14 @@ def admin_settings():
+@@ -10672,21 +13974,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -6357,7 +4951,7 @@ index 4b5a702..1d9b7f6 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +13992,34 @@ def admin_upload_folder():
+@@ -10781,22 +14076,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -6398,7 +4992,7 @@ index 4b5a702..1d9b7f6 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +14032,6 @@ def admin_upload_folder():
+@@ -10809,7 +14116,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -6406,7 +5000,7 @@ index 4b5a702..1d9b7f6 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +14060,10 @@ def admin_upload_folder():
+@@ -10838,7 +14144,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -6418,7 +5012,7 @@ index 4b5a702..1d9b7f6 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +14071,12 @@ def admin_upload_folder():
+@@ -10846,14 +14155,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -6433,7 +5027,7 @@ index 4b5a702..1d9b7f6 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +14084,11 @@ def admin_upload_folder():
+@@ -10861,8 +14168,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -6447,7 +5041,7 @@ index 4b5a702..1d9b7f6 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +14269,34 @@ def admin_upload_url():
+@@ -11043,25 +14353,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -6489,7 +5083,7 @@ index 4b5a702..1d9b7f6 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +14317,10 @@ def admin_upload_url():
+@@ -11082,7 +14401,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -6501,7 +5095,7 @@ index 4b5a702..1d9b7f6 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +14328,7 @@ def admin_upload_url():
+@@ -11090,8 +14412,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -6511,7 +5105,7 @@ index 4b5a702..1d9b7f6 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +14338,14 @@ def admin_upload_url():
+@@ -11101,14 +14422,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -6529,7 +5123,7 @@ index 4b5a702..1d9b7f6 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +14358,32 @@ def admin_upload_url():
+@@ -11121,32 +14442,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -6578,7 +5172,7 @@ index 4b5a702..1d9b7f6 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +14397,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +14481,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
