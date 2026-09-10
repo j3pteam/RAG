@@ -3265,6 +3265,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
     const PERSONA_NAME = {{ cfg.persona_name|tojson }};
+    // Which advisor THIS page load is actually for — sent with every /chat
+    // request so a reply always reflects the advisor this specific tab is
+    // showing, not whatever a session cookie shared with another tab
+    // happens to currently hold (visiting a different advisor's link in one
+    // tab shouldn't silently change what an already-open tab responds as).
+    const PAGE_ADVISOR_SLUG = {{ page_advisor_slug|tojson }};
 
     // -------------------------------------------------------------
     // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
@@ -5796,6 +5802,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           const fd = new FormData();
           fd.append("message", text || "Please review these attached documents.");
           fd.append("folder_name", folderNameForRequest);
+          fd.append("advisor_slug", PAGE_ADVISOR_SLUG);
           folderFilesForRequest.forEach(f => fd.append("files", f, f.name));
           res = await fetch("/chat", { method: "POST", body: fd });
         } else if (paperclipFilesForRequest.length === 1) {
@@ -5803,6 +5810,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           const fd = new FormData();
           fd.append("message", text || "Please review this attached file.");
           fd.append("file", paperclipFilesForRequest[0]);
+          fd.append("advisor_slug", PAGE_ADVISOR_SLUG);
           res = await fetch("/chat", { method: "POST", body: fd });
         } else if (paperclipFilesForRequest.length > 1) {
           // Multi-file paperclip — use the same multi-file field as folder,
@@ -5810,12 +5818,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
           const fd = new FormData();
           fd.append("message", text || "Please review these attached files.");
           fd.append("attachment_label", "Attachments");   // shown in chat/logs
+          fd.append("advisor_slug", PAGE_ADVISOR_SLUG);
           paperclipFilesForRequest.forEach(f => fd.append("files", f, f.name));
           res = await fetch("/chat", { method: "POST", body: fd });
         } else {
           res = await fetch("/chat", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: text }),
+            body: JSON.stringify({ message: text, advisor_slug: PAGE_ADVISOR_SLUG }),
           });
         }
         // Railway's proxy returns plain text like "upstream error" on a 502,
@@ -9163,6 +9172,7 @@ def _render_chat(force_scheduling=None, advisor=None):
         personality_enabled=_effective("personality_override",
                                         "personality_assessment_enabled", True),
         avatar_version=int(datetime.now().timestamp()),
+        page_advisor_slug=(active["slug"] if active else ""),
     )
 
 
@@ -9355,12 +9365,43 @@ def chat():
 
     if uploaded_file or folder_files:
         user_input = (request.form.get("message") or "").strip()
+        advisor_slug_hint = request.form.get("advisor_slug")
     else:
         data = request.get_json(silent=True) or {}
         user_input = (data.get("message") or "").strip()
+        advisor_slug_hint = data.get("advisor_slug")
 
     if not user_input and not uploaded_file and not folder_files:
         return jsonify({"error": "Empty message"}), 400
+
+    # Trust the page's own advisor context over a session cookie that could
+    # have been changed by a *different* browser tab in the meantime — the
+    # session is shared across every tab, but each page load should only
+    # ever respond as the advisor it actually rendered. advisor_slug_hint is
+    # sent on every request (including "" for the default persona), so this
+    # reconciles session state to match this specific page whenever a hint
+    # was actually provided, rather than trusting whatever an unrelated tab
+    # most recently left behind. advisor_slug_hint is None (not sent at all)
+    # only for a stale cached page from before this existed — left alone,
+    # falling back to whatever's already in the session, for compatibility.
+    #
+    # The one case NOT trusted from the client: a participant link. That
+    # link's own assigned advisor is the only authoritative source there,
+    # since the link exists to fix who someone reaches, not let a crafted
+    # request pick a different one.
+    participant_link_token = session.get("participant_link_token", "")
+    if participant_link_token:
+        link = get_participant_link(participant_link_token)
+        linked_slug = link["advisor_slug"] if link else ""
+        if linked_slug:
+            session["advisor_slug"] = linked_slug
+        else:
+            session.pop("advisor_slug", None)
+    elif advisor_slug_hint is not None:
+        if advisor_slug_hint and get_advisor(advisor_slug_hint):
+            session["advisor_slug"] = advisor_slug_hint
+        else:
+            session.pop("advisor_slug", None)
 
     # Extension-based routing between document vs image
     DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
