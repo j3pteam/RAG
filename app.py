@@ -1050,6 +1050,16 @@ def current_user() -> str:
     return session.get("user_email", "")
 
 
+def has_persistent_identity() -> bool:
+    """True for anyone who should keep their conversation across visits —
+    signed in with an email, or using their own dedicated participant
+    link. Deliberately separate from current_user(): that one specifically
+    means "signed in with an email" and gates email-specific features
+    (login_required), while this is the broader "does this session have
+    a stable identity at all" check used for history continuity."""
+    return bool(current_user()) or bool(session.get("participant_link_token"))
+
+
 def login_required(f):
     """Require a signed-in participant when REQUIRE_LOGIN is on."""
     @wraps(f)
@@ -6088,8 +6098,11 @@ def _history_ensure_table(conn):
 def _history_token() -> str:
     """Identifies whose transcript this is.
 
-    Signed in, it's derived from the email so the conversation continues across
-    visits and devices. Anonymous, it's a random per-browser token as before.
+    Signed in, it's derived from the email so the conversation continues
+    across visits and devices. On a dedicated participant link, it's
+    derived from that link's own token, for the same reason — that's the
+    whole point of issuing someone their own link. Anonymous, it's a
+    random per-browser token as before.
     """
     email = session.get("user_email", "")
     if email:
@@ -6097,6 +6110,12 @@ def _history_token() -> str:
         digest = hashlib.sha256(
             (app.secret_key + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
         return "u_" + digest
+    link_token = session.get("participant_link_token", "")
+    if link_token:
+        import hashlib
+        digest = hashlib.sha256(
+            (app.secret_key + "|link|" + link_token).encode("utf-8")).hexdigest()[:32]
+        return "l_" + digest
     token = session.get("chat_token")
     if not token:
         token = os.urandom(16).hex()
@@ -6876,6 +6895,166 @@ def set_advisor_expertise(slug: str, expertise: str) -> bool:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Participant links — one dedicated, admin-issued link per specific person.
+# Distinct from advisor links (those are for an advisor's own identity and
+# knowledge base); these are for controlling and tracking exactly who can
+# reach the chat at all, independent of the general/shared link. Turning one
+# off blocks access immediately without touching that participant's history.
+# ---------------------------------------------------------------------------
+
+def _participant_links_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_links (
+                id            SERIAL PRIMARY KEY,
+                token         TEXT UNIQUE NOT NULL,
+                label         TEXT NOT NULL,
+                advisor_slug  TEXT,
+                enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_used_at  TIMESTAMPTZ
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS participant_links_token_idx
+            ON participant_links (token)
+        """)
+    conn.commit()
+
+
+def create_participant_link(label: str, advisor_slug: str = "") -> dict:
+    """Generates a new participant link. Returns {"ok", "token"/"error"}."""
+    label = (label or "").strip()[:200]
+    if not label:
+        return {"ok": False, "error": "A label is required."}
+    conn = _settings_db_conn()
+    if not conn:
+        return {"ok": False, "error": "Database not available."}
+    try:
+        _participant_links_ensure_table(conn)
+        token = secrets.token_urlsafe(24)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO participant_links (token, label, advisor_slug)
+                VALUES (%s, %s, %s)
+            """, (token, label, (advisor_slug or None)))
+        conn.commit()
+        return {"ok": True, "token": token}
+    except Exception as e:
+        app.logger.error(f"[participant-links] create failed: {e}")
+        return {"ok": False, "error": "Could not create the link."}
+    finally:
+        conn.close()
+
+
+def list_participant_links() -> list:
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, token, label, advisor_slug, enabled, created_at, last_used_at
+                FROM participant_links ORDER BY created_at DESC
+            """)
+            for row in cur.fetchall():
+                out.append({
+                    "id": row[0], "token": row[1], "label": row[2],
+                    "advisor_slug": row[3] or "", "enabled": bool(row[4]),
+                    "created_at": row[5], "last_used_at": row[6],
+                })
+    except Exception as e:
+        app.logger.error(f"[participant-links] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def get_participant_link(token: str):
+    """The link's row if the token exists at all (regardless of enabled
+    state) — callers decide what to do with a disabled one; this doesn't
+    silently treat disabled the same as not-found."""
+    if not token:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, token, label, advisor_slug, enabled, created_at, last_used_at
+                FROM participant_links WHERE token = %s
+            """, (token,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "token": row[1], "label": row[2],
+                "advisor_slug": row[3] or "", "enabled": bool(row[4]),
+                "created_at": row[5], "last_used_at": row[6]}
+    except Exception as e:
+        app.logger.error(f"[participant-links] read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def touch_participant_link(token: str):
+    """Best-effort 'last used' stamp — failure here should never block the
+    participant from getting into their chat."""
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE participant_links SET last_used_at = NOW() WHERE token = %s",
+                        (token,))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[participant-links] touch failed: {e}")
+    finally:
+        conn.close()
+
+
+def set_participant_link_enabled(link_id: int, enabled: bool) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE participant_links SET enabled = %s WHERE id = %s",
+                        (enabled, link_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[participant-links] toggle failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def delete_participant_link(link_id: int) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM participant_links WHERE id = %s", (link_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[participant-links] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def active_persona_name() -> str:
     """The name to log against this interaction — the named advisor this
     session is with, if any, else the shared default persona name. Used so
@@ -7025,7 +7204,9 @@ def participant_token() -> str:
     Deliberately NOT the chat history token: that one is cleared by New
     Conversation and regenerated for anonymous visitors on each visit, which
     would silently orphan someone's library. Signed in, this is derived from
-    the email so the library follows them across devices.
+    the email so the library follows them across devices — and on a
+    dedicated participant link, from that link's own token, for the same
+    cross-device reason.
     """
     email = session.get("user_email", "")
     if email:
@@ -7034,6 +7215,13 @@ def participant_token() -> str:
             (app.secret_key + "|materials|" + email.lower()).encode("utf-8")
         ).hexdigest()[:32]
         return "m_" + digest
+    link_token = session.get("participant_link_token", "")
+    if link_token:
+        import hashlib
+        digest = hashlib.sha256(
+            (app.secret_key + "|materials|link|" + link_token).encode("utf-8")
+        ).hexdigest()[:32]
+        return "ml_" + digest
     token = session.get("materials_token")
     if not token:
         token = "a_" + os.urandom(16).hex()
@@ -8722,9 +8910,10 @@ def _render_chat(force_scheduling=None, advisor=None):
     # happens to serve a given visitor, sometimes indefinitely.
     settings = load_settings(force=True)
 
-    # Anonymous visitors start fresh each visit. Signed-in participants keep
-    # their history — that continuity is the point of signing in.
-    if not current_user():
+    # Anonymous visitors start fresh each visit. Signed-in participants and
+    # anyone on their own dedicated participant link keep their history —
+    # that continuity is the point of either one.
+    if not has_persistent_identity():
         clear_history()
     else:
         session["messages"] = []
@@ -8910,6 +9099,49 @@ def _advisor_not_found(slug):
             f"an advisor profile. Check the Advisors section of the admin panel.</p>"
             f"<p><a href='/' style='color:#9D432C'>Go to the default advisor</a></p>"
             f"</div>"), 404
+
+
+def _participant_link_unavailable(reason):
+    if reason == "disabled":
+        heading = "This link is no longer active"
+        body = "Access through this link has been turned off. Contact J3P if you believe this is a mistake."
+        code = 403
+    else:
+        heading = "Link not found"
+        body = "This link doesn't match an active participant link."
+        code = 404
+    return (f"<div style='font-family:sans-serif;padding:2.5rem;max-width:34rem'>"
+            f"<h2 style='color:#27334A'>{heading}</h2>"
+            f"<p style='color:#6B7280'>{body}</p>"
+            f"</div>"), code
+
+
+@app.route("/p/<token>")
+@paywall.paywall_required
+def participant_link_index(token):
+    """A specific participant's own dedicated link — admin-issued and
+    admin-revocable. Deliberately not behind login_required: possessing
+    this link's own secret token already establishes who they are, the
+    same way a password would, so a second sign-in on top of it would just
+    be redundant friction."""
+    link = get_participant_link(token)
+    if not link:
+        app.logger.info(f"[participant-links] unknown token requested: {token[:8]}\u2026")
+        return _participant_link_unavailable("not_found")
+    if not link["enabled"]:
+        return _participant_link_unavailable("disabled")
+
+    session["participant_link_token"] = token
+    session.permanent = True
+    touch_participant_link(token)
+    session.pop("force_scheduling", None)
+
+    advisor = get_advisor(link["advisor_slug"]) if link["advisor_slug"] else None
+    if not advisor:
+        # This link is for the default/shared persona — make sure a stale
+        # advisor_slug from some earlier visit on this browser can't bleed in.
+        session.pop("advisor_slug", None)
+    return _render_chat(advisor=advisor)
 
 
 @app.route("/no-scheduling")
@@ -11677,6 +11909,7 @@ input[type="file"], input[type="text"] {
     <button type="button" class="tab-btn active" data-tab="overview">Overview</button>
     <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
     <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
+    <button type="button" class="tab-btn" data-tab="participant-links">Participant Links</button>
     <button type="button" class="tab-btn" data-tab="activity">Activity</button>
     <button type="button" class="tab-btn" data-tab="biometric">Biometric Data</button>
     <button type="button" class="tab-btn" data-tab="settings">Settings</button>
@@ -12326,6 +12559,78 @@ input[type="file"], input[type="text"] {
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
+  </div>
+  </div>
+
+  <div class="tab-pane" data-tab="participant-links">
+  <h2 class="group-heading">Participant Links</h2>
+
+  <div class="section">
+    <h2>Add a participant link</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      A dedicated link for one specific person. Their conversation stays
+      with them across visits and devices, the same as signing in — and
+      you can turn access off at any time without deleting their history.
+    </p>
+    <form method="POST" action="{{ url_for('admin_create_participant_link') }}" class="upload">
+      <input type="text" name="label" placeholder="Participant name or label (e.g. Dr. Jane Smith)" required />
+      <select name="advisor_slug" title="Which advisor this participant lands on">
+        <option value="">Default persona</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">{{ adv.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn">Create link</button>
+    </form>
+  </div>
+
+  <div class="section">
+    <h2>Existing links{% if participant_links %} ({{ participant_links|length }}){% endif %}</h2>
+    {% if participant_links %}
+    <table class="kb-table">
+      <tr>
+        <th>Label</th><th>Advisor</th><th>Link</th><th>Status</th>
+        <th>Created</th><th>Last used</th><th></th>
+      </tr>
+      {% for l in participant_links %}
+      <tr>
+        <td>{{ l.label }}</td>
+        <td class="muted">{{ advisor_names.get(l.advisor_slug, "Default") if l.advisor_slug else "Default" }}</td>
+        <td>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
+               class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
+            <button type="button" class="copy-link" data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
+            <button type="button" class="share-link" data-url="{{ base_url }}/p/{{ l.token }}"
+                    data-advisor="{{ l.label }}">Share</button>
+          </div>
+        </td>
+        <td>
+          {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
+          {% else %}<span class="muted">Disabled</span>{% endif %}
+        </td>
+        <td class="muted">{{ l.created_at.strftime("%Y-%m-%d") if l.created_at else "" }}</td>
+        <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d %H:%M") if l.last_used_at else "Never" }}</td>
+        <td>
+          <div style="display: flex; gap: 0.4rem;">
+            <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
+              <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
+              <button type="submit" class="btn" style="font-size: 0.64rem;">
+                {{ "Disable" if l.enabled else "Enable" }}
+              </button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
+                  onsubmit="return confirm('Delete the link for &quot;{{ l.label }}&quot;? This can\'t be undone.');">
+              <button type="submit" class="btn-danger">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No participant links yet.</p>
+    {% endif %}
   </div>
   </div>
 
@@ -13819,6 +14124,7 @@ def admin_dashboard():
         advisor_docs=_advisor_docs,
         initials_for=initials_for,
         personality_summary_tag=personality_summary_tag,
+        participant_links=list_participant_links(),
         biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
@@ -14052,6 +14358,40 @@ def admin_save_advisor_expertise(slug):
     flash(f"✓ Saved {advisor['name']}'s areas of expertise." if expertise
           else f"✓ Cleared {advisor['name']}'s areas of expertise.")
     return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/participant-links", methods=["POST"])
+@admin_required
+def admin_create_participant_link():
+    label = (request.form.get("label") or "").strip()
+    advisor_slug = (request.form.get("advisor_slug") or "").strip()
+    result = create_participant_link(label, advisor_slug)
+    if result["ok"]:
+        flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
+    else:
+        flash(result["error"])
+    return redirect(url_for("admin_dashboard") + "#participant-links")
+
+
+@app.route("/admin/participant-links/toggle/<int:link_id>", methods=["POST"])
+@admin_required
+def admin_toggle_participant_link(link_id):
+    enable = request.form.get("enable") == "1"
+    if set_participant_link_enabled(link_id, enable):
+        flash("✓ Link enabled." if enable else "✓ Link disabled — access through it is blocked immediately.")
+    else:
+        flash("Could not update that link.")
+    return redirect(url_for("admin_dashboard") + "#participant-links")
+
+
+@app.route("/admin/participant-links/delete/<int:link_id>", methods=["POST"])
+@admin_required
+def admin_delete_participant_link(link_id):
+    if delete_participant_link(link_id):
+        flash("✓ Link removed.")
+    else:
+        flash("Could not remove that link.")
+    return redirect(url_for("admin_dashboard") + "#participant-links")
 
 
 @app.route("/admin/settings", methods=["POST"])
