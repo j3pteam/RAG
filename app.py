@@ -12515,7 +12515,8 @@ input[type="file"], input[type="text"] {
                oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
         <div style="display: flex; gap: 0.4rem; align-items: center;">
           <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
-                 style="flex: 1 1 auto; min-width: 0;" />
+                 style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
                   style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
         </div>
