@@ -1524,13 +1524,16 @@ def advisor_portal_required(f):
 
 def advisor_portal_onboarded_required(f):
     """Same login check as advisor_portal_required, plus: the advisor must
-    have completed their personality assessment before reaching anything
-    else in the portal. Applied to every portal route except the
-    assessment page itself and logout — so there's no redirect loop, and
-    no way to reach uploads, deletes, or the document list without
-    completing it first. New and existing advisors alike are held to
-    this the first time they land on a gated route; retaking later, once
-    already completed, is optional."""
+    have completed both required onboarding steps — the personality
+    assessment, then the self behavioral assessment — before reaching
+    anything else in the portal. Applied to every portal route except the
+    two assessment pages themselves and logout — so there's no redirect
+    loop, and no way to reach uploads, deletes, or the document list
+    without completing both first. Whichever step isn't done yet is where
+    this sends them, regardless of which URL they actually landed on, so
+    the two-step sequence holds no matter the entry point. New and
+    existing advisors alike are held to this the first time they land on
+    a gated route; retaking later, once already completed, is optional."""
     @wraps(f)
     def wrapper(*args, **kwargs):
         slug = session.get("advisor_owner_slug")
@@ -1538,6 +1541,8 @@ def advisor_portal_onboarded_required(f):
             return redirect(url_for("advisor_portal_login_info"))
         if not get_advisor_personality(slug):
             return redirect(url_for("advisor_portal_personality"))
+        if not get_advisor_behavioral(slug):
+            return redirect(url_for("advisor_portal_behavioral"))
         return f(*args, **kwargs)
     return wrapper
 
@@ -6733,6 +6738,7 @@ def advisors_with_detail():
         adv["documents"] = [t for t, slugs in document_advisor_map().items()
                             if adv["slug"] in slugs]
         adv["personality"] = get_advisor_personality(adv["slug"])
+        adv["behavioral"] = get_advisor_behavioral(adv["slug"])
         adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
         adv["suggested_bio"] = (
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
@@ -7417,6 +7423,104 @@ def _tipi_bucket(score) -> int:
     return max(1, min(5, bucket))
 
 
+# ---------------------------------------------------------------------------
+# Advisor self behavioral assessment — the second required onboarding step,
+# analogous to the self-rating portion of a 360-degree assessment: not
+# personality traits (that's the TIPI above), but how an advisor rates their
+# own leadership behaviors. Deliberately a different rating scale (frequency,
+# not agreement) so it reads as its own instrument, not a TIPI variant.
+# ---------------------------------------------------------------------------
+
+BEHAVIORAL_DOMAIN_LABELS = {
+    "communication": "Communication",
+    "accountability": "Accountability",
+    "self_awareness": "Self-Awareness",
+    "developing_others": "Developing Others",
+    "decision_making": "Decision-Making",
+    "conflict_management": "Conflict Management",
+    "strategic_thinking": "Strategic Thinking",
+    "openness_to_feedback": "Openness to Feedback",
+}
+BEHAVIORAL_DOMAINS = list(BEHAVIORAL_DOMAIN_LABELS.keys())
+
+BEHAVIORAL_ITEMS = [
+    {"id": 1, "domain": "communication",
+     "text": "I deliver difficult feedback directly, while remaining respectful."},
+    {"id": 2, "domain": "communication",
+     "text": "I make sure people understand the reasoning behind a decision, not just the decision itself."},
+    {"id": 3, "domain": "accountability",
+     "text": "I hold people accountable for commitments, even when it's uncomfortable."},
+    {"id": 4, "domain": "accountability",
+     "text": "I follow through on what I say I'll do."},
+    {"id": 5, "domain": "self_awareness",
+     "text": "I stay composed under pressure, even in high-stakes moments."},
+    {"id": 6, "domain": "self_awareness",
+     "text": "I notice when my own emotions are affecting my judgment."},
+    {"id": 7, "domain": "developing_others",
+     "text": "I actively invest time in developing the people who report to me."},
+    {"id": 8, "domain": "developing_others",
+     "text": "I give credit to others rather than taking it for myself."},
+    {"id": 9, "domain": "decision_making",
+     "text": "I make timely decisions, even with incomplete information."},
+    {"id": 10, "domain": "decision_making",
+     "text": "I seek input from others before finalizing important decisions."},
+    {"id": 11, "domain": "conflict_management",
+     "text": "I address interpersonal conflict directly rather than letting it linger."},
+    {"id": 12, "domain": "conflict_management",
+     "text": "I stay curious about others' perspectives, even when I disagree with them."},
+    {"id": 13, "domain": "strategic_thinking",
+     "text": "I regularly step back from day-to-day tasks to think about longer-term goals."},
+    {"id": 14, "domain": "strategic_thinking",
+     "text": "I connect individual decisions to the broader mission or strategy."},
+    {"id": 15, "domain": "openness_to_feedback",
+     "text": "I actively seek feedback about my own blind spots."},
+    {"id": 16, "domain": "openness_to_feedback",
+     "text": "I change my approach when evidence suggests I should."},
+]
+
+BEHAVIORAL_SCALE = [
+    (1, "Rarely"), (2, "Occasionally"), (3, "Sometimes"), (4, "Often"), (5, "Almost always"),
+]
+
+
+def score_behavioral(answers: dict) -> dict:
+    """answers: {item_id (1-16): raw rating 1-5}. Returns {domain: average}
+    — a domain is only included if at least one of its items was answered."""
+    by_domain = {}
+    for item in BEHAVIORAL_ITEMS:
+        raw = answers.get(item["id"])
+        if raw is None:
+            raw = answers.get(str(item["id"]))
+        if raw is None:
+            continue
+        try:
+            raw = float(raw)
+        except (TypeError, ValueError):
+            continue
+        if not (1 <= raw <= 5):
+            continue
+        by_domain.setdefault(item["domain"], []).append(raw)
+    return {domain: round(sum(vals) / len(vals), 1)
+            for domain, vals in by_domain.items() if vals}
+
+
+def behavioral_summary_tag(scores: dict) -> str:
+    """Admin-facing only — never shown to participants and never fed to
+    the AI as a 'growth area' the way strengths are, since a self-admitted
+    growth area is materially more sensitive than a strength and isn't
+    this tool's place to expose, even internally in a prompt."""
+    if not scores:
+        return "—"
+    strengths = [BEHAVIORAL_DOMAIN_LABELS[d] for d, v in scores.items() if v >= 4.0]
+    growth = [BEHAVIORAL_DOMAIN_LABELS[d] for d, v in scores.items() if v <= 2.5]
+    parts = []
+    if strengths:
+        parts.append("Strong: " + ", ".join(strengths))
+    if growth:
+        parts.append("Growth area: " + ", ".join(growth))
+    return " · ".join(parts) if parts else "Balanced across domains"
+
+
 def _personality_ensure_table(conn):
     with conn.cursor() as cur:
         cur.execute("""
@@ -7603,6 +7707,75 @@ def get_advisor_personality(slug: str) -> dict:
         return {"scores": scores, "completed_at": row[5]}
     except Exception as e:
         app.logger.error(f"[advisor-personality] read failed: {e}")
+        return {}
+    finally:
+        conn.close()
+
+
+def _advisor_behavioral_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_behavioral (
+                advisor_slug TEXT PRIMARY KEY,
+                scores_json  TEXT NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_advisor_behavioral_scores(slug: str, domain_scores: dict) -> bool:
+    """domain_scores: {domain: 1-5 average}, from score_behavioral()."""
+    if not slug or not domain_scores:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_behavioral_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO advisor_behavioral (advisor_slug, scores_json, completed_at)
+                VALUES (%s, %s, NOW())
+                ON CONFLICT (advisor_slug) DO UPDATE SET
+                    scores_json = EXCLUDED.scores_json, completed_at = NOW()
+            """, (slug, _json.dumps(domain_scores)))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-behavioral] write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_advisor_behavioral(slug: str) -> dict:
+    """{scores: {domain: 1-5}, completed_at: datetime} or {} if never
+    completed."""
+    if not slug:
+        return {}
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _advisor_behavioral_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT scores_json, completed_at
+                FROM advisor_behavioral WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        try:
+            scores = _json.loads(row[0])
+        except (TypeError, ValueError):
+            return {}
+        if not scores:
+            return {}
+        return {"scores": scores, "completed_at": row[1]}
+    except Exception as e:
+        app.logger.error(f"[advisor-behavioral] read failed: {e}")
         return {}
     finally:
         conn.close()
@@ -9607,7 +9780,16 @@ def chat():
         "13. SAY THE HARD THING. Generic assistants hedge toward the "
         "agreeable. When the person's plan has a real problem, name it plainly "
         "in the first paragraph rather than burying it after praise. It is "
-        "acceptable to disagree with them outright.\n"
+        "acceptable to disagree with them outright.\n\n"
+        "17. NEVER SAY 'WEAKNESS'. This applies to every advisor persona, not "
+        "just the default voice, and to how you describe anyone — a "
+        "participant, an advisor, or a third party they mention. Never use "
+        "'weakness' or 'weaknesses'. Use constructive, coaching-appropriate "
+        "framing instead: 'growth area', 'area for development', 'area to "
+        "build', 'opportunity to strengthen' — or simply name the specific "
+        "behavior directly without labeling it at all. The same goes for "
+        "close synonyms used the same way — 'flaw', 'deficiency', 'shortcoming' "
+        "— when describing a person rather than, say, a plan or an argument.\n"
     )
 
     scope_guard = (
@@ -11116,6 +11298,28 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="card">
+      <h2>Your self behavioral assessment</h2>
+      {% if behavioral %}
+        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
+          Completed {{ behavioral.completed_at.strftime("%Y-%m-%d") if behavioral.completed_at else "" }}.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          The same kind of self-rating you'd give as part of a 360-degree
+          assessment — stays internal to J3P, never shown to participants.
+        </p>
+      {% else %}
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+          A short self-rating on leadership behaviors — communication,
+          accountability, decision-making, and a few others. About two
+          minutes, and there's no wrong answer.
+        </p>
+      {% endif %}
+      <a href="{{ url_for('advisor_portal_behavioral') }}" class="btn">
+        {% if behavioral %}Retake assessment{% else %}Take assessment{% endif %}
+      </a>
+    </div>
+
+    <div class="card">
       <h2>Your 360 feedback</h2>
       <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
         Upload your most recent 360-degree feedback report, if you have one.
@@ -11294,6 +11498,11 @@ ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
   header span { color: var(--gold); font-size: 0.76rem; letter-spacing: 0.2em; text-transform: uppercase; }
   .container { max-width: 640px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
   h1 { font-size: 1.4rem; font-weight: 500; margin: 0 0 0.4rem; }
+  .step-badge {
+    display: inline-block; background: var(--navy); color: var(--gold);
+    font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 0.25rem 0.6rem; border-radius: 2px; margin-bottom: 0.7rem;
+  }
   .subtitle { color: var(--muted); font-size: 0.88rem; line-height: 1.6; margin: 0 0 1.6rem; }
   .flash {
     background: #fff; border: 1px solid var(--gold); border-left: 3px solid var(--gold);
@@ -11349,12 +11558,14 @@ ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
     <span>Advisor Portal</span>
   </header>
   <div class="container">
+    {% if not existing %}<div class="step-badge">Step 1 of 2</div>{% endif %}
     <h1>{% if existing %}Your personality assessment{% else %}Complete your personality assessment{% endif %}</h1>
     <p class="subtitle">
       {% if existing %}You completed this before — answering again replaces your
       previous result.{% else %}Required before the rest of your portal opens up
       — a short, ten-item self-report (the TIPI, a published personality
-      measure). It takes about two minutes.{% endif %}
+      measure). It takes about two minutes. Next: a short self behavioral
+      assessment.{% endif %}
       This becomes the basis for the coaching-style description shown to
       participants — never scored as a test, and there's no wrong answer.
     </p>
@@ -11379,6 +11590,141 @@ ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
         </div>
         <div class="pq-labels"><span>Disagree strongly</span><span>Agree strongly</span></div>
       </div>
+      {% endfor %}
+      <div class="actions">
+        <button type="submit" class="btn">Submit</button>
+        {% if existing %}
+        <a href="{{ url_for('advisor_portal_view') }}" class="btn-secondary">Cancel</a>
+        {% endif %}
+      </div>
+    </form>
+  </div>
+</body></html>"""
+
+ADVISOR_PORTAL_BEHAVIORAL_HTML = """<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Self Behavioral Assessment — {{ advisor.name }} — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+    background: var(--paper); color: var(--navy); min-height: 100vh;
+  }
+  header {
+    background: var(--navy); border-bottom: 2px solid var(--gold);
+    padding: 0.9rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
+  }
+  header img { height: 40px; width: auto; display: block; }
+  .brand-divider { width: 1px; height: 24px; background: rgba(210,188,141,0.45); }
+  header span { color: var(--gold); font-size: 0.76rem; letter-spacing: 0.2em; text-transform: uppercase; }
+  .container { max-width: 680px; margin: 0 auto; padding: 2rem 1.5rem 3rem; }
+  h1 { font-size: 1.4rem; font-weight: 500; margin: 0 0 0.4rem; }
+  .step-badge {
+    display: inline-block; background: var(--navy); color: var(--gold);
+    font-size: 0.66rem; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 0.25rem 0.6rem; border-radius: 2px; margin-bottom: 0.7rem;
+  }
+  .subtitle { color: var(--muted); font-size: 0.88rem; line-height: 1.6; margin: 0 0 1.6rem; }
+  .flash {
+    background: #fff; border: 1px solid var(--gold); border-left: 3px solid var(--gold);
+    padding: 0.7rem 1rem; border-radius: 2px; font-size: 0.85rem; margin-bottom: 1.2rem;
+  }
+  .domain-heading {
+    font-size: 0.72rem; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--rust); margin: 1.6rem 0 0.6rem; padding-bottom: 0.35rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .domain-heading:first-of-type { margin-top: 0.4rem; }
+  .pq-row {
+    background: #fff; border: 1px solid var(--line); border-radius: 4px;
+    padding: 1.1rem 1.2rem; margin-bottom: 0.9rem;
+  }
+  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
+  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .pq-scale label { flex: 1 1 90px; text-align: center; cursor: pointer; }
+  .pq-scale input[type="radio"] {
+    position: absolute; opacity: 0; width: 0; height: 0;
+  }
+  .pq-scale span {
+    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
+    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
+    font-size: 0.76rem; transition: all 0.15s ease;
+  }
+  .pq-scale input[type="radio"]:checked + span {
+    background: var(--navy); color: var(--gold); border-color: var(--navy);
+  }
+  .pq-scale label:hover span { border-color: var(--gold); }
+  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
+  .btn {
+    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
+    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
+    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .btn:hover { background: var(--gold); color: var(--navy); }
+  .btn-secondary {
+    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
+    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
+    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
+    display: inline-flex; align-items: center;
+  }
+  .btn-secondary:hover { border-color: var(--navy); }
+  @media (max-width: 480px) {
+    .pq-scale label { flex: 1 1 60px; }
+    .pq-scale span { padding: 0.4rem 0.2rem; font-size: 0.66rem; }
+  }
+</style></head><body>
+  <header>
+    <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" />
+    <div class="brand-divider"></div>
+    <span>Advisor Portal</span>
+  </header>
+  <div class="container">
+    {% if not existing %}<div class="step-badge">Step 2 of 2</div>{% endif %}
+    <h1>{% if existing %}Your self behavioral assessment{% else %}Complete your self behavioral assessment{% endif %}</h1>
+    <p class="subtitle">
+      {% if existing %}You completed this before — answering again replaces your
+      previous result.{% else %}The second and last required step. Rate how often
+      each statement describes you — this is the same kind of self-rating
+      you'd complete as part of a 360-degree assessment, just without the
+      other raters.{% endif %}
+      This stays internal to J3P — never shown to participants, and never
+      treated as a test.
+    </p>
+
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+      {% endif %}
+    {% endwith %}
+
+    <form method="POST">
+      {% set ns = namespace(last_domain="") %}
+      {% for q in behavioral_items %}
+        {% if q.domain != ns.last_domain %}
+          <div class="domain-heading">{{ domain_labels[q.domain] }}</div>
+          {% set ns.last_domain = q.domain %}
+        {% endif %}
+        <div class="pq-row">
+          <p class="pq-statement">{{ q.text }}</p>
+          <div class="pq-scale">
+            {% for v, label in behavioral_scale %}
+            <label>
+              <input type="radio" name="q{{ q.id }}" value="{{ v }}" required />
+              <span>{{ label }}</span>
+            </label>
+            {% endfor %}
+          </div>
+        </div>
       {% endfor %}
       <div class="actions">
         <button type="submit" class="btn">Submit</button>
@@ -12394,6 +12740,18 @@ input[type="file"], input[type="text"] {
           </div>
           <div style="font-size: 0.82rem;">
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              Self behavioral assessment
+            </div>
+            {% if adv.behavioral %}
+              <span style="color: #2D7D5F;">✓ Completed</span>
+              {{ adv.behavioral.completed_at.strftime("%Y-%m-%d") if adv.behavioral.completed_at else "" }}
+              — {{ behavioral_summary_tag(adv.behavioral.scores) }}
+            {% else %}
+              <span class="muted">Not yet completed</span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
               360 feedback
             </div>
             {% if adv.feedback_360 %}
@@ -12405,7 +12763,8 @@ input[type="file"], input[type="text"] {
           </div>
         </div>
         <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
-          {{ adv.name }} completes both from their own portal link above.
+          {{ adv.name }} completes the assessments and 360 upload from their own portal link above
+          — the personality and behavioral assessments are required before the rest of their portal opens up.
         </p>
 
         <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
@@ -13884,16 +14243,18 @@ def advisor_portal_view():
         d["shared_with"] = [adv_names.get(s, s) for s in assigned if s != slug]
         mine.append(d)
     personality = get_advisor_personality(slug)
+    behavioral = get_advisor_behavioral(slug)
     feedback_360 = get_advisor_360_meta(slug)
     onboarding_steps = [
         ("Add a photo", advisor and (advisor["has_photo"] or advisor.get("no_photo"))),
         ("Complete your personality assessment (required)", bool(personality)),
+        ("Complete your self behavioral assessment (required)", bool(behavioral)),
         ("Upload your 360 feedback", bool(feedback_360)),
         ("Add at least one knowledge-base document", bool(mine)),
     ]
     return render_template_string(
         ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine,
-        personality=personality, feedback_360=feedback_360,
+        personality=personality, behavioral=behavioral, feedback_360=feedback_360,
         onboarding_steps=onboarding_steps,
         onboarding_done=sum(1 for _, done in onboarding_steps if done),
         onboarding_total=len(onboarding_steps),
@@ -14016,6 +14377,37 @@ def advisor_portal_personality():
     )
 
 
+@app.route("/advisor-portal/behavioral", methods=["GET", "POST"])
+@advisor_portal_required
+def advisor_portal_behavioral():
+    """The second required onboarding step — a self behavioral assessment,
+    analogous to the self-rating portion of a 360-degree assessment.
+    Not gated by advisor_portal_onboarded_required (that would create a
+    redirect loop with itself), but reachable only after personality is
+    already done, same as the personality page redirects here next."""
+    slug = session["advisor_owner_slug"]
+    advisor = get_advisor(slug)
+    if request.method == "POST":
+        answers = {}
+        for item in BEHAVIORAL_ITEMS:
+            raw = request.form.get(f"q{item['id']}")
+            if raw:
+                answers[item["id"]] = raw
+        scores = score_behavioral(answers)
+        if not scores:
+            flash("Please answer at least one question before submitting.")
+            return redirect(url_for("advisor_portal_behavioral"))
+        save_advisor_behavioral_scores(slug, scores)
+        flash("✓ Thanks — your self behavioral assessment is saved.")
+        return redirect(url_for("advisor_portal_view"))
+    existing = get_advisor_behavioral(slug)
+    return render_template_string(
+        ADVISOR_PORTAL_BEHAVIORAL_HTML, cfg=CONFIG, advisor=advisor,
+        behavioral_items=BEHAVIORAL_ITEMS, behavioral_scale=BEHAVIORAL_SCALE,
+        domain_labels=BEHAVIORAL_DOMAIN_LABELS, existing=existing,
+    )
+
+
 @app.route("/advisor-portal/360/upload", methods=["POST"])
 @advisor_portal_onboarded_required
 def advisor_portal_upload_360():
@@ -14124,6 +14516,7 @@ def admin_dashboard():
         advisor_docs=_advisor_docs,
         initials_for=initials_for,
         personality_summary_tag=personality_summary_tag,
+        behavioral_summary_tag=behavioral_summary_tag,
         participant_links=list_participant_links(),
         biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
