@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..0559592 100644
+index 4b5a702..685749c 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -6595,12 +6595,12 @@ index 4b5a702..0559592 100644
 -    background: var(--paper); color: var(--navy);
 -    display: flex; align-items: center; justify-content: center;
 -    min-height: 100vh; padding: 1.25rem;
--  }
++    background: var(--paper); color: var(--navy); min-height: 100vh;
+   }
 -  .box {
 -    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
 -    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
-+    background: var(--paper); color: var(--navy); min-height: 100vh;
-   }
+-  }
 -  .box-head {
 +  header {
      background: var(--navy); border-bottom: 2px solid var(--gold);
@@ -6671,10 +6671,10 @@ index 4b5a702..0559592 100644
 +    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
 +    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
 +    font-size: 0.76rem; transition: all 0.15s ease;
-   }
++  }
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-+  }
+   }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
@@ -7109,26 +7109,10 @@ index 4b5a702..0559592 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9350,26 +12643,65 @@ input[type="file"], input[type="text"] {
-                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                     margin-top: 1.1rem; padding-top: 1.1rem;
-                     border-top: 1px dashed var(--line);">
--        <input type="checkbox" name="show_avatar" value="1"
--               {% if settings.show_avatar %}checked{% endif %}
-+        <input type="checkbox" name="show_avatar" value="1"
-+               {% if settings.show_avatar %}checked{% endif %}
-+               style="margin-top: 0.2rem; width: 17px; height: 17px;
-+                      accent-color: var(--navy); cursor: pointer;" />
-+        <span>
-+          <strong>Show the advisor avatar</strong><br />
-+          <span class="muted">
-+            Controls the whole avatar: the animated portrait that sits beside
-+            the chat and the small photo on each reply. When off, participants
-+            see the advisor with no photo at all — useful if you'd rather they
-+            didn't read it as a specific person.
-+          </span>
-+        </span>
-+      </label>
+@@ -9364,12 +12657,51 @@ input[type="file"], input[type="text"] {
+           </span>
+         </span>
+       </label>
 +      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
 +                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
 +                    margin-top: 1.1rem; padding-top: 1.1rem;
@@ -7153,24 +7137,19 @@ index 4b5a702..0559592 100644
 +                    border-top: 1px dashed var(--line);">
 +        <input type="checkbox" name="personality_assessment_enabled" value="1"
 +               {% if settings.personality_assessment_enabled %}checked{% endif %}
-                style="margin-top: 0.2rem; width: 17px; height: 17px;
-                       accent-color: var(--navy); cursor: pointer;" />
-         <span>
--          <strong>Show the advisor avatar</strong><br />
++               style="margin-top: 0.2rem; width: 17px; height: 17px;
++                      accent-color: var(--navy); cursor: pointer;" />
++        <span>
 +          <strong>Ask the five-question personality style survey</strong><br />
-           <span class="muted">
--            Controls the whole avatar: the animated portrait that sits beside
--            the chat and the small photo on each reply. When off, participants
--            see the advisor with no photo at all — useful if you'd rather they
--            didn't read it as a specific person.
++          <span class="muted">
 +            Shown once per session, right after the release is acknowledged
 +            — skippable. Answers softly steer the advisor's tone; they're
 +            never shown to the participant as a score. When off, this step
 +            is skipped entirely and the composer opens right after the
 +            release.
-           </span>
-         </span>
-       </label>
++          </span>
++        </span>
++      </label>
  
 -
 +      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
@@ -7351,7 +7330,7 @@ index 4b5a702..0559592 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9487,6 +12911,68 @@ input[type="file"], input[type="text"] {
+@@ -9487,6 +12911,71 @@ input[type="file"], input[type="text"] {
          </p>
        </div>
  
@@ -7398,8 +7377,11 @@ index 4b5a702..0559592 100644
 +                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
 +                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
 +          </div>
-+          <audio controls preload="none" class="voice-preview-player" hidden
-+                 style="width: 100%; max-width: 360px; display: block; margin: 0.6rem 0;"></audio>
++          <div class="voice-preview-row" hidden style="display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap;">
++            <audio controls preload="none" class="voice-preview-player"
++                   style="width: 100%; max-width: 360px; display: block;"></audio>
++            <button type="button" class="btn-danger voice-delete-btn">Delete</button>
++          </div>
 +          <label style="display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.78rem; margin: 0.7rem 0 0.5rem;">
 +            <input type="checkbox" name="consent" value="1" required
 +                   style="width: 15px; height: 15px; margin-top: 0.15rem; accent-color: var(--navy); flex-shrink: 0;" />
@@ -7420,7 +7402,7 @@ index 4b5a702..0559592 100644
        <div class="advisor-links">
          <h3>Scheduling Links</h3>
          {% for path, label in [
-@@ -9509,14 +12995,156 @@ input[type="file"], input[type="text"] {
+@@ -9509,14 +12998,156 @@ input[type="file"], input[type="text"] {
        </div>
  
        <div class="advisor-links">
@@ -7583,7 +7565,7 @@ index 4b5a702..0559592 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +13191,13 @@ input[type="file"], input[type="text"] {
+@@ -9563,27 +13194,13 @@ input[type="file"], input[type="text"] {
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -7614,7 +7596,7 @@ index 4b5a702..0559592 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +13234,88 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +13237,88 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -7703,7 +7685,7 @@ index 4b5a702..0559592 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +13478,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +13481,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7718,7 +7700,7 @@ index 4b5a702..0559592 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +13520,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +13523,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7727,7 +7709,7 @@ index 4b5a702..0559592 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +13549,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +13552,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -7745,7 +7727,7 @@ index 4b5a702..0559592 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +13611,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +13614,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7773,7 +7755,7 @@ index 4b5a702..0559592 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +13819,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +13822,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7783,7 +7765,7 @@ index 4b5a702..0559592 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +13840,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +13843,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7806,7 +7788,7 @@ index 4b5a702..0559592 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +13973,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +13976,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7817,17 +7799,14 @@ index 4b5a702..0559592 100644
  
  </div>
  
-@@ -10467,25 +14193,422 @@ input[type="file"], input[type="text"] {
-             return;
-           }
- 
--          if (action.indexOf("/admin/advisors/delete/") !== -1) {
--            open(form, {
--              message: "Remove this advisor profile? Their dedicated links stop "
--                     + "working immediately and their photo is deleted. The "
--                     + "knowledge base and conversation log are not affected.",
--              detail: form.dataset.docTitle || "",
--              buttonLabel: "Remove advisor",
+@@ -10464,28 +14193,448 @@ input[type="file"], input[type="text"] {
+                      + "longer learn from it, though the log entry itself is kept.",
+               buttonLabel: "Remove lesson",
+             });
+-            return;
++            return;
++          }
++
 +          if (action.indexOf("/admin/advisors/delete/") !== -1) {
 +            open(form, {
 +              message: "Remove this advisor profile? Their dedicated links stop "
@@ -8100,19 +8079,11 @@ index 4b5a702..0559592 100644
 +                pending.indicator.textContent = "Couldn't save the photo (" + err.message + ") — try again";
 +              }
 +              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
-             });
--            return;
--          }
++            });
 +        }, true);
 +      })();
 +    </script>
- 
--          open(form, {
--            message: "Delete this document and every embedded chunk from the "
--                   + "knowledge base? The advisor will stop drawing on it. "
--                   + "You would need to upload the file again to restore it.",
--            detail: form.dataset.docTitle || "",
--            buttonLabel: "Delete document",
++
 +    <script>
 +      // ---------------------------------------------------------------
 +      // Voice sample recording — records directly in the browser via
@@ -8127,12 +8098,13 @@ index 4b5a702..0559592 100644
 +        const recordBtn = form.querySelector(".voice-record-btn");
 +        const timerEl = form.querySelector(".voice-record-timer");
 +        const fileInput = form.querySelector(".voice-file-input");
++        const previewRow = form.querySelector(".voice-preview-row");
 +        const player = form.querySelector(".voice-preview-player");
-+        if (!recordBtn || !fileInput || !player) return;
++        const deleteBtn = form.querySelector(".voice-delete-btn");
++        if (!recordBtn || !fileInput || !previewRow || !player || !deleteBtn) return;
 +
 +        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
 +          recordBtn.style.display = "none";
-+          return;
 +        }
 +
 +        let mediaRecorder = null;
@@ -8157,6 +8129,23 @@ index 4b5a702..0559592 100644
 +          recordBtn.style.borderColor = isRecording ? "var(--rust)" : "var(--navy)";
 +        }
 +
++        // Clears whatever is currently staged — a fresh recording or a
++        // chosen file — back to the empty state, without submitting
++        // anything. Distinct from "Re-record": that immediately opens the
++        // microphone for a new take; this just discards.
++        function discard() {
++          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
++          recordedBlob = null;
++          player.pause();
++          player.removeAttribute("src");
++          player.load();
++          previewRow.hidden = true;
++          timerEl.hidden = true;
++          fileInput.value = "";
++          fileInput.disabled = false;
++          setRecordingUI(false);
++        }
++
 +        function startRecording() {
 +          navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
 +            chunks = [];
@@ -8168,7 +8157,7 @@ index 4b5a702..0559592 100644
 +              if (previewUrl) URL.revokeObjectURL(previewUrl);
 +              previewUrl = URL.createObjectURL(recordedBlob);
 +              player.src = previewUrl;
-+              player.hidden = false;
++              previewRow.hidden = false;
 +              fileInput.value = "";
 +              fileInput.disabled = true;
 +              setRecordingUI(false);
@@ -8182,8 +8171,7 @@ index 4b5a702..0559592 100644
 +            setRecordingUI(true);
 +          }).catch(err => {
 +            alert("Couldn't access the microphone (" + (err.message || err.name) + ").");
-           });
--        }, true);
++          });
 +        }
 +
 +        function stopRecording() {
@@ -8197,14 +8185,26 @@ index 4b5a702..0559592 100644
 +          else startRecording();
 +        });
 +
++        deleteBtn.addEventListener("click", discard);
++
 +        fileInput.addEventListener("change", () => {
 +          if (fileInput.files.length) {
 +            recordedBlob = null;
-+            player.hidden = true;
++            if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
++            previewUrl = URL.createObjectURL(fileInput.files[0]);
++            player.src = previewUrl;
++            previewRow.hidden = false;
 +            setRecordingUI(false);
-+          }
+           }
 +        });
-+
+ 
+-          if (action.indexOf("/admin/advisors/delete/") !== -1) {
+-            open(form, {
+-              message: "Remove this advisor profile? Their dedicated links stop "
+-                     + "working immediately and their photo is deleted. The "
+-                     + "knowledge base and conversation log are not affected.",
+-              detail: form.dataset.docTitle || "",
+-              buttonLabel: "Remove advisor",
 +        form.addEventListener("submit", (e) => {
 +          if (!recordedBlob) return;   // no recording — the file input submits natively
 +          e.preventDefault();
@@ -8223,11 +8223,21 @@ index 4b5a702..0559592 100644
 +            .catch(err => {
 +              alert("Couldn't save the recording (" + err.message + ") — try again.");
 +              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
-+            });
+             });
+-            return;
+-          }
 +        });
 +      });
 +    </script>
-+
+ 
+-          open(form, {
+-            message: "Delete this document and every embedded chunk from the "
+-                   + "knowledge base? The advisor will stop drawing on it. "
+-                   + "You would need to upload the file again to restore it.",
+-            detail: form.dataset.docTitle || "",
+-            buttonLabel: "Delete document",
+-          });
+-        }, true);
 +    <script>
 +      // ---------------------------------------------------------------
 +      // Tab navigation — five groups instead of eight stacked sections.
@@ -8256,7 +8266,7 @@ index 4b5a702..0559592 100644
        })();
      </script>
  </body></html>"""
-@@ -10511,6 +14634,280 @@ def admin_logout():
+@@ -10511,6 +14660,280 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -8537,7 +8547,7 @@ index 4b5a702..0559592 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +14920,25 @@ def admin_dashboard():
+@@ -10523,11 +14946,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8563,7 +8573,7 @@ index 4b5a702..0559592 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +14946,15 @@ def admin_dashboard():
+@@ -10535,7 +14972,15 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -8580,7 +8590,7 @@ index 4b5a702..0559592 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +14964,23 @@ def admin_dashboard():
+@@ -10545,9 +14990,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8604,7 +8614,7 @@ index 4b5a702..0559592 100644
      )
  
  
-@@ -10631,16 +15064,43 @@ def admin_save_advisor():
+@@ -10631,16 +15090,43 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8654,7 +8664,7 @@ index 4b5a702..0559592 100644
      else:
          flash("Could not save the advisor — check the database connection.")
      return redirect(url_for("admin_dashboard"))
-@@ -10657,6 +15117,176 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +15143,176 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8831,7 +8841,7 @@ index 4b5a702..0559592 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +15302,14 @@ def admin_settings():
+@@ -10672,21 +15328,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -8855,7 +8865,7 @@ index 4b5a702..0559592 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +15404,34 @@ def admin_upload_folder():
+@@ -10781,22 +15430,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -8896,7 +8906,7 @@ index 4b5a702..0559592 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +15444,6 @@ def admin_upload_folder():
+@@ -10809,7 +15470,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -8904,7 +8914,7 @@ index 4b5a702..0559592 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +15472,10 @@ def admin_upload_folder():
+@@ -10838,7 +15498,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -8916,7 +8926,7 @@ index 4b5a702..0559592 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +15483,12 @@ def admin_upload_folder():
+@@ -10846,14 +15509,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -8931,7 +8941,7 @@ index 4b5a702..0559592 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +15496,11 @@ def admin_upload_folder():
+@@ -10861,8 +15522,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -8945,7 +8955,7 @@ index 4b5a702..0559592 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +15681,34 @@ def admin_upload_url():
+@@ -11043,25 +15707,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -8987,7 +8997,7 @@ index 4b5a702..0559592 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +15729,10 @@ def admin_upload_url():
+@@ -11082,7 +15755,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -8999,7 +9009,7 @@ index 4b5a702..0559592 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +15740,7 @@ def admin_upload_url():
+@@ -11090,8 +15766,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9009,7 +9019,7 @@ index 4b5a702..0559592 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +15750,14 @@ def admin_upload_url():
+@@ -11101,14 +15776,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9027,7 +9037,7 @@ index 4b5a702..0559592 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +15770,32 @@ def admin_upload_url():
+@@ -11121,32 +15796,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9076,7 +9086,7 @@ index 4b5a702..0559592 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +15809,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +15835,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  

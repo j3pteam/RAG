@@ -12954,8 +12954,11 @@ input[type="file"], input[type="text"] {
                    style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                           border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           </div>
-          <audio controls preload="none" class="voice-preview-player" hidden
-                 style="width: 100%; max-width: 360px; display: block; margin: 0.6rem 0;"></audio>
+          <div class="voice-preview-row" hidden style="display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap;">
+            <audio controls preload="none" class="voice-preview-player"
+                   style="width: 100%; max-width: 360px; display: block;"></audio>
+            <button type="button" class="btn-danger voice-delete-btn">Delete</button>
+          </div>
           <label style="display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.78rem; margin: 0.7rem 0 0.5rem;">
             <input type="checkbox" name="consent" value="1" required
                    style="width: 15px; height: 15px; margin-top: 0.15rem; accent-color: var(--navy); flex-shrink: 0;" />
@@ -14484,12 +14487,13 @@ input[type="file"], input[type="text"] {
         const recordBtn = form.querySelector(".voice-record-btn");
         const timerEl = form.querySelector(".voice-record-timer");
         const fileInput = form.querySelector(".voice-file-input");
+        const previewRow = form.querySelector(".voice-preview-row");
         const player = form.querySelector(".voice-preview-player");
-        if (!recordBtn || !fileInput || !player) return;
+        const deleteBtn = form.querySelector(".voice-delete-btn");
+        if (!recordBtn || !fileInput || !previewRow || !player || !deleteBtn) return;
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
           recordBtn.style.display = "none";
-          return;
         }
 
         let mediaRecorder = null;
@@ -14514,6 +14518,23 @@ input[type="file"], input[type="text"] {
           recordBtn.style.borderColor = isRecording ? "var(--rust)" : "var(--navy)";
         }
 
+        // Clears whatever is currently staged — a fresh recording or a
+        // chosen file — back to the empty state, without submitting
+        // anything. Distinct from "Re-record": that immediately opens the
+        // microphone for a new take; this just discards.
+        function discard() {
+          if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+          recordedBlob = null;
+          player.pause();
+          player.removeAttribute("src");
+          player.load();
+          previewRow.hidden = true;
+          timerEl.hidden = true;
+          fileInput.value = "";
+          fileInput.disabled = false;
+          setRecordingUI(false);
+        }
+
         function startRecording() {
           navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
             chunks = [];
@@ -14525,7 +14546,7 @@ input[type="file"], input[type="text"] {
               if (previewUrl) URL.revokeObjectURL(previewUrl);
               previewUrl = URL.createObjectURL(recordedBlob);
               player.src = previewUrl;
-              player.hidden = false;
+              previewRow.hidden = false;
               fileInput.value = "";
               fileInput.disabled = true;
               setRecordingUI(false);
@@ -14553,10 +14574,15 @@ input[type="file"], input[type="text"] {
           else startRecording();
         });
 
+        deleteBtn.addEventListener("click", discard);
+
         fileInput.addEventListener("change", () => {
           if (fileInput.files.length) {
             recordedBlob = null;
-            player.hidden = true;
+            if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
+            previewUrl = URL.createObjectURL(fileInput.files[0]);
+            player.src = previewUrl;
+            previewRow.hidden = false;
             setRecordingUI(false);
           }
         });
