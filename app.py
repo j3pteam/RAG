@@ -6749,6 +6749,7 @@ def advisors_with_detail():
         adv["personality"] = get_advisor_personality(adv["slug"])
         adv["behavioral"] = get_advisor_behavioral(adv["slug"])
         adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
+        adv["voice_sample"] = get_advisor_voice_meta(adv["slug"])
         adv["suggested_bio"] = (
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
             if adv["personality"] else ""
@@ -7944,6 +7945,175 @@ def delete_advisor_360_feedback(slug: str) -> bool:
         return False
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Advisor voice samples — a recording (or upload) an admin captures per
+# advisor, meant as the source material for a future custom text-to-speech
+# voice. Storing and playing back the sample works today, end to end. The
+# actual "speak in this voice" step (synthesize_advisor_voice, below) is
+# deliberately a no-op until a voice-cloning provider's API key is
+# configured — see that function's docstring for exactly what to fill in.
+# ---------------------------------------------------------------------------
+
+def _advisor_voice_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_voice_samples (
+                advisor_slug      TEXT PRIMARY KEY,
+                filename          TEXT NOT NULL,
+                mime              TEXT,
+                content           BYTEA NOT NULL,
+                size_bytes        INTEGER,
+                consent_given     BOOLEAN NOT NULL DEFAULT FALSE,
+                consent_note      TEXT,
+                provider          TEXT,
+                provider_voice_id TEXT,
+                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_advisor_voice_sample(slug: str, filename: str, mime: str, content: bytes,
+                               consent_given: bool, consent_note: str = "") -> bool:
+    """One voice sample per advisor — a fresh recording/upload replaces
+    whatever was there before, same pattern as the photo and 360 uploads.
+    Replacing it also clears any provider_voice_id from a prior cloning
+    run, since that voice was built from the old sample, not this one."""
+    if not slug or not content:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
+            cur.execute("""
+                INSERT INTO advisor_voice_samples
+                    (advisor_slug, filename, mime, content, size_bytes,
+                     consent_given, consent_note)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """, (slug, filename[:200], mime, content, len(content),
+                  bool(consent_given), (consent_note or "")[:500]))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] write failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def get_advisor_voice_meta(slug: str):
+    """Everything except the audio bytes themselves — for display and for
+    synthesize_advisor_voice()'s consent/provider checks."""
+    if not slug:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT filename, size_bytes, consent_given, consent_note,
+                       provider, provider_voice_id, uploaded_at
+                FROM advisor_voice_samples WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"filename": row[0], "size_bytes": row[1] or 0,
+                "consent_given": bool(row[2]), "consent_note": row[3] or "",
+                "provider": row[4] or "", "provider_voice_id": row[5] or "",
+                "uploaded_at": row[6]}
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] meta read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_advisor_voice_content(slug: str):
+    """(bytes, mime, filename) for playback/download, or None."""
+    if not slug:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT content, mime, filename
+                FROM advisor_voice_samples WHERE advisor_slug = %s
+            """, (slug,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        data = row[0]
+        return (bytes(data) if not isinstance(data, bytes) else data,
+                row[1] or "audio/webm", row[2])
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] content read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def delete_advisor_voice_sample(slug: str) -> bool:
+    if not slug:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def synthesize_advisor_voice(slug: str, text: str):
+    """The one function that needs real work once a provider is chosen.
+    Returns (audio_bytes, mime) if this advisor has a consented voice
+    sample AND a configured provider, else None — every caller treats
+    None as "fall back to the browser's own text-to-speech," so this is
+    always safe to leave a no-op indefinitely.
+
+    NOT YET WIRED TO A REAL PROVIDER. To activate (ElevenLabs is the
+    standard choice for this — voice cloning is its core product, and it
+    verifies consent for exactly this reason):
+      1. Sign up, get an API key, set it as an env var (e.g.
+         ELEVENLABS_API_KEY) and read it below instead of the placeholder
+         check.
+      2. The first time a given advisor is used with consent_given=True
+         and no provider_voice_id yet, POST their stored sample
+         (get_advisor_voice_content) to the provider's voice-creation
+         endpoint, then save the returned ID with a new
+         set_advisor_voice_provider() call (not yet written — add it next
+         to save_advisor_voice_sample above) so future calls skip
+         re-cloning and go straight to synthesis.
+      3. With a provider_voice_id in hand, POST `text` to the provider's
+         text-to-speech endpoint for that voice ID and return the audio
+         bytes it sends back, with the correct mime type.
+    """
+    meta = get_advisor_voice_meta(slug)
+    if not meta or not meta.get("consent_given"):
+        return None
+    api_key = os.environ.get("VOICE_SYNTHESIS_API_KEY", "")
+    if not api_key:
+        return None   # not configured yet — expected, safe no-op
+    # TODO: real provider call goes here once VOICE_SYNTHESIS_API_KEY is set.
+    return None
 
 
 def personality_style_block() -> str:
@@ -12701,6 +12871,68 @@ input[type="file"], input[type="text"] {
       </div>
 
       <div class="advisor-links">
+        <h3>Voice Sample</h3>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
+          A recording of {{ adv.name }}'s own voice — the source material for
+          a future custom text-to-speech voice. This doesn't do anything on
+          its own yet: "Speak" still uses the browser's built-in voices until
+          a voice-synthesis provider is configured.
+        </p>
+        {% if adv.voice_sample %}
+        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
+          <strong>{{ adv.voice_sample.filename }}</strong>
+          <span class="muted">
+            — {{ "%.1f"|format(adv.voice_sample.size_bytes / 1048576) }} MB,
+            uploaded {{ adv.voice_sample.uploaded_at.strftime("%Y-%m-%d") if adv.voice_sample.uploaded_at else "" }}
+          </span>
+        </p>
+        <audio controls preload="none" style="width: 100%; max-width: 360px; display: block; margin-bottom: 0.6rem;"
+               src="{{ url_for('admin_play_advisor_voice', slug=adv.slug) }}"></audio>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.76rem;">
+          {% if adv.voice_sample.consent_given %}
+            ✓ Consent confirmed{% if adv.voice_sample.consent_note %} — {{ adv.voice_sample.consent_note }}{% endif %}
+          {% else %}
+            ⚠ No consent on record for this sample
+          {% endif %}
+        </p>
+        <form method="POST" action="{{ url_for('admin_delete_advisor_voice', slug=adv.slug) }}"
+              onsubmit="return confirm('Remove this voice sample for {{ adv.name }}?');">
+          <button type="submit" class="btn-danger">Remove sample</button>
+        </form>
+        {% else %}
+        <form method="POST" action="{{ url_for('admin_upload_advisor_voice', slug=adv.slug) }}"
+              enctype="multipart/form-data" class="voice-record-form">
+          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+            <button type="button" class="btn voice-record-btn"
+                    style="background: transparent; color: var(--navy); border-color: var(--navy); font-size: 0.66rem;">
+              Record
+            </button>
+            <span class="voice-record-timer muted" hidden style="font-size: 0.8rem; font-variant-numeric: tabular-nums;">0:00</span>
+            <span class="muted" style="font-size: 0.78rem;">or</span>
+            <input type="file" name="file" accept="audio/*" class="voice-file-input"
+                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          </div>
+          <audio controls preload="none" class="voice-preview-player" hidden
+                 style="width: 100%; max-width: 360px; display: block; margin: 0.6rem 0;"></audio>
+          <label style="display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.78rem; margin: 0.7rem 0 0.5rem;">
+            <input type="checkbox" name="consent" value="1" required
+                   style="width: 15px; height: 15px; margin-top: 0.15rem; accent-color: var(--navy); flex-shrink: 0;" />
+            <span class="muted">
+              I confirm {{ adv.name }} has consented to a recording of their
+              voice being stored and, once configured, used to generate a
+              synthetic voice for this app.
+            </span>
+          </label>
+          <input type="text" name="consent_note" placeholder="Optional note — e.g. how or when consent was given"
+                 style="width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.78rem; margin-bottom: 0.6rem;" />
+          <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
+        </form>
+        {% endif %}
+      </div>
+
+      <div class="advisor-links">
         <h3>Scheduling Links</h3>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
@@ -14192,6 +14424,120 @@ input[type="file"], input[type="text"] {
 
     <script>
       // ---------------------------------------------------------------
+      // Voice sample recording — records directly in the browser via
+      // MediaRecorder, previews it, and on save submits it as a real file
+      // through fetch (never assigning a synthetic FileList to an input's
+      // .files — that trick is exactly what turned out unreliable on
+      // Safari for the camera feature, so the recorded Blob is set
+      // straight onto the FormData instead). A form with no recording
+      // (someone just used the file picker) submits natively, untouched.
+      // ---------------------------------------------------------------
+      document.querySelectorAll(".voice-record-form").forEach(form => {
+        const recordBtn = form.querySelector(".voice-record-btn");
+        const timerEl = form.querySelector(".voice-record-timer");
+        const fileInput = form.querySelector(".voice-file-input");
+        const player = form.querySelector(".voice-preview-player");
+        if (!recordBtn || !fileInput || !player) return;
+
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
+          recordBtn.style.display = "none";
+          return;
+        }
+
+        let mediaRecorder = null;
+        let chunks = [];
+        let recording = false;
+        let startedAt = 0;
+        let timerId = null;
+        let recordedBlob = null;
+        let previewUrl = null;
+
+        function tick() {
+          const secs = Math.floor((Date.now() - startedAt) / 1000);
+          const m = String(Math.floor(secs / 60)).padStart(1, "0");
+          const s = String(secs % 60).padStart(2, "0");
+          timerEl.textContent = `${m}:${s}`;
+        }
+
+        function setRecordingUI(isRecording) {
+          recordBtn.textContent = isRecording ? "Stop" : (recordedBlob ? "Re-record" : "Record");
+          recordBtn.style.background = isRecording ? "var(--rust)" : "transparent";
+          recordBtn.style.color = isRecording ? "#fff" : "var(--navy)";
+          recordBtn.style.borderColor = isRecording ? "var(--rust)" : "var(--navy)";
+        }
+
+        function startRecording() {
+          navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+            chunks = [];
+            mediaRecorder = new MediaRecorder(stream);
+            mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+            mediaRecorder.onstop = () => {
+              recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
+              stream.getTracks().forEach(t => t.stop());
+              if (previewUrl) URL.revokeObjectURL(previewUrl);
+              previewUrl = URL.createObjectURL(recordedBlob);
+              player.src = previewUrl;
+              player.hidden = false;
+              fileInput.value = "";
+              fileInput.disabled = true;
+              setRecordingUI(false);
+            };
+            mediaRecorder.start();
+            recording = true;
+            startedAt = Date.now();
+            timerEl.hidden = false;
+            tick();
+            timerId = setInterval(tick, 250);
+            setRecordingUI(true);
+          }).catch(err => {
+            alert("Couldn't access the microphone (" + (err.message || err.name) + ").");
+          });
+        }
+
+        function stopRecording() {
+          if (mediaRecorder && recording) mediaRecorder.stop();
+          recording = false;
+          if (timerId) { clearInterval(timerId); timerId = null; }
+        }
+
+        recordBtn.addEventListener("click", () => {
+          if (recording) stopRecording();
+          else startRecording();
+        });
+
+        fileInput.addEventListener("change", () => {
+          if (fileInput.files.length) {
+            recordedBlob = null;
+            player.hidden = true;
+            setRecordingUI(false);
+          }
+        });
+
+        form.addEventListener("submit", (e) => {
+          if (!recordedBlob) return;   // no recording — the file input submits natively
+          e.preventDefault();
+          const submitBtn = form.querySelector('button[type="submit"]');
+          const originalLabel = submitBtn ? submitBtn.textContent : "";
+          if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = "Saving\u2026"; }
+          const fd = new FormData(form);
+          const ext = (recordedBlob.type.split("/")[1] || "webm").split(";")[0];
+          const file = new File([recordedBlob], `voice-sample.${ext}`, { type: recordedBlob.type });
+          fd.set("file", file);
+          fetch(form.action, { method: "POST", body: fd, credentials: "same-origin" })
+            .then(resp => {
+              if (!resp.ok) throw new Error("Server returned " + resp.status);
+              window.location.reload();
+            })
+            .catch(err => {
+              alert("Couldn't save the recording (" + err.message + ") — try again.");
+              if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
+            });
+        });
+      });
+    </script>
+
+    <script>
+      // ---------------------------------------------------------------
       // Tab navigation — five groups instead of eight stacked sections.
       // The active tab is remembered in localStorage so it survives the
       // full-page reload every form submission on this page causes.
@@ -14759,6 +15105,69 @@ def admin_download_advisor_360(slug):
     return Response(content, mimetype=mime, headers={
         "Content-Disposition": f'attachment; filename="{filename}"'
     })
+
+
+@app.route("/admin/advisors/voice/upload/<slug>", methods=["POST"])
+@admin_required
+def admin_upload_advisor_voice(slug):
+    """A voice sample — recorded live in the browser or uploaded as a file.
+    Requires the consent checkbox; without it, nothing is saved, since a
+    sample without on-record consent shouldn't exist at all, let alone
+    ever reach a future voice-cloning call."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+
+    consent_given = request.form.get("consent") == "1"
+    consent_note = (request.form.get("consent_note") or "").strip()
+    if not consent_given:
+        flash("A voice sample can't be saved without confirming consent first.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("Choose or record an audio file first.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    raw = file.read()
+    if not raw:
+        flash("That recording appears to be empty.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
+        flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
+              f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+
+    mime = file.mimetype or "audio/webm"
+    filename = file.filename if "." in file.filename else f"{file.filename}.webm"
+    if save_advisor_voice_sample(slug, filename, mime, raw, consent_given, consent_note):
+        flash(f"✓ Saved a voice sample for {advisor['name']}. It won't be used for "
+              f"anything until a voice-synthesis provider is configured.")
+    else:
+        flash("Could not save that voice sample — check the server logs.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/voice/play/<slug>")
+@admin_required
+def admin_play_advisor_voice(slug):
+    """Streams the stored sample back for an admin to confirm it's the
+    right recording — admin-only, same as the 360 file."""
+    result = get_advisor_voice_content(slug)
+    if not result:
+        return ("No voice sample on record.", 404)
+    content, mime, filename = result
+    return Response(content, mimetype=mime)
+
+
+@app.route("/admin/advisors/voice/delete/<slug>", methods=["POST"])
+@admin_required
+def admin_delete_advisor_voice(slug):
+    if delete_advisor_voice_sample(slug):
+        flash("✓ Removed the voice sample.")
+    else:
+        flash("Could not remove that voice sample.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
 
 
 @app.route("/admin/advisors/bio/<slug>", methods=["POST"])
