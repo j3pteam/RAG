@@ -6936,12 +6936,23 @@ def _participant_links_ensure_table(conn):
             CREATE INDEX IF NOT EXISTS participant_links_token_idx
             ON participant_links (token)
         """)
+        # Added later: the participant's own first name, used to personalize
+        # their opening greeting. Deliberately separate from "label" — label
+        # is free text for the admin's own reference (could be anything,
+        # like "Cohort 2026 batch 3"), so it isn't safe to parse a first
+        # name out of it.
+        try:
+            cur.execute("ALTER TABLE participant_links ADD COLUMN IF NOT EXISTS "
+                        "first_name TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
 
 
-def create_participant_link(label: str, advisor_slug: str = "") -> dict:
+def create_participant_link(label: str, advisor_slug: str = "", first_name: str = "") -> dict:
     """Generates a new participant link. Returns {"ok", "token"/"error"}."""
     label = (label or "").strip()[:200]
+    first_name = (first_name or "").strip()[:80]
     if not label:
         return {"ok": False, "error": "A label is required."}
     conn = _settings_db_conn()
@@ -6952,9 +6963,9 @@ def create_participant_link(label: str, advisor_slug: str = "") -> dict:
         token = secrets.token_urlsafe(24)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO participant_links (token, label, advisor_slug)
-                VALUES (%s, %s, %s)
-            """, (token, label, (advisor_slug or None)))
+                INSERT INTO participant_links (token, label, advisor_slug, first_name)
+                VALUES (%s, %s, %s, %s)
+            """, (token, label, (advisor_slug or None), first_name))
         conn.commit()
         return {"ok": True, "token": token}
     except Exception as e:
@@ -6973,7 +6984,8 @@ def list_participant_links() -> list:
         _participant_links_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, token, label, advisor_slug, enabled, created_at, last_used_at
+                SELECT id, token, label, advisor_slug, enabled, created_at,
+                       last_used_at, first_name
                 FROM participant_links ORDER BY created_at DESC
             """)
             for row in cur.fetchall():
@@ -6981,6 +6993,7 @@ def list_participant_links() -> list:
                     "id": row[0], "token": row[1], "label": row[2],
                     "advisor_slug": row[3] or "", "enabled": bool(row[4]),
                     "created_at": row[5], "last_used_at": row[6],
+                    "first_name": row[7] or "",
                 })
     except Exception as e:
         app.logger.error(f"[participant-links] list failed: {e}")
@@ -7002,7 +7015,8 @@ def get_participant_link(token: str):
         _participant_links_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, token, label, advisor_slug, enabled, created_at, last_used_at
+                SELECT id, token, label, advisor_slug, enabled, created_at,
+                       last_used_at, first_name
                 FROM participant_links WHERE token = %s
             """, (token,))
             row = cur.fetchone()
@@ -7010,7 +7024,8 @@ def get_participant_link(token: str):
             return None
         return {"id": row[0], "token": row[1], "label": row[2],
                 "advisor_slug": row[3] or "", "enabled": bool(row[4]),
-                "created_at": row[5], "last_used_at": row[6]}
+                "created_at": row[5], "last_used_at": row[6],
+                "first_name": row[7] or ""}
     except Exception as e:
         app.logger.error(f"[participant-links] read failed: {e}")
         return None
@@ -9248,11 +9263,33 @@ def retrieve_context(query: str) -> str:
     return context
 
 
-def _render_chat(force_scheduling=None, advisor=None):
+def _personalize_greeting(opening: str, first_name: str) -> str:
+    """Weaves a participant's first name into the opening greeting, for a
+    dedicated participant link. If the greeting starts with a plain
+    "Hello," (the common, default case), the name goes right after it —
+    "Hello, welcome..." becomes "Hello Jane, welcome...". The opening can
+    be admin-customized to say almost anything else, though, so when it
+    doesn't start that way, the name is prepended instead of guessed at —
+    that always reads as a real greeting, rather than risking broken
+    grammar from rewriting a sentence shaped some other way."""
+    first_name = (first_name or "").strip()
+    if not first_name or not opening:
+        return opening
+    m = re.match(r"^(hello|hi|hey)[,!]?\s*", opening, re.IGNORECASE)
+    if m:
+        return (opening[:m.start(1)] + m.group(1).capitalize()
+                + f" {first_name}, " + opening[m.end():])
+    return f"Hello {first_name} — {opening}"
+
+
+def _render_chat(force_scheduling=None, advisor=None, participant_first_name=None):
     """Render the chat page.
 
     force_scheduling overrides the admin default; advisor selects a named
-    profile so the page shows that person's photo.
+    profile so the page shows that person's photo. participant_first_name,
+    when a participant link provides one, personalizes the opening
+    greeting on top of whatever the advisor/default name substitution
+    below already does.
     """
     # One fresh read for the whole request — this runs on every page load
     # across every worker process, and the module-level settings cache is
@@ -9326,6 +9363,10 @@ def _render_chat(force_scheduling=None, advisor=None):
             page_cfg["footer_cta_url"] = active["scheduling_url"]
     elif (settings.get("default_scheduling_url") or "").strip():
         page_cfg["footer_cta_url"] = settings["default_scheduling_url"].strip()
+
+    if participant_first_name:
+        page_cfg["opening"] = _personalize_greeting(
+            page_cfg.get("opening") or "", participant_first_name)
 
     return render_template_string(
         INDEX_HTML,
@@ -9494,7 +9535,7 @@ def participant_link_index(token):
         # This link is for the default/shared persona — make sure a stale
         # advisor_slug from some earlier visit on this browser can't bleed in.
         session.pop("advisor_slug", None)
-    return _render_chat(advisor=advisor)
+    return _render_chat(advisor=advisor, participant_first_name=link.get("first_name"))
 
 
 @app.route("/no-scheduling")
@@ -13206,7 +13247,8 @@ input[type="file"], input[type="text"] {
       you can turn access off at any time without deleting their history.
     </p>
     <form method="POST" action="{{ url_for('admin_create_participant_link') }}" class="upload">
-      <input type="text" name="label" placeholder="Participant name or label (e.g. Dr. Jane Smith)" required />
+      <input type="text" name="label" placeholder="Label for your own reference (e.g. Cohort 2026 — Jane Smith)" required />
+      <input type="text" name="first_name" placeholder="Their first name (for the greeting) — optional" />
       <select name="advisor_slug" title="Which advisor this participant lands on">
         <option value="">Default persona</option>
         {% for adv in advisors %}
@@ -13215,6 +13257,11 @@ input[type="file"], input[type="text"] {
       </select>
       <button type="submit" class="btn">Create link</button>
     </form>
+    <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.76rem;">
+      With a first name, their session opens with "Hello Jane, welcome to
+      your session with {{ cfg.persona_name }}" instead of the plain
+      default greeting.
+    </p>
   </div>
 
   <div class="section">
@@ -13222,12 +13269,13 @@ input[type="file"], input[type="text"] {
     {% if participant_links %}
     <table class="kb-table">
       <tr>
-        <th>Label</th><th>Advisor</th><th>Link</th><th>Status</th>
+        <th>Label</th><th>First name</th><th>Advisor</th><th>Link</th><th>Status</th>
         <th>Created</th><th>Last used</th><th></th>
       </tr>
       {% for l in participant_links %}
       <tr>
         <td>{{ l.label }}</td>
+        <td class="muted">{{ l.first_name or "—" }}</td>
         <td class="muted">{{ advisor_names.get(l.advisor_slug, "Default") if l.advisor_slug else "Default" }}</td>
         <td>
           <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
@@ -15209,7 +15257,8 @@ def admin_save_advisor_expertise(slug):
 def admin_create_participant_link():
     label = (request.form.get("label") or "").strip()
     advisor_slug = (request.form.get("advisor_slug") or "").strip()
-    result = create_participant_link(label, advisor_slug)
+    first_name = (request.form.get("first_name") or "").strip()
+    result = create_participant_link(label, advisor_slug, first_name)
     if result["ok"]:
         flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
     else:
