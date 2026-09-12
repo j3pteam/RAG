@@ -13185,7 +13185,7 @@ input[type="file"], input[type="text"] {
             class="upload">
         <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
                oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-        <div style="display: flex; gap: 0.4rem; align-items: center;">
+        <div style="display: flex; gap: 0.4rem; align-items: center; grid-column: 2 / -1;">
           <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
                  style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
