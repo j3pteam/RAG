@@ -12715,7 +12715,7 @@ body { font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif; backg
   display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;
   padding: 0 0.4rem 1.2rem; border-bottom: 2px solid var(--gold); margin-bottom: 1rem;
 }
-.admin-brand-logo { height: 52px; width: auto; max-width: 100%; display: block; }
+.admin-brand-logo { height: 92px; width: auto; max-width: 100%; display: block; }
 .admin-brand-text { display: flex; align-items: baseline; gap: 0.4rem; }
 .admin-sidebar-brand .name { font-size: 0.78rem; font-weight: 500; color: var(--paper); }
 .admin-sidebar-brand .build { font-size: 0.6rem; color: rgba(210, 188, 141, 0.55); }
