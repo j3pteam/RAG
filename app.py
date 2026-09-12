@@ -6779,11 +6779,20 @@ def slugify_advisor(name: str) -> str:
     return base[:40] or "advisor"
 
 
-def advisors_with_detail():
-    """Advisor profiles plus their own briefings, for the admin panel."""
+def advisors_with_detail(advisor_rows=None, doc_map=None):
+    """Advisor profiles plus their own briefings, for the admin panel.
+
+    advisor_rows and doc_map let a caller that's already fetched
+    list_advisors() / document_advisor_map() for its own purposes (the
+    admin dashboard route does, for the advisor-name lookup and the
+    per-document owner labels) pass them straight through instead of this
+    function re-fetching the exact same data a second time."""
     out = []
-    doc_map = document_advisor_map()
-    for adv in list_advisors():
+    if doc_map is None:
+        doc_map = document_advisor_map()
+    if advisor_rows is None:
+        advisor_rows = list_advisors()
+    for adv in advisor_rows:
         adv = dict(adv)
         adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
         adv["documents"] = [t for t, slugs in doc_map.items()
@@ -15661,7 +15670,8 @@ def admin_dashboard():
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
     _advisor_map = document_advisor_map()
-    _advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
+    _advisor_rows = list_advisors()
+    _advisor_names = {a["slug"]: a["name"] for a in _advisor_rows}
     _advisor_docs = {}
     for d in docs:
         for slug in _advisor_map.get(d["title"], []):
@@ -15671,7 +15681,7 @@ def admin_dashboard():
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
-        advisors=advisors_with_detail(),
+        advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
         owners=document_owners(),
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
