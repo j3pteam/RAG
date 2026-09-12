@@ -11662,6 +11662,14 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
     margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
     letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
   }
+  .pw-field { position: relative; display: block; }
+  .pw-field .pw-input { width: 100%; padding-right: 2.3rem; box-sizing: border-box; }
+  .pw-toggle {
+    position: absolute; right: 0.5rem; top: 50%; transform: translateY(-50%);
+    background: none; border: none; cursor: pointer; padding: 0.2rem;
+    color: var(--muted); display: flex; align-items: center;
+  }
+  .pw-toggle:hover { color: var(--navy); }
   @media (max-width: 480px) {
     .box-head { padding: 0.85rem 1.2rem; gap: 0.7rem; }
     .box-head img { height: 36px; }
@@ -11679,8 +11687,16 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
       <h1>Admin sign in</h1>
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
       <input type="email" name="email" placeholder="Email" autofocus autocomplete="username" />
-      <input type="password" name="password" placeholder="Password" required
-             style="margin-top: 0.6rem;" autocomplete="current-password" />
+      <span class="pw-field" style="display: block; margin-top: 0.6rem;">
+        <input type="password" name="password" placeholder="Password" required
+               class="pw-input" autocomplete="current-password" />
+        <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+            <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </span>
       <button type="submit">Sign in</button>
       <div class="foot">Authorized access only</div>
       <p style="margin: 0.9rem 0 0; font-size: 0.72rem; color: var(--muted); line-height: 1.5;">
@@ -11689,6 +11705,22 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
       </p>
     </div>
   </form>
+  <script>
+    // Show/hide toggle for any .pw-toggle button — event-delegated so it
+    // works for every password field on the page without a listener per field.
+    document.addEventListener("click", function(e) {
+      var btn = e.target.closest(".pw-toggle");
+      if (!btn) return;
+      var input = btn.previousElementSibling;
+      if (!input) return;
+      var showing = input.type === "text";
+      input.type = showing ? "password" : "text";
+      btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+      btn.innerHTML = showing
+        ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
+    });
+  </script>
 </body></html>"""
 
 ADVISOR_PORTAL_LOGIN_HTML = """<!DOCTYPE html>
@@ -12558,6 +12590,14 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
+.pw-field { position: relative; display: block; min-width: 0; }
+.pw-field .pw-input { padding-right: 2.3rem !important; box-sizing: border-box; }
+.pw-toggle {
+  position: absolute; right: 0.45rem; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; padding: 0.15rem;
+  color: var(--muted); display: flex; align-items: center;
+}
+.pw-toggle:hover { color: var(--navy); }
 /* All three upload rows share one grid, so the field and the button line up
    across sections regardless of button label length. The "which base"
    select sits on its own full-width row underneath, rather than squeezed
@@ -12841,6 +12881,15 @@ input[type="file"], input[type="text"] {
       </div>
     </div>
   </div>
+
+  {% macro pw_toggle_btn() %}
+  <button type="button" class="pw-toggle" tabindex="-1" aria-label="Show password">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+         stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/>
+    </svg>
+  </button>
+  {% endmacro %}
 
   {% macro doc_row(d, id_prefix="") %}
   <tr id="{{ id_prefix }}doc-row-{{ d.id }}">
@@ -13661,10 +13710,18 @@ input[type="file"], input[type="text"] {
     <details>
       <summary style="cursor: pointer; font-size: 0.82rem; color: var(--navy);">Change my password</summary>
       <form method="POST" action="{{ url_for('admin_change_my_password') }}" style="margin-top: 0.7rem; max-width: 360px;">
-        <input type="password" name="current_password" placeholder="Current password" required
-               style="width: 100%; margin-bottom: 0.5rem; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-        <input type="password" name="new_password" placeholder="New password (8+ characters)" required minlength="8"
-               style="width: 100%; margin-bottom: 0.5rem; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <span class="pw-field" style="display: block; margin-bottom: 0.5rem;">
+          <input type="password" name="current_password" placeholder="Current password" required
+                 class="pw-input"
+                 style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+          {{ pw_toggle_btn() }}
+        </span>
+        <span class="pw-field" style="display: block; margin-bottom: 0.5rem;">
+          <input type="password" name="new_password" placeholder="New password (8+ characters)" required minlength="8"
+                 class="pw-input"
+                 style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+          {{ pw_toggle_btn() }}
+        </span>
         <button type="submit" class="btn" style="font-size: 0.64rem;">Update password</button>
       </form>
     </details>
@@ -13684,7 +13741,11 @@ input[type="file"], input[type="text"] {
     <form method="POST" action="{{ url_for('admin_create_user') }}" class="upload">
       <input type="text" name="name" placeholder="Full name" required />
       <input type="email" name="email" placeholder="Email" required />
-      <input type="password" name="password" placeholder="Password (8+ characters)" required minlength="8" />
+      <span class="pw-field" style="min-width: 0;">
+        <input type="password" name="password" placeholder="Password (8+ characters)" required minlength="8"
+               class="pw-input" style="width: 100%; box-sizing: border-box;" />
+        {{ pw_toggle_btn() }}
+      </span>
       <select name="role" required>
         <option value="viewer">Viewer</option>
         <option value="admin">Admin</option>
@@ -13732,9 +13793,13 @@ input[type="file"], input[type="text"] {
             <details style="display: inline-block;">
               <summary class="btn" style="font-size: 0.64rem; display: inline-block; cursor: pointer;">Reset password</summary>
               <form method="POST" action="{{ url_for('admin_reset_user_password', user_id=u.id) }}"
-                    style="margin-top: 0.4rem; display: flex; gap: 0.3rem;">
-                <input type="password" name="new_password" placeholder="New password" required minlength="8"
-                       style="padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+                    style="margin-top: 0.4rem; display: flex; gap: 0.3rem; align-items: center;">
+                <span class="pw-field" style="min-width: 0;">
+                  <input type="password" name="new_password" placeholder="New password" required minlength="8"
+                         class="pw-input"
+                         style="padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+                  {{ pw_toggle_btn() }}
+                </span>
                 <button type="submit" class="btn" style="font-size: 0.64rem;">Set</button>
               </form>
             </details>
@@ -15122,6 +15187,24 @@ input[type="file"], input[type="text"] {
               if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
             });
         });
+      });
+    </script>
+
+    <script>
+      // Show/hide toggle for any .pw-toggle button — event-delegated so it
+      // works for every password field on the page (login, create user,
+      // reset password, change my password) without a listener per field.
+      document.addEventListener("click", function(e) {
+        var btn = e.target.closest(".pw-toggle");
+        if (!btn) return;
+        var input = btn.parentElement.querySelector(".pw-input, input[type='password'], input[type='text']");
+        if (!input) return;
+        var showing = input.type === "text";
+        input.type = showing ? "password" : "text";
+        btn.setAttribute("aria-label", showing ? "Show password" : "Hide password");
+        btn.innerHTML = showing
+          ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>'
+          : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
       });
     </script>
 
