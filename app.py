@@ -12598,13 +12598,12 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
 ADMIN_HTML = """<!DOCTYPE html><html><head>
 <title>Admin — {{ cfg.persona_name }}</title>
 <link rel="icon" href="{{ cfg.favicon_url }}" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
 <style>
 :root { --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C; --paper: #FAF6F0; --line: rgba(39,51,74,0.12); }
-body { font-family: -apple-system, sans-serif; background: var(--paper); color: var(--navy); margin: 0; }
-header { background: var(--navy); color: #fff; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--gold); }
-header h1 { margin: 0; font-size: 1rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold); font-weight: 400; }
-header a { color: rgba(210,188,141,0.7); text-decoration: none; font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; }
-header a:hover { color: var(--gold); }
+body { font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif; background: var(--paper); color: var(--navy); margin: 0; }
 *, *::before, *::after { box-sizing: border-box; }
 /* Use most of the window — the conversation log is wide and was cramped
    inside a 1000px column on a large screen. */
@@ -12710,15 +12709,13 @@ header a:hover { color: var(--gold); }
 
 /* Sidebar navigation — one persistent left rail instead of a top tab bar */
 .admin-sidebar-brand {
-  display: flex; align-items: center; gap: 0.6rem; padding: 0 0.4rem 1.4rem;
+  display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;
+  padding: 0 0.4rem 1.2rem; border-bottom: 2px solid var(--gold); margin-bottom: 1rem;
 }
-.admin-sidebar-brand .mark {
-  width: 30px; height: 30px; border-radius: 7px; background: var(--navy);
-  color: var(--gold); display: flex; align-items: center; justify-content: center;
-  font-size: 0.6rem; font-weight: 500; letter-spacing: 0.01em; flex-shrink: 0;
-}
-.admin-sidebar-brand .name { font-size: 0.85rem; font-weight: 500; color: var(--navy); line-height: 1.3; }
-.admin-sidebar-brand .build { font-size: 0.6rem; color: var(--muted); display: block; }
+.admin-brand-logo { height: 30px; width: auto; max-width: 100%; display: block; }
+.admin-brand-text { display: flex; align-items: baseline; gap: 0.4rem; }
+.admin-sidebar-brand .name { font-size: 0.78rem; font-weight: 500; color: var(--navy); }
+.admin-sidebar-brand .build { font-size: 0.6rem; color: var(--muted); }
 .admin-sidebar-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .tab-btn {
   display: flex; align-items: center; gap: 0.65rem;
@@ -13016,9 +13013,9 @@ input[type="file"], input[type="text"] {
 <div class="admin-shell">
 <aside class="admin-sidebar">
   <div class="admin-sidebar-brand">
-    <div class="mark">J3P</div>
-    <div>
-      <div class="name">{{ cfg.persona_name }} Admin</div>
+    <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="admin-brand-logo" />
+    <div class="admin-brand-text">
+      <span class="name">Admin</span>
       <span class="build">build {{ app_version }}</span>
     </div>
   </div>
@@ -13027,21 +13024,13 @@ input[type="file"], input[type="text"] {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       Overview
     </button>
-    <button type="button" class="tab-btn" data-tab="knowledge">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
-      Knowledge
+    <button type="button" class="tab-btn" data-tab="activity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Activity
     </button>
     <button type="button" class="tab-btn" data-tab="advisors">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Advisors
-    </button>
-    <button type="button" class="tab-btn" data-tab="participant-links">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      Participant links
-    </button>
-    <button type="button" class="tab-btn" data-tab="activity">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
-      Activity
     </button>
     {% if admin_perms.edit_biometric %}
     <button type="button" class="tab-btn" data-tab="biometric">
@@ -13049,16 +13038,24 @@ input[type="file"], input[type="text"] {
       Biometric data
     </button>
     {% endif %}
-    {% if admin_perms.edit_settings %}
-    <button type="button" class="tab-btn" data-tab="settings">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-      Settings
+    <button type="button" class="tab-btn" data-tab="knowledge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+      Knowledge
     </button>
-    {% endif %}
     {% if admin_perms.manage_admins %}
     <button type="button" class="tab-btn" data-tab="users">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       Manage users
+    </button>
+    {% endif %}
+    <button type="button" class="tab-btn" data-tab="participant-links">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      Participant links
+    </button>
+    {% if admin_perms.edit_settings %}
+    <button type="button" class="tab-btn" data-tab="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
     </button>
     {% endif %}
   </nav>
