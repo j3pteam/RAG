@@ -12257,6 +12257,28 @@ input[type="file"], input[type="text"] {
 .advisor-link-row { margin-bottom: 0.6rem; }
 .advisor-link-row:last-child { margin-bottom: 0; }
 
+/* Collapsible per-advisor sections — same look as .advisor-links, but only
+   the summary line shows until clicked open, so a profile with several
+   sections (voice sample, scheduling, portal, onboarding, documents,
+   briefings) reads as a compact list rather than a wall of forms. */
+.advisor-section { padding: 0.7rem 0; border-top: 1px solid var(--line); }
+.advisor-section:first-of-type { border-top: none; padding-top: 0.85rem; }
+.advisor-section summary {
+  margin: 0; font-size: 0.68rem; font-weight: 500;
+  letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+  cursor: pointer; list-style: none; user-select: none;
+  display: flex; align-items: center; gap: 0.45rem;
+  transition: color 0.15s ease;
+}
+.advisor-section summary::-webkit-details-marker { display: none; }
+.advisor-section summary::before {
+  content: "▸"; color: var(--gold); font-size: 0.68rem;
+  display: inline-block; transition: transform 0.15s ease; flex-shrink: 0;
+}
+.advisor-section[open] summary::before { transform: rotate(90deg); }
+.advisor-section summary:hover { color: var(--navy); }
+.advisor-section > *:not(summary) { margin-top: 0.75rem; }
+
 /* Live "what will the initials look like" preview beside the name field */
 .initials-preview-row {
   display: flex; align-items: center; gap: 0.5rem;
@@ -12843,8 +12865,8 @@ input[type="file"], input[type="text"] {
         </form>
       </div>
 
-      <div class="advisor-links">
-        <h3>Photo &amp; Name</h3>
+      <details class="advisor-section" open>
+        <summary>Photo &amp; Name</summary>
         <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <input type="hidden" name="slug" value="{{ adv.slug }}" />
@@ -12909,10 +12931,10 @@ input[type="file"], input[type="text"] {
           The name appears beneath the photo in their sessions. Leave the file
           blank to keep the current photo.
         </p>
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Voice Sample</h3>
+      <details class="advisor-section">
+        <summary>Voice Sample</summary>
         <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
           A recording of {{ adv.name }}'s own voice — the source material for
           a future custom text-to-speech voice. This doesn't do anything on
@@ -12974,10 +12996,10 @@ input[type="file"], input[type="text"] {
           <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
         </form>
         {% endif %}
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Scheduling Links</h3>
+      <details class="advisor-section">
+        <summary>Scheduling Links</summary>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden'),
@@ -12995,10 +13017,10 @@ input[type="file"], input[type="text"] {
           </div>
         </div>
         {% endfor %}
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Knowledge-Base Portal</h3>
+      <details class="advisor-section">
+        <summary>Knowledge-Base Portal</summary>
         <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
           A dedicated link {{ adv.name }} can use to log in and manage their
           own knowledge base — upload and remove their own documents,
@@ -13039,10 +13061,10 @@ input[type="file"], input[type="text"] {
           <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
         </form>
         {% endif %}
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Onboarding</h3>
+      <details class="advisor-section">
+        <summary>Onboarding</summary>
         <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1rem;">
           <div style="font-size: 0.82rem;">
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
@@ -13128,11 +13150,11 @@ input[type="file"], input[type="text"] {
             {% endif %}
           </div>
         </form>
-      </div>
+      </details>
 
-      <div class="advisor-links">
+      <details class="advisor-section">
         {% set adv_docs = advisor_docs.get(adv.slug, []) %}
-        <h3>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</h3>
+        <summary>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</summary>
         {% if adv_docs %}
         <table class="kb-table">
           <tr>
@@ -13156,10 +13178,10 @@ input[type="file"], input[type="text"] {
           &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
         </p>
         {% endif %}
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</h3>
+      <details class="advisor-section">
+        <summary>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</summary>
         {% if adv.briefings %}
         <table style="font-size: 0.8rem;">
           <tr><th style="width: 22%;">When</th><th>Participant</th>
@@ -13188,7 +13210,7 @@ input[type="file"], input[type="text"] {
           {{ adv.name }}'s links.
         </p>
         {% endif %}
-      </div>
+      </details>
     </div>
     {% endfor %}
     {% else %}

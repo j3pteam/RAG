@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..685749c 100644
+index 4b5a702..3babb75 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -2226,7 +2226,7 @@ index 4b5a702..685749c 100644
          return ""
      docs = []
      conn = _settings_db_conn()
-@@ -6297,1243 +7384,2457 @@ def participant_materials_block(budget=24000) -> str:
+@@ -6297,1063 +7384,2277 @@ def participant_materials_block(budget=24000) -> str:
  
  
  # ---------------------------------------------------------------------------
@@ -4345,99 +4345,7 @@ index 4b5a702..685749c 100644
 -                if not user_input:
 -                    user_input = "Please describe or analyze this image."
 -                app.logger.info(f"Chat image received: {filename} ({len(file_bytes)} bytes)")
- 
--            elif ext in DOC_EXTS:
--                # Text extraction path (unchanged)
--                extracted = extract_attachment_text(filename, file_bytes)
--                if not extracted.strip():
--                    return jsonify({"error": f"Could not extract text from {filename}."}), 400
--                if len(extracted) > 40000:
--                    extracted = extracted[:40000] + "\n\n[... file truncated for length ...]"
--                attachment_context = (
--                    f"\n\n[The user attached a document titled '{filename}'. "
--                    f"The full text of the document is below. Use it to inform your response.]\n\n"
--                    f"--- BEGIN ATTACHED DOCUMENT ---\n{extracted}\n--- END ATTACHED DOCUMENT ---"
--                )
--                if not user_input:
--                    user_input = "Please review this attached document."
--                app.logger.info(f"Chat attachment received: {filename} ({len(extracted)} chars extracted)")
--
--            else:
--                return jsonify({
--                    "error": ("Unsupported file type. Supported: PDF, Word (.docx), "
--                              "Excel (.xlsx), PowerPoint (.pptx), CSV, TXT, MD, RTF, "
--                              "and images (JPG, PNG, GIF, WEBP).")
--                }), 400
--
--        except Exception as e:
--            app.logger.error(f"Attachment processing failed: {e}")
--            return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
--
--    # === Multi-file attachment (folder OR paperclip multi-select) ===
--    # Splits incoming files into two paths:
--    #   - Documents (PDF/DOCX/TXT/MD): text extraction, concatenated into one context block
--    #   - Images (JPG/PNG/GIF/WEBP): each becomes an Anthropic vision content block
--    folder_stats = None  # (uploaded_count, skipped_count) if any files were attached
--    if folder_files:
--        MAX_FOLDER_FILES = 20
--        MAX_COMBINED_CHARS = 80000  # keep prompt reasonable
--        MAX_IMAGES = 5              # cap image count to control cost + payload
--        supported = [f for f in folder_files
--                     if (f.filename or "").lower().endswith(DOC_EXTS + IMAGE_EXTS)]
--        supported = supported[:MAX_FOLDER_FILES]
--        if not supported:
--            return jsonify({"error": "No supported files in the attachment (PDF, DOCX, TXT, MD, or images)."}), 400
--
--        import base64
--        combined_parts = []
--        total_chars = 0
--        docs_used = 0
--        images_used = 0
--        image_names = []
--        skipped_count = 0
--        for f in supported:
--            try:
--                fname = (f.filename or "unknown").rsplit("/", 1)[-1]
--                ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
--                bytes_ = f.read()
--                if len(bytes_) > MAX_UPLOAD_BYTES:
--                    skipped_count += 1
--                    continue
--                if ext in IMAGE_EXTS:
--                    # Cap number of images per turn
--                    if images_used >= MAX_IMAGES:
--                        skipped_count += 1
--                        continue
--                    b64 = base64.standard_b64encode(bytes_).decode("ascii")
--                    image_blocks.append({
--                        "type": "image",
--                        "source": {
--                            "type": "base64",
--                            "media_type": IMAGE_MEDIA_TYPES.get(ext, "image/jpeg"),
--                            "data": b64,
--                        },
--                    })
--                    images_used += 1
--                    image_names.append(fname)
--                elif ext in DOC_EXTS:
--                    extracted = extract_attachment_text(fname, bytes_)
--                    if not extracted.strip():
--                        skipped_count += 1
--                        continue
--                    remaining = MAX_COMBINED_CHARS - total_chars
--                    if remaining <= 0:
--                        skipped_count += 1
--                        continue
--                    if len(extracted) > remaining:
--                        extracted = extracted[:remaining] + "\n[... file truncated for length ...]"
--                    combined_parts.append(f"--- FILE: {fname} ---\n{extracted}")
--                    total_chars += len(extracted)
--                    docs_used += 1
--                else:
--                    skipped_count += 1
--            except Exception as e:
--                app.logger.error(f"Multi-file attachment skipped ({f.filename}): {e}")
--                skipped_count += 1
++
 +# ---------------------------------------------------------------------------
 +# Pre-session briefings
 +# ---------------------------------------------------------------------------
@@ -4447,10 +4355,7 @@ index 4b5a702..685749c 100644
 +#
 +# The brief is always stored in the admin panel. It is emailed as well when a
 +# mail transport is configured; without one the panel is the delivery route.
- 
--        used_count = docs_used + images_used
--        if used_count == 0:
--            return jsonify({"error": "Could not process any of the attached files."}), 400
++
 +BRIEFING_PROMPT = (
 +    "Write a pre-call brief for an advisor about to meet this person. The "
 +    "advisor has not seen this conversation.\n\n"
@@ -4465,29 +4370,8 @@ index 4b5a702..685749c 100644
 +    "diagnosis, no advice to the advisor about what to recommend.\n"
 +    "- Under 250 words. Markdown with a '# Pre-Call Brief' heading."
 +)
- 
--        # Tell the model which images it's looking at, in order. Without this
--        # the vision blocks arrive unlabelled and it can't refer to them by name.
--        image_note = ""
--        if image_names:
--            listed = "; ".join(f"image {i}: {n}" for i, n in enumerate(image_names, 1))
--            image_note = (
--                f"\n\n[The user also attached {len(image_names)} "
--                f"image{'s' if len(image_names) != 1 else ''}, provided with this "
--                f"message in this order — {listed}. Refer to them by filename.]"
--            )
- 
--        # Build the doc context block only if we actually used any docs
--        if combined_parts:
--            attachment_context = (
--                f"\n\n[The user attached {docs_used} document{'s' if docs_used != 1 else ''}"
--                + (f" and {images_used} image{'s' if images_used != 1 else ''}" if images_used else "")
--                + f" (grouped as '{folder_name}'). "
--                f"The concatenated content of all documents is below. Use it to inform your response.]\n\n"
--                f"--- BEGIN ATTACHED FILES ---\n"
--                + "\n\n".join(combined_parts) +
--                f"\n--- END ATTACHED FILES ---"
--                + image_note
++
++
 +def _briefings_ensure_table(conn):
 +    with conn.cursor() as cur:
 +        cur.execute("""
@@ -4499,48 +4383,11 @@ index 4b5a702..685749c 100644
 +                summary       TEXT NOT NULL,
 +                emailed       BOOLEAN NOT NULL DEFAULT FALSE,
 +                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
-             )
--        elif image_note:
--            # Images only, no documents
--            attachment_context = image_note
--
--        if not user_input:
--            user_input = "Please review these attached files."
--        pieces = []
--        if docs_used:   pieces.append(f"{docs_used} doc{'s' if docs_used != 1 else ''}")
--        if images_used: pieces.append(f"{images_used} image{'s' if images_used != 1 else ''}")
--        attachment_display_name = f"{folder_name} ({', '.join(pieces)})"
--        folder_stats = (used_count, skipped_count)
--        app.logger.info(
--            f"Chat multi-file attachment: {folder_name} — {docs_used} docs, "
--            f"{images_used} images, {skipped_count} skipped, {total_chars} chars"
--        )
--
--    # ---------------------------------------------------------------
--    # Safety check — runs before anything else
--    # ---------------------------------------------------------------
--    # If the message signals risk of harm to self or others, respond with the
--    # fixed safety guidance instead of coaching, and alert by email. Handled
--    # here rather than through the model so the response is guaranteed.
--    if detect_risk(user_input):
--        app.logger.warning("[safety] risk language detected — safety response returned")
--        raise_safety_alert(user_input, client_ip())
++            )
 +        """)
 +    conn.commit()
- 
--        safety_id = None
--        try:
--            safety_id = db.log_interaction(
--                user_message=user_input,
--                bot_reply=SAFETY_RESPONSE,
--                persona=CONFIG["persona_name"],
--                attachment_info="SAFETY ALERT",
--            )
--        except Exception as e:
--            app.logger.error(f"[safety] log_interaction failed: {e}")
- 
--        append_history("user", user_input)
--        append_history("assistant", SAFETY_RESPONSE)
++
++
 +def save_briefing(advisor_slug, advisor_name, participant, summary, emailed):
 +    conn = _settings_db_conn()
 +    if not conn:
@@ -4560,28 +4407,15 @@ index 4b5a702..685749c 100644
 +        return False
 +    finally:
 +        conn.close()
- 
--        return jsonify({
--            "reply": SAFETY_RESPONSE,
--            "interaction_id": safety_id,
--            "export_format": None,      # never offer to export a crisis reply
--            "documents": [],
--            "single_file": False,
--            "separate_files": False,
--        })
- 
--    # Combine user text with any attached-document context. Images are added
--    # separately as a content block when building the current-turn message below.
--    # Pick up first name, role and specialty whenever they're volunteered.
--    # Stored durably, so a returning participant isn't asked twice.
++
++
 +def list_briefings(limit=25, advisor_slug=None, unassigned_only=False):
 +    """Briefings, optionally just one advisor's — or just the unassigned ones."""
 +    conn = _settings_db_conn()
 +    if not conn:
 +        return []
 +    out = []
-     try:
--        update_profile_from_message(user_input)
++    try:
 +        _briefings_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            if advisor_slug:
@@ -4606,14 +4440,12 @@ index 4b5a702..685749c 100644
 +                out.append({"id": row[0], "advisor": row[1] or "—",
 +                            "participant": row[2] or "—", "summary": row[3],
 +                            "emailed": bool(row[4]), "when": _fmt_ts(row[5])})
-     except Exception as e:
--        app.logger.error(f"[profile] update failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[briefing] list failed: {e}")
 +    finally:
 +        conn.close()
 +    return out
- 
--    full_user_content = user_input + attachment_context
++
 +
 +def participant_label() -> str:
 +    """How the participant appears on the brief — no more than they've given."""
@@ -5499,189 +5331,18 @@ index 4b5a702..685749c 100644
 +                if not user_input:
 +                    user_input = "Please describe or analyze this image."
 +                app.logger.info(f"Chat image received: {filename} ({len(file_bytes)} bytes)")
-+
-+            elif ext in DOC_EXTS:
-+                # Text extraction path (unchanged)
-+                extracted = extract_attachment_text(filename, file_bytes)
-+                if not extracted.strip():
-+                    return jsonify({"error": f"Could not extract text from {filename}."}), 400
-+                if len(extracted) > 40000:
-+                    extracted = extracted[:40000] + "\n\n[... file truncated for length ...]"
-+                attachment_context = (
-+                    f"\n\n[The user attached a document titled '{filename}'. "
-+                    f"The full text of the document is below. Use it to inform your response.]\n\n"
-+                    f"--- BEGIN ATTACHED DOCUMENT ---\n{extracted}\n--- END ATTACHED DOCUMENT ---"
-+                )
-+                if not user_input:
-+                    user_input = "Please review this attached document."
-+                app.logger.info(f"Chat attachment received: {filename} ({len(extracted)} chars extracted)")
-+
-+            else:
-+                return jsonify({
-+                    "error": ("Unsupported file type. Supported: PDF, Word (.docx), "
-+                              "Excel (.xlsx), PowerPoint (.pptx), CSV, TXT, MD, RTF, "
-+                              "and images (JPG, PNG, GIF, WEBP).")
-+                }), 400
-+
-+        except Exception as e:
-+            app.logger.error(f"Attachment processing failed: {e}")
-+            return jsonify({"error": f"Could not process file: {str(e)[:200]}"}), 400
-+
-+    # === Multi-file attachment (folder OR paperclip multi-select) ===
-+    # Splits incoming files into two paths:
-+    #   - Documents (PDF/DOCX/TXT/MD): text extraction, concatenated into one context block
-+    #   - Images (JPG/PNG/GIF/WEBP): each becomes an Anthropic vision content block
-+    folder_stats = None  # (uploaded_count, skipped_count) if any files were attached
-+    if folder_files:
-+        MAX_FOLDER_FILES = 20
-+        MAX_COMBINED_CHARS = 80000  # keep prompt reasonable
-+        MAX_IMAGES = 5              # cap image count to control cost + payload
-+        supported = [f for f in folder_files
-+                     if (f.filename or "").lower().endswith(DOC_EXTS + IMAGE_EXTS)]
-+        supported = supported[:MAX_FOLDER_FILES]
-+        if not supported:
-+            return jsonify({"error": "No supported files in the attachment (PDF, DOCX, TXT, MD, or images)."}), 400
-+
-+        import base64
-+        combined_parts = []
-+        total_chars = 0
-+        docs_used = 0
-+        images_used = 0
-+        image_names = []
-+        skipped_count = 0
-+        for f in supported:
-+            try:
-+                fname = (f.filename or "unknown").rsplit("/", 1)[-1]
-+                ext = "." + fname.rsplit(".", 1)[-1].lower() if "." in fname else ""
-+                bytes_ = f.read()
-+                if len(bytes_) > MAX_UPLOAD_BYTES:
-+                    skipped_count += 1
-+                    continue
-+                if ext in IMAGE_EXTS:
-+                    # Cap number of images per turn
-+                    if images_used >= MAX_IMAGES:
-+                        skipped_count += 1
-+                        continue
-+                    b64 = base64.standard_b64encode(bytes_).decode("ascii")
-+                    image_blocks.append({
-+                        "type": "image",
-+                        "source": {
-+                            "type": "base64",
-+                            "media_type": IMAGE_MEDIA_TYPES.get(ext, "image/jpeg"),
-+                            "data": b64,
-+                        },
-+                    })
-+                    images_used += 1
-+                    image_names.append(fname)
-+                elif ext in DOC_EXTS:
-+                    extracted = extract_attachment_text(fname, bytes_)
-+                    if not extracted.strip():
-+                        skipped_count += 1
-+                        continue
-+                    remaining = MAX_COMBINED_CHARS - total_chars
-+                    if remaining <= 0:
-+                        skipped_count += 1
-+                        continue
-+                    if len(extracted) > remaining:
-+                        extracted = extracted[:remaining] + "\n[... file truncated for length ...]"
-+                    combined_parts.append(f"--- FILE: {fname} ---\n{extracted}")
-+                    total_chars += len(extracted)
-+                    docs_used += 1
-+                else:
-+                    skipped_count += 1
-+            except Exception as e:
-+                app.logger.error(f"Multi-file attachment skipped ({f.filename}): {e}")
-+                skipped_count += 1
-+
-+        used_count = docs_used + images_used
-+        if used_count == 0:
-+            return jsonify({"error": "Could not process any of the attached files."}), 400
-+
-+        # Tell the model which images it's looking at, in order. Without this
-+        # the vision blocks arrive unlabelled and it can't refer to them by name.
-+        image_note = ""
-+        if image_names:
-+            listed = "; ".join(f"image {i}: {n}" for i, n in enumerate(image_names, 1))
-+            image_note = (
-+                f"\n\n[The user also attached {len(image_names)} "
-+                f"image{'s' if len(image_names) != 1 else ''}, provided with this "
-+                f"message in this order — {listed}. Refer to them by filename.]"
-+            )
-+
-+        # Build the doc context block only if we actually used any docs
-+        if combined_parts:
-+            attachment_context = (
-+                f"\n\n[The user attached {docs_used} document{'s' if docs_used != 1 else ''}"
-+                + (f" and {images_used} image{'s' if images_used != 1 else ''}" if images_used else "")
-+                + f" (grouped as '{folder_name}'). "
-+                f"The concatenated content of all documents is below. Use it to inform your response.]\n\n"
-+                f"--- BEGIN ATTACHED FILES ---\n"
-+                + "\n\n".join(combined_parts) +
-+                f"\n--- END ATTACHED FILES ---"
-+                + image_note
-+            )
-+        elif image_note:
-+            # Images only, no documents
-+            attachment_context = image_note
-+
-+        if not user_input:
-+            user_input = "Please review these attached files."
-+        pieces = []
-+        if docs_used:   pieces.append(f"{docs_used} doc{'s' if docs_used != 1 else ''}")
-+        if images_used: pieces.append(f"{images_used} image{'s' if images_used != 1 else ''}")
-+        attachment_display_name = f"{folder_name} ({', '.join(pieces)})"
-+        folder_stats = (used_count, skipped_count)
-+        app.logger.info(
-+            f"Chat multi-file attachment: {folder_name} — {docs_used} docs, "
-+            f"{images_used} images, {skipped_count} skipped, {total_chars} chars"
-+        )
-+
-+    # ---------------------------------------------------------------
-+    # Safety check — runs before anything else
-+    # ---------------------------------------------------------------
-+    # If the message signals risk of harm to self or others, respond with the
-+    # fixed safety guidance instead of coaching, and alert by email. Handled
-+    # here rather than through the model so the response is guaranteed.
-+    if detect_risk(user_input):
-+        app.logger.warning("[safety] risk language detected — safety response returned")
-+        raise_safety_alert(user_input, client_ip())
-+
-+        safety_id = None
-+        try:
-+            safety_id = db.log_interaction(
-+                user_message=user_input,
-+                bot_reply=SAFETY_RESPONSE,
+ 
+             elif ext in DOC_EXTS:
+                 # Text extraction path (unchanged)
+@@ -7506,7 +9807,7 @@ def chat():
+             safety_id = db.log_interaction(
+                 user_message=user_input,
+                 bot_reply=SAFETY_RESPONSE,
+-                persona=CONFIG["persona_name"],
 +                persona=active_persona_name(),
-+                attachment_info="SAFETY ALERT",
-+            )
-+        except Exception as e:
-+            app.logger.error(f"[safety] log_interaction failed: {e}")
-+
-+        append_history("user", user_input)
-+        append_history("assistant", SAFETY_RESPONSE)
-+
-+        return jsonify({
-+            "reply": SAFETY_RESPONSE,
-+            "interaction_id": safety_id,
-+            "export_format": None,      # never offer to export a crisis reply
-+            "documents": [],
-+            "single_file": False,
-+            "separate_files": False,
-+        })
-+
-+    # Combine user text with any attached-document context. Images are added
-+    # separately as a content block when building the current-turn message below.
-+    # Pick up first name, role and specialty whenever they're volunteered.
-+    # Stored durably, so a returning participant isn't asked twice.
-+    try:
-+        update_profile_from_message(user_input)
-+    except Exception as e:
-+        app.logger.error(f"[profile] update failed: {e}")
-+
-+    full_user_content = user_input + attachment_context
- 
-     messages = load_history()
- 
+                 attachment_info="SAFETY ALERT",
+             )
+         except Exception as e:
 @@ -7731,7 +10032,16 @@ def chat():
          "13. SAY THE HARD THING. Generic assistants hedge toward the "
          "agreeable. When the person's plan has a real problem, name it plainly "
@@ -5798,34 +5459,11 @@ index 4b5a702..685749c 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8799,91 +11142,722 @@ def materials_upload():
-         else:
-             failed.append(f"{f.filename} (library full)")
+@@ -8820,8 +11163,23 @@ def advisor_avatar():
+     """The photo shown beside advisor replies.
  
--    if not added and failed:
--        return jsonify({"ok": False, "error": "; ".join(failed[:4])}), 400
--    return jsonify({"ok": True, "added": added, "failed": failed})
-+    if not added and failed:
-+        return jsonify({"ok": False, "error": "; ".join(failed[:4])}), 400
-+    return jsonify({"ok": True, "added": added, "failed": failed})
-+
-+
-+@app.route("/materials/delete/<int:doc_id>", methods=["POST"])
-+@paywall.paywall_required
-+@login_required
-+def materials_delete(doc_id):
-+    if not materials_enabled():
-+        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
-+    if delete_participant_doc(doc_id):
-+        return jsonify({"ok": True})
-+    return jsonify({"ok": False, "error": "Could not remove that item."}), 400
-+
-+
-+@app.route("/advisor_avatar.jpg")
-+def advisor_avatar():
-+    """The photo shown beside advisor replies.
-+
-+    An uploaded photo lives in Postgres so it survives redeploys; the bundled
+     An uploaded photo lives in Postgres so it survives redeploys; the bundled
+-    file is the fallback when nothing has been uploaded.
 +    file is the fallback when nothing has been uploaded. "No photo — show
 +    initials instead" (a setting, since the default advisor isn't a row in
 +    the advisors table) takes priority over both.
@@ -5834,7 +5472,7 @@ index 4b5a702..685749c 100644
 +    cache — this route runs on every page load across every worker, and a
 +    stale cache here means the admin can toggle this setting all day and
 +    some (or all) visitors keep seeing the old photo indefinitely.
-+    """
+     """
 +    settings = load_settings(force=True)
 +    if settings.get("avatar_no_photo"):
 +        name = settings.get("avatar_name") or CONFIG["persona_name"]
@@ -5843,20 +5481,21 @@ index 4b5a702..685749c 100644
 +        resp.headers["Cache-Control"] = "no-cache"
 +        return resp
 +
-+    stored = load_avatar()
-+    if stored:
-+        data, mime, updated = stored
-+        resp = app.response_class(data, mimetype=mime or "image/jpeg")
-+        # Change the tag when the photo changes so browsers refetch it
-+        try:
-+            resp.headers["ETag"] = f'"{int(updated.timestamp())}"'
-+        except Exception:
-+            pass
-+        resp.headers["Cache-Control"] = "no-cache"
-+        return resp
-+    return send_from_directory(".", "advisor_avatar.jpg")
-+
-+
+     stored = load_avatar()
+     if stored:
+         data, mime, updated = stored
+@@ -8836,31 +11194,41 @@ def advisor_avatar():
+     return send_from_directory(".", "advisor_avatar.jpg")
+ 
+ 
+-@app.route("/admin/avatar", methods=["POST"])
+-@admin_required
+-def admin_upload_avatar():
+-    """Replace the advisor photo."""
+-    file = request.files.get("avatar")
+-    if not file or not file.filename:
+-        flash("Choose an image first.")
+-        return redirect(url_for("admin_dashboard"))
 +@app.route("/admin/avatar", methods=["POST"])
 +@admin_required
 +def admin_upload_avatar():
@@ -5883,29 +5522,39 @@ index 4b5a702..685749c 100644
 +
 +    name = (request.form.get("avatar_name") or "").strip()[:60]
 +    save_setting("avatar_name", name)
-+
+ 
+-    raw = file.read()
+-    if len(raw) > AVATAR_MAX_BYTES:
+-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
+-        return redirect(url_for("admin_dashboard"))
 +    # An uploaded file always wins over a stale "no photo" checkbox — same
 +    # priority as a named advisor's form.
 +    no_photo = False if (file and file.filename) else bool(request.form.get("avatar_no_photo"))
 +    save_setting("avatar_no_photo", no_photo)
-+
+ 
+-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+-        flash("Use a JPG, PNG, WEBP or GIF image.")
+-        return redirect(url_for("admin_dashboard"))
 +    save_setting("default_scheduling_url", scheduling_url[:500])
-+
+ 
+-    data, mime = prepare_avatar(raw)
+-    if store_avatar(data, mime):
+-        flash("✓ Advisor photo updated. Participants will see it immediately.")
+-    else:
+-        flash("Could not save the photo — check the database connection.")
 +    flash("✓ Default advisor saved.")
-+    return redirect(url_for("admin_dashboard"))
-+
-+
-+@app.route("/admin/avatar/delete", methods=["POST"])
-+@admin_required
-+def admin_delete_avatar():
-+    """Revert to the photo bundled with the app."""
-+    if clear_avatar():
-+        flash("Reverted to the bundled advisor photo.")
-+    else:
-+        flash("Could not revert the photo.")
-+    return redirect(url_for("admin_dashboard"))
-+
-+
+     return redirect(url_for("admin_dashboard"))
+ 
+ 
+@@ -8875,15 +11243,490 @@ def admin_delete_avatar():
+     return redirect(url_for("admin_dashboard"))
+ 
+ 
+-# ---------------------------------------------------------------------------
+-# Admin panel
+-# ---------------------------------------------------------------------------
 +# ---------------------------------------------------------------------------
 +# Admin panel
 +# ---------------------------------------------------------------------------
@@ -6057,7 +5706,7 @@ index 4b5a702..685749c 100644
 +    </div>
 +  </div>
 +</body></html>"""
- 
++
 +ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
 +<html lang="en"><head>
 +<meta charset="UTF-8" />
@@ -6169,16 +5818,7 @@ index 4b5a702..685749c 100644
 +      assistant or to other advisors unless you're explicitly told otherwise.
 +      They're used only in your own sessions, alongside the shared J3P base.
 +    </p>
- 
--@app.route("/materials/delete/<int:doc_id>", methods=["POST"])
--@paywall.paywall_required
--@login_required
--def materials_delete(doc_id):
--    if not materials_enabled():
--        return jsonify({"ok": False, "error": "That feature is turned off."}), 403
--    if delete_participant_doc(doc_id):
--        return jsonify({"ok": True})
--    return jsonify({"ok": False, "error": "Could not remove that item."}), 400
++
 +    {% with messages = get_flashed_messages() %}
 +      {% if messages %}
 +        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
@@ -6198,7 +5838,7 @@ index 4b5a702..685749c 100644
 +        {% endfor %}
 +      </ul>
 +    </div>
- 
++
 +    <div class="card">
 +      <h2>Your personality assessment</h2>
 +      {% if personality %}
@@ -6220,10 +5860,7 @@ index 4b5a702..685749c 100644
 +        {% if personality %}Retake assessment{% else %}Take assessment{% endif %}
 +      </a>
 +    </div>
- 
--@app.route("/advisor_avatar.jpg")
--def advisor_avatar():
--    """The photo shown beside advisor replies.
++
 +    <div class="card">
 +      <h2>Your self behavioral assessment</h2>
 +      {% if behavioral %}
@@ -6245,22 +5882,7 @@ index 4b5a702..685749c 100644
 +        {% if behavioral %}Retake assessment{% else %}Take assessment{% endif %}
 +      </a>
 +    </div>
- 
--    An uploaded photo lives in Postgres so it survives redeploys; the bundled
--    file is the fallback when nothing has been uploaded.
--    """
--    stored = load_avatar()
--    if stored:
--        data, mime, updated = stored
--        resp = app.response_class(data, mimetype=mime or "image/jpeg")
--        # Change the tag when the photo changes so browsers refetch it
--        try:
--            resp.headers["ETag"] = f'"{int(updated.timestamp())}"'
--        except Exception:
--            pass
--        resp.headers["Cache-Control"] = "no-cache"
--        return resp
--    return send_from_directory(".", "advisor_avatar.jpg")
++
 +    <div class="card">
 +      <h2>Your 360 feedback</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
@@ -6289,7 +5911,7 @@ index 4b5a702..685749c 100644
 +        </form>
 +      {% endif %}
 +    </div>
- 
++
 +    <div class="card">
 +      <h2>Add a document</h2>
 +      <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
@@ -6300,15 +5922,7 @@ index 4b5a702..685749c 100644
 +        </div>
 +      </form>
 +    </div>
- 
--@app.route("/admin/avatar", methods=["POST"])
--@admin_required
--def admin_upload_avatar():
--    """Replace the advisor photo."""
--    file = request.files.get("avatar")
--    if not file or not file.filename:
--        flash("Choose an image first.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add a folder</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -6326,12 +5940,7 @@ index 4b5a702..685749c 100644
 +      </form>
 +      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
 +    </div>
- 
--    raw = file.read()
--    if len(raw) > AVATAR_MAX_BYTES:
--        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
--              f"{AVATAR_MAX_BYTES // 1048576} MB.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add from a URL</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -6348,11 +5957,7 @@ index 4b5a702..685749c 100644
 +        </div>
 +      </form>
 +    </div>
- 
--    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
--    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
--        flash("Use a JPG, PNG, WEBP or GIF image.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <script>
 +      (function() {
 +        const folderInput = document.getElementById("portal-folder-input");
@@ -6361,13 +5966,7 @@ index 4b5a702..685749c 100644
 +        const form = document.getElementById("portal-folder-form");
 +        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
 +        if (!folderInput) return;
- 
--    data, mime = prepare_avatar(raw)
--    if store_avatar(data, mime):
--        flash("✓ Advisor photo updated. Participants will see it immediately.")
--    else:
--        flash("Could not save the photo — check the database connection.")
--    return redirect(url_for("admin_dashboard"))
++
 +        folderInput.addEventListener("change", () => {
 +          const all = Array.from(folderInput.files || []);
 +          const supported = all.filter(f => SUPPORTED.test(f.name));
@@ -6385,7 +5984,7 @@ index 4b5a702..685749c 100644
 +          preview.textContent = msg;
 +          preview.style.display = "block";
 +        });
- 
++
 +        form.addEventListener("submit", (e) => {
 +          const supported = Array.from(folderInput.files || []).filter(f => SUPPORTED.test(f.name));
 +          if (supported.length === 0) {
@@ -6398,16 +5997,7 @@ index 4b5a702..685749c 100644
 +        });
 +      })();
 +    </script>
- 
--@app.route("/admin/avatar/delete", methods=["POST"])
--@admin_required
--def admin_delete_avatar():
--    """Revert to the photo bundled with the app."""
--    if clear_avatar():
--        flash("Reverted to the bundled advisor photo.")
--    else:
--        flash("Could not revert the photo.")
--    return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Your documents</h2>
 +      {% if documents %}
@@ -6444,29 +6034,33 @@ index 4b5a702..685749c 100644
 +  </div>
 +</body></html>"""
  
+-ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 +ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
-+<html lang="en"><head>
-+<meta charset="UTF-8" />
-+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+ <html lang="en"><head>
+ <meta charset="UTF-8" />
+ <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+-<title>Admin — {{ cfg.persona_name }}</title>
 +<title>Personality Assessment — {{ advisor.name }} — {{ cfg.persona_name }}</title>
-+<link rel="icon" href="{{ cfg.favicon_url }}" />
-+<link rel="preconnect" href="https://fonts.googleapis.com">
-+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
-+<style>
-+  :root {
-+    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
-+    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
-+  }
-+  *, *::before, *::after { box-sizing: border-box; }
-+  body {
-+    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+ <link rel="icon" href="{{ cfg.favicon_url }}" />
+ <link rel="preconnect" href="https://fonts.googleapis.com">
+ <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+@@ -8896,74 +11739,253 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+   *, *::before, *::after { box-sizing: border-box; }
+   body {
+     margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
+-    background: var(--paper); color: var(--navy);
+-    display: flex; align-items: center; justify-content: center;
+-    min-height: 100vh; padding: 1.25rem;
 +    background: var(--paper); color: var(--navy); min-height: 100vh;
-+  }
+   }
+-  .box {
+-    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
+-    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
 +  header {
 +    background: var(--navy); border-bottom: 2px solid var(--gold);
 +    padding: 0.9rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
-+  }
+   }
+-  .box-head {
 +  header img { height: 40px; width: auto; display: block; }
 +  .brand-divider { width: 1px; height: 24px; background: rgba(210,188,141,0.45); }
 +  header span { color: var(--gold); font-size: 0.76rem; letter-spacing: 0.2em; text-transform: uppercase; }
@@ -6543,10 +6137,7 @@ index 4b5a702..685749c 100644
 +      This becomes the basis for the coaching-style description shown to
 +      participants — never scored as a test, and there's no wrong answer.
 +    </p>
- 
--# ---------------------------------------------------------------------------
--# Admin panel
--# ---------------------------------------------------------------------------
++
 +    {% with messages = get_flashed_messages() %}
 +      {% if messages %}
 +        {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
@@ -6577,31 +6168,26 @@ index 4b5a702..685749c 100644
 +    </form>
 +  </div>
 +</body></html>"""
- 
--ADMIN_LOGIN_HTML = """<!DOCTYPE html>
++
 +ADVISOR_PORTAL_BEHAVIORAL_HTML = """<!DOCTYPE html>
- <html lang="en"><head>
- <meta charset="UTF-8" />
- <meta name="viewport" content="width=device-width, initial-scale=1.0" />
--<title>Admin — {{ cfg.persona_name }}</title>
++<html lang="en"><head>
++<meta charset="UTF-8" />
++<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 +<title>Self Behavioral Assessment — {{ advisor.name }} — {{ cfg.persona_name }}</title>
- <link rel="icon" href="{{ cfg.favicon_url }}" />
- <link rel="preconnect" href="https://fonts.googleapis.com">
- <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8896,74 +11870,122 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
-   *, *::before, *::after { box-sizing: border-box; }
-   body {
-     margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
--    background: var(--paper); color: var(--navy);
--    display: flex; align-items: center; justify-content: center;
--    min-height: 100vh; padding: 1.25rem;
++<link rel="icon" href="{{ cfg.favicon_url }}" />
++<link rel="preconnect" href="https://fonts.googleapis.com">
++<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
++<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet">
++<style>
++  :root {
++    --navy: #27334A; --gold: #D2BC8D; --rust: #9D432C;
++    --paper: #FAF6F0; --line: rgba(39,51,74,0.12); --muted: #6B7280;
++  }
++  *, *::before, *::after { box-sizing: border-box; }
++  body {
++    margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
 +    background: var(--paper); color: var(--navy); min-height: 100vh;
-   }
--  .box {
--    background: #fff; border-radius: 4px; width: 100%; max-width: 420px;
--    box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
--  }
--  .box-head {
++  }
 +  header {
      background: var(--navy); border-bottom: 2px solid var(--gold);
 -    padding: 1rem 1.75rem; display: flex; align-items: center; gap: 0.9rem;
@@ -6674,7 +6260,7 @@ index 4b5a702..685749c 100644
 +  }
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-   }
++  }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
@@ -6688,7 +6274,7 @@ index 4b5a702..685749c 100644
 +    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
 +    display: inline-flex; align-items: center;
-+  }
+   }
 +  .btn-secondary:hover { border-color: var(--navy); }
    @media (max-width: 480px) {
 -    .box-head { padding: 0.85rem 1.2rem; gap: 0.7rem; }
@@ -6873,10 +6459,32 @@ index 4b5a702..685749c 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +12256,19 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +12256,41 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
++
++/* Collapsible per-advisor sections — same look as .advisor-links, but only
++   the summary line shows until clicked open, so a profile with several
++   sections (voice sample, scheduling, portal, onboarding, documents,
++   briefings) reads as a compact list rather than a wall of forms. */
++.advisor-section { padding: 0.7rem 0; border-top: 1px solid var(--line); }
++.advisor-section:first-of-type { border-top: none; padding-top: 0.85rem; }
++.advisor-section summary {
++  margin: 0; font-size: 0.68rem; font-weight: 500;
++  letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
++  cursor: pointer; list-style: none; user-select: none;
++  display: flex; align-items: center; gap: 0.45rem;
++  transition: color 0.15s ease;
++}
++.advisor-section summary::-webkit-details-marker { display: none; }
++.advisor-section summary::before {
++  content: "▸"; color: var(--gold); font-size: 0.68rem;
++  display: inline-block; transition: transform 0.15s ease; flex-shrink: 0;
++}
++.advisor-section[open] summary::before { transform: rotate(90deg); }
++.advisor-section summary:hover { color: var(--navy); }
++.advisor-section > *:not(summary) { margin-top: 0.75rem; }
 +
 +/* Live "what will the initials look like" preview beside the name field */
 +.initials-preview-row {
@@ -6893,7 +6501,7 @@ index 4b5a702..685749c 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9226,6 +12325,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +12347,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -6917,7 +6525,7 @@ index 4b5a702..685749c 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,13 +12440,190 @@ input[type="file"], input[type="text"] {
+@@ -9324,13 +12462,190 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -7109,7 +6717,7 @@ index 4b5a702..685749c 100644
        <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
          <input type="checkbox" name="show_scheduling_button" value="1"
-@@ -9364,12 +12657,51 @@ input[type="file"], input[type="text"] {
+@@ -9364,12 +12679,51 @@ input[type="file"], input[type="text"] {
            </span>
          </span>
        </label>
@@ -7162,7 +6770,7 @@ index 4b5a702..685749c 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +12712,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +12734,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -7197,7 +6805,7 @@ index 4b5a702..685749c 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +12749,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +12771,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -7256,7 +6864,7 @@ index 4b5a702..685749c 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,6 +12798,10 @@ input[type="file"], input[type="text"] {
+@@ -9419,6 +12820,10 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -7267,7 +6875,15 @@ index 4b5a702..685749c 100644
        </div>
  
        <div class="advisor-links">
-@@ -9466,12 +12849,15 @@ input[type="file"], input[type="text"] {
+@@ -9460,18 +12865,21 @@ input[type="file"], input[type="text"] {
+         </form>
+       </div>
+ 
+-      <div class="advisor-links">
+-        <h3>Photo &amp; Name</h3>
++      <details class="advisor-section" open>
++        <summary>Photo &amp; Name</summary>
+         <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
            <input type="hidden" name="slug" value="{{ adv.slug }}" />
            <input type="text" name="name" value="{{ adv.name }}" required
@@ -7285,7 +6901,7 @@ index 4b5a702..685749c 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,6 +12866,44 @@ input[type="file"], input[type="text"] {
+@@ -9480,15 +12888,118 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -7330,12 +6946,15 @@ index 4b5a702..685749c 100644
          </form>
          <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
            The name appears beneath the photo in their sessions. Leave the file
-@@ -9487,6 +12911,71 @@ input[type="file"], input[type="text"] {
+           blank to keep the current photo.
          </p>
-       </div>
+-      </div>
++      </details>
  
-+      <div class="advisor-links">
-+        <h3>Voice Sample</h3>
+-      <div class="advisor-links">
+-        <h3>Scheduling Links</h3>
++      <details class="advisor-section">
++        <summary>Voice Sample</summary>
 +        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
 +          A recording of {{ adv.name }}'s own voice — the source material for
 +          a future custom text-to-speech voice. This doesn't do anything on
@@ -7397,21 +7016,28 @@ index 4b5a702..685749c 100644
 +          <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
 +        </form>
 +        {% endif %}
-+      </div>
++      </details>
 +
-       <div class="advisor-links">
-         <h3>Scheduling Links</h3>
++      <details class="advisor-section">
++        <summary>Scheduling Links</summary>
          {% for path, label in [
-@@ -9509,14 +12998,156 @@ input[type="file"], input[type="text"] {
-       </div>
+             ('/scheduling', 'Booking button always shown'),
+             ('/no-scheduling', 'Booking button always hidden'),
+@@ -9506,17 +13017,159 @@ input[type="file"], input[type="text"] {
+           </div>
+         </div>
+         {% endfor %}
+-      </div>
++      </details>
  
-       <div class="advisor-links">
+-      <div class="advisor-links">
 -        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
 -        {% if adv.documents %}
 -        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
 -          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
 -        </ul>
-+        <h3>Knowledge-Base Portal</h3>
++      <details class="advisor-section">
++        <summary>Knowledge-Base Portal</summary>
 +        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
 +          A dedicated link {{ adv.name }} can use to log in and manage their
 +          own knowledge base — upload and remove their own documents,
@@ -7452,10 +7078,10 @@ index 4b5a702..685749c 100644
 +          <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
 +        </form>
 +        {% endif %}
-+      </div>
++      </details>
 +
-+      <div class="advisor-links">
-+        <h3>Onboarding</h3>
++      <details class="advisor-section">
++        <summary>Onboarding</summary>
 +        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1rem;">
 +          <div style="font-size: 0.82rem;">
 +            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
@@ -7541,11 +7167,11 @@ index 4b5a702..685749c 100644
 +            {% endif %}
 +          </div>
 +        </form>
-+      </div>
++      </details>
 +
-+      <div class="advisor-links">
++      <details class="advisor-section">
 +        {% set adv_docs = advisor_docs.get(adv.slug, []) %}
-+        <h3>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</h3>
++        <summary>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</summary>
 +        {% if adv_docs %}
 +        <table class="kb-table">
 +          <tr>
@@ -7565,7 +7191,28 @@ index 4b5a702..685749c 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9563,27 +13194,13 @@ input[type="file"], input[type="text"] {
+@@ -9525,10 +13178,10 @@ input[type="file"], input[type="text"] {
+           &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
+         </p>
+         {% endif %}
+-      </div>
++      </details>
+ 
+-      <div class="advisor-links">
+-        <h3>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</h3>
++      <details class="advisor-section">
++        <summary>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</summary>
+         {% if adv.briefings %}
+         <table style="font-size: 0.8rem;">
+           <tr><th style="width: 22%;">When</th><th>Participant</th>
+@@ -9557,33 +13210,19 @@ input[type="file"], input[type="text"] {
+           {{ adv.name }}'s links.
+         </p>
+         {% endif %}
+-      </div>
++      </details>
+     </div>
+     {% endfor %}
      {% else %}
      <p class="muted">
        No advisor profiles yet. The links above still work and use the default
@@ -7596,7 +7243,7 @@ index 4b5a702..685749c 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +13237,88 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +13259,88 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -7685,7 +7332,7 @@ index 4b5a702..685749c 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +13481,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +13503,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7700,7 +7347,7 @@ index 4b5a702..685749c 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +13523,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +13545,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7709,7 +7356,7 @@ index 4b5a702..685749c 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +13552,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +13574,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -7727,7 +7374,7 @@ index 4b5a702..685749c 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +13614,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +13636,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7755,7 +7402,7 @@ index 4b5a702..685749c 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +13822,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +13844,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7765,7 +7412,7 @@ index 4b5a702..685749c 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +13843,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +13865,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7788,7 +7435,7 @@ index 4b5a702..685749c 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +13976,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +13998,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7799,7 +7446,7 @@ index 4b5a702..685749c 100644
  
  </div>
  
-@@ -10464,28 +14193,448 @@ input[type="file"], input[type="text"] {
+@@ -10464,28 +14215,448 @@ input[type="file"], input[type="text"] {
                       + "longer learn from it, though the log entry itself is kept.",
                buttonLabel: "Remove lesson",
              });
@@ -8266,7 +7913,7 @@ index 4b5a702..685749c 100644
        })();
      </script>
  </body></html>"""
-@@ -10511,6 +14660,280 @@ def admin_logout():
+@@ -10511,6 +14682,280 @@ def admin_logout():
      return redirect(url_for("admin_login"))
  
  
@@ -8547,7 +8194,7 @@ index 4b5a702..685749c 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,11 +14946,25 @@ def admin_dashboard():
+@@ -10523,11 +14968,25 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8573,7 +8220,7 @@ index 4b5a702..685749c 100644
      return render_template_string(
          ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
          settings=load_settings(force=True),
-@@ -10535,7 +14972,15 @@ def admin_dashboard():
+@@ -10535,7 +14994,15 @@ def admin_dashboard():
          avatar_custom=bool(load_avatar()),
          advisors=advisors_with_detail(),
          owners=document_owners(),
@@ -8590,7 +8237,7 @@ index 4b5a702..685749c 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,9 +14990,23 @@ def admin_dashboard():
+@@ -10545,9 +15012,23 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8614,7 +8261,7 @@ index 4b5a702..685749c 100644
      )
  
  
-@@ -10631,16 +15090,43 @@ def admin_save_advisor():
+@@ -10631,16 +15112,43 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8664,7 +8311,7 @@ index 4b5a702..685749c 100644
      else:
          flash("Could not save the advisor — check the database connection.")
      return redirect(url_for("admin_dashboard"))
-@@ -10657,6 +15143,176 @@ def admin_delete_advisor(slug):
+@@ -10657,6 +15165,176 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8841,7 +8488,7 @@ index 4b5a702..685749c 100644
  @app.route("/admin/settings", methods=["POST"])
  @admin_required
  def admin_settings():
-@@ -10672,21 +15328,14 @@ def admin_settings():
+@@ -10672,21 +15350,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -8865,7 +8512,7 @@ index 4b5a702..685749c 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10781,22 +15430,34 @@ def admin_upload_folder():
+@@ -10781,22 +15452,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -8906,7 +8553,7 @@ index 4b5a702..685749c 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +15470,6 @@ def admin_upload_folder():
+@@ -10809,7 +15492,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -8914,7 +8561,7 @@ index 4b5a702..685749c 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +15498,10 @@ def admin_upload_folder():
+@@ -10838,7 +15520,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -8926,7 +8573,7 @@ index 4b5a702..685749c 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +15509,12 @@ def admin_upload_folder():
+@@ -10846,14 +15531,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -8941,7 +8588,7 @@ index 4b5a702..685749c 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,8 +15522,11 @@ def admin_upload_folder():
+@@ -10861,8 +15544,11 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -8955,7 +8602,7 @@ index 4b5a702..685749c 100644
  
  
  @app.route("/admin/upload-text", methods=["POST"])
-@@ -11043,25 +15707,34 @@ def admin_upload_url():
+@@ -11043,25 +15729,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -8997,7 +8644,7 @@ index 4b5a702..685749c 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +15755,10 @@ def admin_upload_url():
+@@ -11082,7 +15777,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -9009,7 +8656,7 @@ index 4b5a702..685749c 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +15766,7 @@ def admin_upload_url():
+@@ -11090,8 +15788,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9019,7 +8666,7 @@ index 4b5a702..685749c 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +15776,14 @@ def admin_upload_url():
+@@ -11101,14 +15798,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9037,7 +8684,7 @@ index 4b5a702..685749c 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,32 +15796,32 @@ def admin_upload_url():
+@@ -11121,32 +15818,32 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9086,7 +8733,7 @@ index 4b5a702..685749c 100644
  
  
  @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@@ -11160,6 +15835,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +15857,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
