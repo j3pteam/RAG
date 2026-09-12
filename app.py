@@ -13255,22 +13255,22 @@ input[type="file"], input[type="text"] {
         keep the current one.
       </p>
       <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
-            class="upload">
+            style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
-               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-        <div style="display: flex; gap: 0.4rem; align-items: center; grid-column: 2 / -1;">
-          <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
-                 style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
-                  style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
-        </div>
+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)"
+               style="flex: 1 1 240px; min-width: 0; padding: 0.45rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
+               style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+        <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
+                style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
         <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
-        <button type="submit" class="btn">Save advisor</button>
-        <div class="initials-preview-row" style="grid-column: 1 / -1;">
+        <div class="initials-preview-row">
           <span id="initials-preview-new" class="initials-preview">?</span>
           <span class="muted">Preview if no photo is used</span>
         </div>
+        <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
       </form>
     </div>
 

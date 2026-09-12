@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..f7f1d8f 100644
+index 4b5a702..e422603 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -6331,17 +6331,6 @@ index 4b5a702..f7f1d8f 100644
 +  .pq-row {
 +    background: #fff; border: 1px solid var(--line); border-radius: 4px;
 +    padding: 1.1rem 1.2rem; margin-bottom: 0.9rem;
-+  }
-+  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
-+  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-+  .pq-scale label { flex: 1 1 90px; text-align: center; cursor: pointer; }
-+  .pq-scale input[type="radio"] {
-+    position: absolute; opacity: 0; width: 0; height: 0;
-+  }
-+  .pq-scale span {
-+    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
-+    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
-+    font-size: 0.76rem; transition: all 0.15s ease;
    }
 -  input:focus { outline: none; border-color: var(--gold); background: #fff; }
 -  button {
@@ -6350,14 +6339,28 @@ index 4b5a702..f7f1d8f 100644
 -    border-radius: 2px; cursor: pointer; font-family: inherit;
 -    font-size: 0.78rem; letter-spacing: 0.18em; text-transform: uppercase;
 -    transition: background 0.2s ease, color 0.2s ease;
-+  .pq-scale input[type="radio"]:checked + span {
-+    background: var(--navy); color: var(--gold); border-color: var(--navy);
++  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
++  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
++  .pq-scale label { flex: 1 1 90px; text-align: center; cursor: pointer; }
++  .pq-scale input[type="radio"] {
++    position: absolute; opacity: 0; width: 0; height: 0;
    }
 -  button:hover { background: var(--gold); color: var(--navy); }
 -  .err {
 -    background: #FEE; color: var(--rust); border: 1px solid #E7C3BA;
 -    padding: 0.65rem 0.85rem; border-radius: 2px;
 -    font-size: 0.85rem; margin-bottom: 1rem;
++  .pq-scale span {
++    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
++    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
++    font-size: 0.76rem; transition: all 0.15s ease;
+   }
+-  .foot {
+-    margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
+-    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
++  .pq-scale input[type="radio"]:checked + span {
++    background: var(--navy); color: var(--gold); border-color: var(--navy);
++  }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
@@ -6365,16 +6368,13 @@ index 4b5a702..f7f1d8f 100644
 +    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
    }
--  .foot {
--    margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
--    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
 +  .btn:hover { background: var(--gold); color: var(--navy); }
 +  .btn-secondary {
 +    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
 +    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
 +    display: inline-flex; align-items: center;
-   }
++  }
 +  .btn-secondary:hover { border-color: var(--navy); }
    @media (max-width: 480px) {
 -    .box-head { padding: 0.85rem 1.2rem; gap: 0.7rem; }
@@ -6940,22 +6940,22 @@ index 4b5a702..f7f1d8f 100644
 +        keep the current one.
 +      </p>
 +      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
-+            class="upload">
++            style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
 +        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
-+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)" />
-+        <div style="display: flex; gap: 0.4rem; align-items: center; grid-column: 2 / -1;">
-+          <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
-+                 style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
-+                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
-+                  style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
-+        </div>
++               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)"
++               style="flex: 1 1 240px; min-width: 0; padding: 0.45rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
++        <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
++               style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
++                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
++        <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
++                style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
 +        <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
-+        <button type="submit" class="btn">Save advisor</button>
-+        <div class="initials-preview-row" style="grid-column: 1 / -1;">
++        <div class="initials-preview-row">
 +          <span id="initials-preview-new" class="initials-preview">?</span>
 +          <span class="muted">Preview if no photo is used</span>
 +        </div>
++        <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
 +      </form>
 +    </div>
 +
