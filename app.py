@@ -225,6 +225,25 @@ _SETTINGS_DEFAULTS = {
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
 
+# Every "ensure this table exists" function below is a CREATE TABLE IF NOT
+# EXISTS — safe to call repeatedly, but not free: it's still a real DDL
+# statement (a catalog lookup and, briefly, a lock) even when it's a
+# no-op. With ~20 such tables and several called once per advisor on
+# every admin dashboard load, that overhead was compounding into real,
+# user-visible page-load slowness. This tracks which tables have already
+# been confirmed to exist once in this process's lifetime, so each
+# ensure-table function can skip repeating that DDL on every subsequent
+# call — the actual queries after it still run every time, only the
+# redundant "does this table exist" statement is skipped.
+_TABLES_ENSURED = set()
+
+
+def _already_ensured(name: str) -> bool:
+    if name in _TABLES_ENSURED:
+        return True
+    _TABLES_ENSURED.add(name)
+    return False
+
 
 def _settings_db_conn():
     """Connection for the settings table, or None when Postgres isn't set up."""
@@ -240,6 +259,8 @@ def _settings_db_conn():
 
 
 def _settings_ensure_table(conn):
+    if _already_ensured("app_settings"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS app_settings (
@@ -401,6 +422,8 @@ def resolve_location(ip: str):
 
 
 def _ack_ensure_table(conn):
+    if _already_ensured("interaction_ack"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS interaction_ack (
@@ -471,6 +494,8 @@ def acknowledgements_for(interaction_ids):
 
 
 def _interaction_personality_ensure_table(conn):
+    if _already_ensured("interaction_personality"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS interaction_personality (
@@ -676,6 +701,8 @@ def personality_interaction_tips(scores: dict) -> list:
 
 
 def _geo_ensure_table(conn):
+    if _already_ensured("interaction_geo"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS interaction_geo (
@@ -1209,6 +1236,8 @@ LEARNING_BATCH_CAP = 25
 
 
 def _learning_ensure_table(conn):
+    if _already_ensured("learning_runs"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS learning_runs (
@@ -6098,6 +6127,8 @@ CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
 
 
 def _history_ensure_table(conn):
+    if _already_ensured("chat_history"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS chat_history (
@@ -6519,6 +6550,8 @@ _AVATAR_TYPES = {"image/jpeg": "jpg", "image/png": "png",
 
 
 def _avatar_ensure_table(conn):
+    if _already_ensured("advisor_avatar"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisor_avatar (
@@ -6674,6 +6707,8 @@ def placeholder_avatar_svg(name: str) -> str:
 
 
 def _advisors_ensure_table(conn):
+    if _already_ensured("advisors"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisors (
@@ -6747,10 +6782,11 @@ def slugify_advisor(name: str) -> str:
 def advisors_with_detail():
     """Advisor profiles plus their own briefings, for the admin panel."""
     out = []
+    doc_map = document_advisor_map()
     for adv in list_advisors():
         adv = dict(adv)
         adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
-        adv["documents"] = [t for t, slugs in document_advisor_map().items()
+        adv["documents"] = [t for t, slugs in doc_map.items()
                             if adv["slug"] in slugs]
         adv["personality"] = get_advisor_personality(adv["slug"])
         adv["behavioral"] = get_advisor_behavioral(adv["slug"])
@@ -6971,6 +7007,8 @@ ROLE_PERMISSIONS = {
 
 
 def _admin_users_ensure_table(conn):
+    if _already_ensured("admin_users"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admin_users (
@@ -7271,6 +7309,8 @@ def owner_required(f):
 # ---------------------------------------------------------------------------
 
 def _participant_links_ensure_table(conn):
+    if _already_ensured("participant_links"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_links (
@@ -7563,6 +7603,8 @@ PARTICIPANT_DOC_LIMIT = 25             # per participant
 
 
 def _participant_docs_ensure_table(conn):
+    if _already_ensured("participant_documents"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_documents (
@@ -7898,6 +7940,8 @@ def behavioral_summary_tag(scores: dict) -> str:
 
 
 def _personality_ensure_table(conn):
+    if _already_ensured("participant_personality"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_personality (
@@ -8003,6 +8047,8 @@ def get_personality_scores() -> dict:
 # ---------------------------------------------------------------------------
 
 def _advisor_personality_ensure_table(conn):
+    if _already_ensured("advisor_personality"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisor_personality (
@@ -8089,6 +8135,8 @@ def get_advisor_personality(slug: str) -> dict:
 
 
 def _advisor_behavioral_ensure_table(conn):
+    if _already_ensured("advisor_behavioral"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisor_behavioral (
@@ -8197,6 +8245,8 @@ def advisor_style_bio(name: str, scores: dict) -> str:
 
 
 def _advisor_360_ensure_table(conn):
+    if _already_ensured("advisor_360_feedback"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisor_360_feedback (
@@ -8323,6 +8373,8 @@ def delete_advisor_360_feedback(slug: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def _advisor_voice_ensure_table(conn):
+    if _already_ensured("advisor_voice_samples"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS advisor_voice_samples (
@@ -8580,6 +8632,8 @@ BIOMETRIC_FILE_MAX_BYTES = 20 * 1024 * 1024  # 20 MB — generous for a CSV/PDF 
 
 
 def _biometric_files_ensure_table(conn):
+    if _already_ensured("participant_biometric_files"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_biometric_files (
@@ -8696,6 +8750,8 @@ PROFILE_FIELDS = ("first_name", "role", "specialty")
 
 
 def _profile_ensure_table(conn):
+    if _already_ensured("participant_profile"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_profile (
@@ -8931,6 +8987,8 @@ PLAN_PROMPT = (
 
 
 def _plans_ensure_table(conn):
+    if _already_ensured("participant_plans"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS participant_plans (
@@ -9048,6 +9106,8 @@ BRIEFING_PROMPT = (
 
 
 def _briefings_ensure_table(conn):
+    if _already_ensured("session_briefings"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS session_briefings (
@@ -9216,6 +9276,8 @@ def email_briefing(advisor_name, participant, summary) -> bool:
 # be shared with several advisors at once rather than exactly one.
 
 def _doc_owner_ensure_table(conn):
+    if _already_ensured("document_owner"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS document_owner (
@@ -9272,6 +9334,8 @@ def document_owners() -> dict:
 
 
 def _doc_advisors_ensure_table(conn):
+    if _already_ensured("document_advisors"):
+        return
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS document_advisors (
