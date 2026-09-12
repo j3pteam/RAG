@@ -12608,7 +12608,19 @@ header a:hover { color: var(--gold); }
 *, *::before, *::after { box-sizing: border-box; }
 /* Use most of the window — the conversation log is wide and was cramped
    inside a 1000px column on a large screen. */
-.container { max-width: 1800px; width: 95%; margin: 0 auto; padding: 2rem 1.5rem; }
+.admin-shell { display: flex; align-items: flex-start; min-height: 100vh; }
+.admin-sidebar {
+  width: 232px; flex-shrink: 0; background: var(--paper);
+  border-right: 1px solid var(--line); padding: 1.5rem 1rem;
+  position: sticky; top: 0; height: 100vh; overflow-y: auto;
+  display: flex; flex-direction: column; box-sizing: border-box;
+}
+.admin-main { flex: 1; min-width: 0; max-width: 1600px; padding: 2rem 2.5rem 3rem; box-sizing: border-box; }
+@media (max-width: 900px) {
+  .admin-shell { flex-direction: column; }
+  .admin-sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--line); }
+  .admin-main { padding: 1.5rem 1.25rem 2.5rem; }
+}
 /* A wide log scrolls inside its own card rather than the whole page */
 .section { overflow-x: auto; }
 @media (max-width: 900px) { .container { width: 100%; padding: 1.25rem 1rem; } }
@@ -12696,19 +12708,33 @@ header a:hover { color: var(--gold); }
   border-bottom: 2px solid var(--gold);
 }
 
-/* Top-level tabs — five groups instead of eight stacked sections */
-.tabs {
-  display: flex; gap: 0.3rem; border-bottom: 2px solid var(--line);
-  margin-bottom: 1.6rem; flex-wrap: wrap;
+/* Sidebar navigation — one persistent left rail instead of a top tab bar */
+.admin-sidebar-brand {
+  display: flex; align-items: center; gap: 0.6rem; padding: 0 0.4rem 1.4rem;
 }
+.admin-sidebar-brand .mark {
+  width: 30px; height: 30px; border-radius: 7px; background: var(--navy);
+  color: var(--gold); display: flex; align-items: center; justify-content: center;
+  font-size: 0.6rem; font-weight: 500; letter-spacing: 0.01em; flex-shrink: 0;
+}
+.admin-sidebar-brand .name { font-size: 0.85rem; font-weight: 500; color: var(--navy); line-height: 1.3; }
+.admin-sidebar-brand .build { font-size: 0.6rem; color: var(--muted); display: block; }
+.admin-sidebar-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .tab-btn {
+  display: flex; align-items: center; gap: 0.65rem;
   background: transparent; border: none; cursor: pointer; font-family: inherit;
-  padding: 0.7rem 1.1rem; font-size: 0.78rem; letter-spacing: 0.08em;
-  text-transform: uppercase; color: var(--muted);
-  border-bottom: 2px solid transparent; margin-bottom: -2px;
+  padding: 0.55rem 0.6rem; font-size: 0.8rem; text-align: left;
+  color: var(--muted); border-radius: 6px; width: 100%; box-sizing: border-box;
 }
-.tab-btn.active { color: var(--navy); border-bottom-color: var(--rust); font-weight: 500; }
-.tab-btn:hover:not(.active) { color: var(--navy); }
+.tab-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
+.tab-btn.active { color: var(--navy); font-weight: 500; background: rgba(210, 188, 141, 0.35); }
+.tab-btn:hover:not(.active) { color: var(--navy); background: rgba(39, 51, 74, 0.05); }
+.admin-sidebar-foot {
+  border-top: 1px solid var(--line); padding-top: 0.9rem; margin-top: 0.9rem;
+  display: flex; flex-direction: column; gap: 0.5rem;
+}
+.admin-sidebar-foot a { font-size: 0.78rem; color: var(--muted); text-decoration: none; }
+.admin-sidebar-foot a:hover { color: var(--navy); }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 .tab-pane .group-heading:first-child { margin-top: 0; }
@@ -12987,17 +13013,62 @@ input[type="file"], input[type="text"] {
       font-style: italic;
     }
 </style></head><body>
-<header>
-  <h1>{{ cfg.persona_name }} — Admin
-    <span style="font-size: 0.6rem; letter-spacing: 0.08em; color: rgba(210,188,141,0.55);
-                 margin-left: 0.6rem; text-transform: none;">build {{ app_version }}</span>
-  </h1>
-  <div>
-    <a href="/" style="margin-right: 1.5rem;">← Back to bot</a>
+<div class="admin-shell">
+<aside class="admin-sidebar">
+  <div class="admin-sidebar-brand">
+    <div class="mark">J3P</div>
+    <div>
+      <div class="name">{{ cfg.persona_name }} Admin</div>
+      <span class="build">build {{ app_version }}</span>
+    </div>
+  </div>
+  <nav class="admin-sidebar-nav">
+    <button type="button" class="tab-btn active" data-tab="overview">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Overview
+    </button>
+    <button type="button" class="tab-btn" data-tab="knowledge">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
+      Knowledge
+    </button>
+    <button type="button" class="tab-btn" data-tab="advisors">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      Advisors
+    </button>
+    <button type="button" class="tab-btn" data-tab="participant-links">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+      Participant links
+    </button>
+    <button type="button" class="tab-btn" data-tab="activity">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+      Activity
+    </button>
+    {% if admin_perms.edit_biometric %}
+    <button type="button" class="tab-btn" data-tab="biometric">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Biometric data
+    </button>
+    {% endif %}
+    {% if admin_perms.edit_settings %}
+    <button type="button" class="tab-btn" data-tab="settings">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+      Settings
+    </button>
+    {% endif %}
+    {% if admin_perms.manage_admins %}
+    <button type="button" class="tab-btn" data-tab="users">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      Manage users
+    </button>
+    {% endif %}
+  </nav>
+  <div class="admin-sidebar-foot">
+    <a href="/">← Back to bot</a>
     <a href="/admin/logout">Sign out</a>
   </div>
-</header>
-<div class="container">
+</aside>
+<main class="admin-main">
+
   {% with messages = get_flashed_messages() %}
     {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
   {% endwith %}
@@ -13103,23 +13174,6 @@ input[type="file"], input[type="text"] {
     </td>
   </tr>
   {% endmacro %}
-
-  <div class="tabs">
-    <button type="button" class="tab-btn active" data-tab="overview">Overview</button>
-    <button type="button" class="tab-btn" data-tab="knowledge">Knowledge</button>
-    <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
-    <button type="button" class="tab-btn" data-tab="participant-links">Participant Links</button>
-    <button type="button" class="tab-btn" data-tab="activity">Activity</button>
-    {% if admin_perms.edit_biometric %}
-    <button type="button" class="tab-btn" data-tab="biometric">Biometric Data</button>
-    {% endif %}
-    {% if admin_perms.edit_settings %}
-    <button type="button" class="tab-btn" data-tab="settings">Settings</button>
-    {% endif %}
-    {% if admin_perms.manage_admins %}
-    <button type="button" class="tab-btn" data-tab="users">Manage Users</button>
-    {% endif %}
-  </div>
 
   {% if admin_perms.edit_biometric %}
   <div class="tab-pane" data-tab="biometric">
@@ -14647,6 +14701,7 @@ input[type="file"], input[type="text"] {
   {% endif %}
   </div>
 
+</main>
 </div>
 
     <script>
