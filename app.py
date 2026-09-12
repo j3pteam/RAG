@@ -12734,6 +12734,28 @@ input[type="file"], input[type="text"] {
 .kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 8%; }
 .kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 14%; }
 .kb-table th:nth-child(6), .kb-table td:nth-child(6) { width: 10%; }
+/* The base .kb-table column widths above assume exactly 6 columns (the
+   documents tables). The users and participant-links tables have more
+   columns than that (7 and 8) and were incorrectly inheriting those same
+   percentages, which starved their final Actions column down to almost
+   nothing — the stacked buttons there weren't wrapping, they were being
+   rendered into a cell only a few percent wide. These two override with
+   widths sized for their own actual column count and content. */
+.kb-table.users-table th:nth-child(1), .kb-table.users-table td:nth-child(1) { width: 12%; }
+.kb-table.users-table th:nth-child(2), .kb-table.users-table td:nth-child(2) { width: 20%; }
+.kb-table.users-table th:nth-child(3), .kb-table.users-table td:nth-child(3) { width: 11%; }
+.kb-table.users-table th:nth-child(4), .kb-table.users-table td:nth-child(4) { width: 9%; }
+.kb-table.users-table th:nth-child(5), .kb-table.users-table td:nth-child(5) { width: 11%; }
+.kb-table.users-table th:nth-child(6), .kb-table.users-table td:nth-child(6) { width: 13%; }
+.kb-table.users-table th:nth-child(7), .kb-table.users-table td:nth-child(7) { width: 24%; }
+.kb-table.plinks-table th:nth-child(1), .kb-table.plinks-table td:nth-child(1) { width: 12%; }
+.kb-table.plinks-table th:nth-child(2), .kb-table.plinks-table td:nth-child(2) { width: 8%; }
+.kb-table.plinks-table th:nth-child(3), .kb-table.plinks-table td:nth-child(3) { width: 9%; }
+.kb-table.plinks-table th:nth-child(4), .kb-table.plinks-table td:nth-child(4) { width: 30%; }
+.kb-table.plinks-table th:nth-child(5), .kb-table.plinks-table td:nth-child(5) { width: 7%; }
+.kb-table.plinks-table th:nth-child(6), .kb-table.plinks-table td:nth-child(6) { width: 9%; }
+.kb-table.plinks-table th:nth-child(7), .kb-table.plinks-table td:nth-child(7) { width: 10%; }
+.kb-table.plinks-table th:nth-child(8), .kb-table.plinks-table td:nth-child(8) { width: 15%; }
 .kb-title { font-weight: 500; word-break: break-word; }
 .kb-source {
   font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
@@ -13758,7 +13780,7 @@ input[type="file"], input[type="text"] {
   <div class="section">
     <h2>Existing users{% if admin_users %} ({{ admin_users|length }}){% endif %}</h2>
     {% if admin_users %}
-    <table class="kb-table">
+    <table class="kb-table users-table">
       <tr>
         <th>Name</th><th>Email</th><th>Role</th><th>Status</th>
         <th>Created</th><th>Last login</th><th></th>
@@ -13850,7 +13872,7 @@ input[type="file"], input[type="text"] {
   <div class="section">
     <h2>Existing links{% if participant_links %} ({{ participant_links|length }}){% endif %}</h2>
     {% if participant_links %}
-    <table class="kb-table">
+    <table class="kb-table plinks-table">
       <tr>
         <th>Label</th><th>First name</th><th>Advisor</th><th>Link</th><th>Status</th>
         <th>Created</th><th>Last used</th><th></th>
