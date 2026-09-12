@@ -13156,26 +13156,9 @@ input[type="file"], input[type="text"] {
     <h2>Display Settings</h2>
     <form method="POST" action="/admin/settings" id="settings-form">
       <input type="hidden" name="_fields"
-             value="show_scheduling_button,show_avatar,allow_materials,personality_assessment_enabled" />
+             value="show_avatar,allow_materials,personality_assessment_enabled" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
                     cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
-        <input type="checkbox" name="show_scheduling_button" value="1"
-               {% if settings.show_scheduling_button %}checked{% endif %}
-               style="margin-top: 0.2rem; width: 17px; height: 17px;
-                      accent-color: var(--navy); cursor: pointer;" />
-        <span>
-          <strong>Show the &ldquo;Schedule Time With a J3P Advisor&rdquo; button</strong><br />
-          <span class="muted">
-            When off, the scheduling button is hidden from the chat page and
-            participants use the advisor without a booking prompt. Takes effect
-            immediately for everyone.
-          </span>
-        </span>
-      </label>
-      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
-                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;
-                    margin-top: 1.1rem; padding-top: 1.1rem;
-                    border-top: 1px dashed var(--line);">
         <input type="checkbox" name="show_avatar" value="1"
                {% if settings.show_avatar %}checked{% endif %}
                style="margin-top: 0.2rem; width: 17px; height: 17px;
@@ -13342,8 +13325,7 @@ input[type="file"], input[type="text"] {
         <h3>Scheduling Links</h3>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
-            ('/no-scheduling', 'Booking button always hidden'),
-            ('/', 'Follows the Display Settings toggle')] %}
+            ('/no-scheduling', 'Booking button always hidden')] %}
         <div class="advisor-link-row">
           <div class="muted advisor-link-label">{{ label }}</div>
           <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
@@ -13516,8 +13498,7 @@ input[type="file"], input[type="text"] {
         <summary>Scheduling Links</summary>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
-            ('/no-scheduling', 'Booking button always hidden'),
-            ('', 'Follows the Display Settings toggle')] %}
+            ('/no-scheduling', 'Booking button always hidden')] %}
         <div class="advisor-link-row">
           <div class="muted advisor-link-label">{{ label }}</div>
           <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
