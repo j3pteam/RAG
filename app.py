@@ -1497,11 +1497,17 @@ def start_learning_scheduler():
 
 
 def admin_required(f):
+    """Just requires being logged in as *someone* — owner, admin, or
+    viewer. Specific mutating actions use require_permission(...) instead
+    for role-specific gating; this is for the dashboard view itself and
+    other read-mostly routes, which handle hiding what a viewer shouldn't
+    see within the page rather than blocking the page outright."""
     @wraps(f)
     def wrapper(*args, **kwargs):
-        if not CONFIG["admin_password"]:
-            return ("Admin disabled. Set ADMIN_PASSWORD environment variable.", 503)
-        if not session.get("is_admin"):
+        if not CONFIG["admin_password"] and not any_admin_users_exist():
+            return ("Admin disabled. Set the ADMIN_PASSWORD environment "
+                     "variable, or create an owner account.", 503)
+        if not current_admin_role():
             return redirect(url_for("admin_login"))
         return f(*args, **kwargs)
     return wrapper
@@ -6912,6 +6918,351 @@ def set_advisor_expertise(slug: str, expertise: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Admin users — individual, named logins with a role (owner / admin /
+# viewer), replacing "everyone who knows ADMIN_PASSWORD is fully trusted."
+# ADMIN_PASSWORD still works as a permanent break-glass master key (session
+# marker admin_master, not tied to a row here) — that's what an owner uses
+# to log in the very first time, before any individual accounts exist yet,
+# and it's also what prevents a total lockout if every individual password
+# is ever lost. Day-to-day access is meant to move to real accounts created
+# from the Manage Admins tab once at least an owner account exists.
+# ---------------------------------------------------------------------------
+
+ADMIN_ROLES = ("owner", "admin", "viewer")
+
+ROLE_PERMISSIONS = {
+    "owner": {
+        "view_knowledge": True, "edit_knowledge": True,
+        "view_advisors": True, "edit_advisors": True,
+        "edit_voice": True,
+        "edit_onboarding_data": True,
+        "view_participant_links": True, "edit_participant_links": True,
+        "view_conversation_log": True, "edit_conversation_log": True,
+        "edit_biometric": True,
+        "edit_settings": True,
+        "edit_learning": True,
+        "manage_admins": True,
+    },
+    "admin": {
+        "view_knowledge": True, "edit_knowledge": True,
+        "view_advisors": True, "edit_advisors": True,
+        "edit_voice": True,
+        "edit_onboarding_data": True,
+        "view_participant_links": True, "edit_participant_links": True,
+        "view_conversation_log": True, "edit_conversation_log": True,
+        "edit_biometric": True,
+        "edit_settings": True,
+        "edit_learning": True,
+        "manage_admins": False,
+    },
+    "viewer": {
+        "view_knowledge": True, "edit_knowledge": False,
+        "view_advisors": True, "edit_advisors": False,
+        "edit_voice": False,
+        "edit_onboarding_data": False,
+        "view_participant_links": True, "edit_participant_links": False,
+        "view_conversation_log": True, "edit_conversation_log": False,
+        "edit_biometric": False,
+        "edit_settings": False,
+        "edit_learning": False,
+        "manage_admins": False,
+    },
+}
+
+
+def _admin_users_ensure_table(conn):
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id            SERIAL PRIMARY KEY,
+                email         TEXT UNIQUE NOT NULL,
+                name          TEXT NOT NULL,
+                password_hash TEXT NOT NULL,
+                role          TEXT NOT NULL DEFAULT 'admin',
+                enabled       BOOLEAN NOT NULL DEFAULT TRUE,
+                created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                last_login_at TIMESTAMPTZ
+            )
+        """)
+    conn.commit()
+
+
+def any_admin_users_exist() -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM admin_users LIMIT 1")
+            return cur.fetchone() is not None
+    except Exception as e:
+        app.logger.error(f"[admin-users] existence check failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def create_admin_user(email: str, name: str, password: str, role: str) -> dict:
+    from werkzeug.security import generate_password_hash
+    email = (email or "").strip().lower()
+    name = (name or "").strip()
+    if not email or "@" not in email:
+        return {"ok": False, "error": "A valid email is required."}
+    if not name:
+        return {"ok": False, "error": "A name is required."}
+    if role not in ADMIN_ROLES:
+        return {"ok": False, "error": "Invalid role."}
+    if not password or len(password) < 8:
+        return {"ok": False, "error": "Password must be at least 8 characters."}
+    conn = _settings_db_conn()
+    if not conn:
+        return {"ok": False, "error": "Database not available."}
+    try:
+        _admin_users_ensure_table(conn)
+        pw_hash = generate_password_hash(password)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO admin_users (email, name, password_hash, role)
+                VALUES (%s, %s, %s, %s)
+            """, (email, name, pw_hash, role))
+        conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        conn.rollback()
+        msg = str(e).lower()
+        if "unique" in msg or "duplicate" in msg:
+            return {"ok": False, "error": "That email is already in use."}
+        app.logger.error(f"[admin-users] create failed: {e}")
+        return {"ok": False, "error": "Could not create the account."}
+    finally:
+        conn.close()
+
+
+def list_admin_users() -> list:
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, email, name, role, enabled, created_at, last_login_at
+                FROM admin_users ORDER BY created_at ASC
+            """)
+            for row in cur.fetchall():
+                out.append({"id": row[0], "email": row[1], "name": row[2],
+                            "role": row[3], "enabled": bool(row[4]),
+                            "created_at": row[5], "last_login_at": row[6]})
+    except Exception as e:
+        app.logger.error(f"[admin-users] list failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def get_admin_user(user_id):
+    if not user_id:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, email, name, role, enabled, password_hash
+                FROM admin_users WHERE id = %s
+            """, (user_id,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "email": row[1], "name": row[2], "role": row[3],
+                "enabled": bool(row[4]), "password_hash": row[5]}
+    except Exception as e:
+        app.logger.error(f"[admin-users] read failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def get_admin_user_by_email(email: str):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, email, name, role, enabled, password_hash
+                FROM admin_users WHERE email = %s
+            """, (email,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return {"id": row[0], "email": row[1], "name": row[2], "role": row[3],
+                "enabled": bool(row[4]), "password_hash": row[5]}
+    except Exception as e:
+        app.logger.error(f"[admin-users] read by email failed: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def set_admin_user_role(user_id, role: str) -> bool:
+    if role not in ADMIN_ROLES:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admin_users SET role = %s WHERE id = %s", (role, user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[admin-users] role update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_admin_user_enabled(user_id, enabled: bool) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admin_users SET enabled = %s WHERE id = %s",
+                        (bool(enabled), user_id))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[admin-users] enable/disable failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def set_admin_user_password(user_id, new_password: str) -> dict:
+    from werkzeug.security import generate_password_hash
+    if not new_password or len(new_password) < 8:
+        return {"ok": False, "error": "Password must be at least 8 characters."}
+    conn = _settings_db_conn()
+    if not conn:
+        return {"ok": False, "error": "Database not available."}
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admin_users SET password_hash = %s WHERE id = %s",
+                        (generate_password_hash(new_password), user_id))
+        conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        app.logger.error(f"[admin-users] password update failed: {e}")
+        return {"ok": False, "error": "Could not update the password."}
+    finally:
+        conn.close()
+
+
+def delete_admin_user(user_id) -> bool:
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM admin_users WHERE id = %s", (user_id,))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[admin-users] delete failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def touch_admin_user_login(user_id):
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admin_users SET last_login_at = NOW() WHERE id = %s",
+                        (user_id,))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[admin-users] login stamp failed: {e}")
+    finally:
+        conn.close()
+
+
+def current_admin_role() -> str:
+    """'owner' | 'admin' | 'viewer' | '' (nobody logged in, or their account
+    was disabled after they logged in)."""
+    if session.get("admin_master"):
+        return "owner"
+    uid = session.get("admin_user_id")
+    if uid:
+        user = get_admin_user(uid)
+        if user and user["enabled"]:
+            return user["role"]
+    return ""
+
+
+def current_admin_identity() -> dict:
+    """For display — who's logged in and how. Never includes the password
+    hash, even though get_admin_user() returns it internally."""
+    if session.get("admin_master"):
+        return {"name": "Owner (master key)", "email": "", "role": "owner", "is_master": True}
+    uid = session.get("admin_user_id")
+    if uid:
+        user = get_admin_user(uid)
+        if user and user["enabled"]:
+            return {"name": user["name"], "email": user["email"],
+                    "role": user["role"], "is_master": False}
+    return {}
+
+
+def has_permission(perm: str) -> bool:
+    role = current_admin_role()
+    return bool(role) and ROLE_PERMISSIONS.get(role, {}).get(perm, False)
+
+
+def require_permission(perm: str):
+    """Gates a route on the logged-in user's role actually having this
+    permission — not just being logged in at all (that's admin_required,
+    still used for read-mostly routes like the dashboard view itself,
+    which handles hiding what a viewer shouldn't see within the page
+    rather than blocking the page)."""
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            role = current_admin_role()
+            if not role:
+                return redirect(url_for("admin_login"))
+            if not ROLE_PERMISSIONS.get(role, {}).get(perm, False):
+                return ("You don't have permission to do that. Contact an "
+                        "owner if you believe this is a mistake.", 403)
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+def owner_required(f):
+    """Stricter than require_permission('manage_admins') only in name —
+    same check, used specifically for the admin-management routes."""
+    return require_permission("manage_admins")(f)
+
+
+# ---------------------------------------------------------------------------
 # Participant links — one dedicated, admin-issued link per specific person.
 # Distinct from advisor links (those are for an advisor's own identity and
 # knowledge base); these are for controlling and tracking exactly who can
@@ -11195,7 +11546,7 @@ def advisor_avatar():
 
 
 @app.route("/admin/avatar", methods=["POST"])
-@admin_required
+@require_permission("edit_settings")
 def admin_upload_avatar():
     """Save the default advisor's photo, name, initials toggle and
     scheduling link — one form, same shape as a named advisor's save."""
@@ -11233,7 +11584,7 @@ def admin_upload_avatar():
 
 
 @app.route("/admin/avatar/delete", methods=["POST"])
-@admin_required
+@require_permission("edit_settings")
 def admin_delete_avatar():
     """Revert to the photo bundled with the app."""
     if clear_avatar():
@@ -11327,9 +11678,15 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
     <div class="content">
       <h1>Admin sign in</h1>
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
-      <input type="password" name="password" placeholder="Password" autofocus required />
+      <input type="email" name="email" placeholder="Email" autofocus autocomplete="username" />
+      <input type="password" name="password" placeholder="Password" required
+             style="margin-top: 0.6rem;" autocomplete="current-password" />
       <button type="submit">Sign in</button>
       <div class="foot">Authorized access only</div>
+      <p style="margin: 0.9rem 0 0; font-size: 0.72rem; color: var(--muted); line-height: 1.5;">
+        Have an individual account? Enter your email and password. Otherwise,
+        leave email blank and use the master password.
+      </p>
     </div>
   </form>
 </body></html>"""
@@ -12531,10 +12888,18 @@ input[type="file"], input[type="text"] {
     <button type="button" class="tab-btn" data-tab="advisors">Advisors</button>
     <button type="button" class="tab-btn" data-tab="participant-links">Participant Links</button>
     <button type="button" class="tab-btn" data-tab="activity">Activity</button>
+    {% if admin_perms.edit_biometric %}
     <button type="button" class="tab-btn" data-tab="biometric">Biometric Data</button>
+    {% endif %}
+    {% if admin_perms.edit_settings %}
     <button type="button" class="tab-btn" data-tab="settings">Settings</button>
+    {% endif %}
+    {% if admin_perms.manage_admins %}
+    <button type="button" class="tab-btn" data-tab="users">Manage Users</button>
+    {% endif %}
   </div>
 
+  {% if admin_perms.edit_biometric %}
   <div class="tab-pane" data-tab="biometric">
     <h2 class="group-heading">Biometric Data</h2>
 
@@ -12637,7 +13002,9 @@ input[type="file"], input[type="text"] {
       </p>
     </div>
   </div>
+  {% endif %}
 
+  {% if admin_perms.edit_settings %}
   <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Display</h2>
 
@@ -12722,6 +13089,7 @@ input[type="file"], input[type="text"] {
 
   </div>
   </div>
+  {% endif %}
 
   <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
@@ -12933,6 +13301,7 @@ input[type="file"], input[type="text"] {
         </p>
       </details>
 
+      {% if admin_perms.edit_voice %}
       <details class="advisor-section">
         <summary>Voice Sample</summary>
         <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
@@ -12997,6 +13366,7 @@ input[type="file"], input[type="text"] {
         </form>
         {% endif %}
       </details>
+      {% endif %}
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -13065,6 +13435,7 @@ input[type="file"], input[type="text"] {
 
       <details class="advisor-section">
         <summary>Onboarding</summary>
+        {% if admin_perms.edit_onboarding_data %}
         <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1rem;">
           <div style="font-size: 0.82rem;">
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
@@ -13106,6 +13477,12 @@ input[type="file"], input[type="text"] {
           {{ adv.name }} completes the assessments and 360 upload from their own portal link above
           — the personality and behavioral assessments are required before the rest of their portal opens up.
         </p>
+        {% else %}
+        <p class="muted" style="margin: 0 0 1rem; font-size: 0.78rem;">
+          Personality assessment, behavioral assessment, and 360 feedback status
+          are only visible to Admin and Owner roles.
+        </p>
+        {% endif %}
 
         <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
           Areas of expertise
@@ -13118,11 +13495,13 @@ input[type="file"], input[type="text"] {
           any other advisor.
         </p>
         <form method="POST" action="{{ url_for('admin_save_advisor_expertise', slug=adv.slug) }}">
-          <textarea name="expertise" rows="2"
+          <textarea name="expertise" rows="2" {% if not admin_perms.edit_advisors %}disabled{% endif %}
                     style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
                            border-radius: 2px; font-family: inherit; font-size: 0.83rem;
                            resize: vertical;">{{ adv.expertise }}</textarea>
+          {% if admin_perms.edit_advisors %}
           <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">Save expertise</button>
+          {% endif %}
         </form>
 
         <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1rem 0 0.4rem;">
@@ -13136,10 +13515,11 @@ input[type="file"], input[type="text"] {
           is written or shown automatically — review and edit before saving.
         </p>
         <form method="POST" action="{{ url_for('admin_save_advisor_bio', slug=adv.slug) }}">
-          <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3"
+          <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3" {% if not admin_perms.edit_advisors %}disabled{% endif %}
                     style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
                            border-radius: 2px; font-family: inherit; font-size: 0.83rem;
                            resize: vertical;">{{ adv.client_bio }}</textarea>
+          {% if admin_perms.edit_advisors %}
           <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center;">
             <button type="submit" class="btn" style="font-size: 0.64rem;">Save bio</button>
             {% if adv.suggested_bio %}
@@ -13149,6 +13529,7 @@ input[type="file"], input[type="text"] {
             </button>
             {% endif %}
           </div>
+          {% endif %}
         </form>
       </details>
 
@@ -13222,6 +13603,7 @@ input[type="file"], input[type="text"] {
   </div>
   </div>
 
+  {% if admin_perms.edit_settings %}
   <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Access</h2>
 
@@ -13260,6 +13642,117 @@ input[type="file"], input[type="text"] {
     </form>
   </div>
   </div>
+  {% endif %}
+
+  {% if admin_perms.manage_admins %}
+  <div class="tab-pane" data-tab="users">
+  <h2 class="group-heading">Manage Users</h2>
+
+  <div class="section">
+    <h2>Signed in as</h2>
+    <p style="margin: 0 0 0.6rem; font-size: 0.9rem;">
+      {% if admin_identity.is_master %}
+        <strong>Master key</strong> <span class="muted">(the ADMIN_PASSWORD env var — full owner access, not tied to any one account)</span>
+      {% else %}
+        <strong>{{ admin_identity.name }}</strong> <span class="muted">({{ admin_identity.email }} — {{ admin_identity.role }})</span>
+      {% endif %}
+    </p>
+    {% if not admin_identity.is_master %}
+    <details>
+      <summary style="cursor: pointer; font-size: 0.82rem; color: var(--navy);">Change my password</summary>
+      <form method="POST" action="{{ url_for('admin_change_my_password') }}" style="margin-top: 0.7rem; max-width: 360px;">
+        <input type="password" name="current_password" placeholder="Current password" required
+               style="width: 100%; margin-bottom: 0.5rem; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="password" name="new_password" placeholder="New password (8+ characters)" required minlength="8"
+               style="width: 100%; margin-bottom: 0.5rem; padding: 0.5rem 0.7rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <button type="submit" class="btn" style="font-size: 0.64rem;">Update password</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h2>Add a user</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Owner gets everything, including managing other users. Admin gets
+      everything except that. Viewer is read-only — can see the knowledge
+      base, advisors, participant links, and the conversation log, but
+      can't upload, edit, or delete anything, and has no access at all to
+      voice samples, onboarding data, biometric data, settings, or the
+      learning archive.
+    </p>
+    <form method="POST" action="{{ url_for('admin_create_user') }}" class="upload">
+      <input type="text" name="name" placeholder="Full name" required />
+      <input type="email" name="email" placeholder="Email" required />
+      <input type="password" name="password" placeholder="Password (8+ characters)" required minlength="8" />
+      <select name="role" required>
+        <option value="viewer">Viewer</option>
+        <option value="admin">Admin</option>
+        <option value="owner">Owner</option>
+      </select>
+      <button type="submit" class="btn">Create user</button>
+    </form>
+  </div>
+
+  <div class="section">
+    <h2>Existing users{% if admin_users %} ({{ admin_users|length }}){% endif %}</h2>
+    {% if admin_users %}
+    <table class="kb-table">
+      <tr>
+        <th>Name</th><th>Email</th><th>Role</th><th>Status</th>
+        <th>Created</th><th>Last login</th><th></th>
+      </tr>
+      {% for u in admin_users %}
+      <tr>
+        <td>{{ u.name }}</td>
+        <td class="muted">{{ u.email }}</td>
+        <td>
+          <form method="POST" action="{{ url_for('admin_set_user_role', user_id=u.id) }}" style="display: flex; gap: 0.3rem; align-items: center;">
+            <select name="role" onchange="this.form.requestSubmit()">
+              <option value="viewer" {% if u.role == "viewer" %}selected{% endif %}>Viewer</option>
+              <option value="admin" {% if u.role == "admin" %}selected{% endif %}>Admin</option>
+              <option value="owner" {% if u.role == "owner" %}selected{% endif %}>Owner</option>
+            </select>
+          </form>
+        </td>
+        <td>
+          {% if u.enabled %}<span style="color: #2D7D5F;">Enabled</span>
+          {% else %}<span class="muted">Disabled</span>{% endif %}
+        </td>
+        <td class="muted">{{ u.created_at.strftime("%Y-%m-%d") if u.created_at else "" }}</td>
+        <td class="muted">{{ u.last_login_at.strftime("%Y-%m-%d %H:%M") if u.last_login_at else "Never" }}</td>
+        <td>
+          <div style="display: flex; gap: 0.4rem; flex-wrap: wrap;">
+            <form method="POST" action="{{ url_for('admin_set_user_enabled', user_id=u.id) }}">
+              <input type="hidden" name="enable" value="{{ '0' if u.enabled else '1' }}" />
+              <button type="submit" class="btn" style="font-size: 0.64rem;">
+                {{ "Disable" if u.enabled else "Enable" }}
+              </button>
+            </form>
+            <details style="display: inline-block;">
+              <summary class="btn" style="font-size: 0.64rem; display: inline-block; cursor: pointer;">Reset password</summary>
+              <form method="POST" action="{{ url_for('admin_reset_user_password', user_id=u.id) }}"
+                    style="margin-top: 0.4rem; display: flex; gap: 0.3rem;">
+                <input type="password" name="new_password" placeholder="New password" required minlength="8"
+                       style="padding: 0.4rem 0.6rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+                <button type="submit" class="btn" style="font-size: 0.64rem;">Set</button>
+              </form>
+            </details>
+            <form method="POST" action="{{ url_for('admin_delete_user', user_id=u.id) }}"
+                  onsubmit="return confirm('Remove {{ u.name }}\'s account permanently?');">
+              <button type="submit" class="btn-danger">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted">No individual accounts yet — everyone is using the master key.</p>
+    {% endif %}
+  </div>
+  </div>
+  {% endif %}
 
   <div class="tab-pane" data-tab="participant-links">
   <h2 class="group-heading">Participant Links</h2>
@@ -14664,14 +15157,29 @@ input[type="file"], input[type="text"] {
 
 @app.route("/admin/login", methods=["GET", "POST"])
 def admin_login():
-    if not CONFIG["admin_password"]:
-        return ("Admin disabled. Set ADMIN_PASSWORD environment variable.", 503)
+    if not CONFIG["admin_password"] and not any_admin_users_exist():
+        return ("Admin disabled. Set the ADMIN_PASSWORD environment "
+                 "variable, or create an owner account.", 503)
     if request.method == "POST":
-        if request.form.get("password") == CONFIG["admin_password"]:
-            session["is_admin"] = True
+        email = (request.form.get("email") or "").strip().lower()
+        password = request.form.get("password") or ""
+        # The master key: no email, just the env-var password. Always logs
+        # in as owner, regardless of whether any individual accounts exist.
+        if not email and CONFIG["admin_password"] and password == CONFIG["admin_password"]:
+            session["admin_master"] = True
+            session.pop("admin_user_id", None)
             return redirect(url_for("admin_dashboard"))
-        return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error="Incorrect password")
-    if session.get("is_admin"):
+        user = get_admin_user_by_email(email) if email else None
+        if user and user["enabled"]:
+            from werkzeug.security import check_password_hash
+            if check_password_hash(user["password_hash"], password):
+                session["admin_user_id"] = user["id"]
+                session.pop("admin_master", None)
+                touch_admin_user_login(user["id"])
+                return redirect(url_for("admin_dashboard"))
+        return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG,
+                                       error="Incorrect email or password")
+    if current_admin_role():
         return redirect(url_for("admin_dashboard"))
     return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
 
@@ -14679,6 +15187,8 @@ def admin_login():
 @app.route("/admin/logout")
 def admin_logout():
     session.pop("is_admin", None)
+    session.pop("admin_master", None)
+    session.pop("admin_user_id", None)
     return redirect(url_for("admin_login"))
 
 
@@ -15029,11 +15539,14 @@ def admin_dashboard():
         log_filter=log_filter,
         log_personas=log_personas,
         log_persona=log_persona,
+        admin_identity=current_admin_identity(),
+        admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
+        admin_users=list_admin_users(),
     )
 
 
 @app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
-@admin_required
+@require_permission("edit_conversation_log")
 def admin_set_rating(feedback_id):
     """Set or clear a rating from the conversation log."""
     value = (request.form.get("rating") or "").strip().lower()
@@ -15044,7 +15557,7 @@ def admin_set_rating(feedback_id):
 
 
 @app.route("/admin/learning/run", methods=["POST"])
-@admin_required
+@require_permission("edit_learning")
 def admin_run_learning():
     """Process pending feedback into lessons now."""
     dry = bool(request.form.get("preview"))
@@ -15068,7 +15581,7 @@ def admin_run_learning():
 
 
 @app.route("/admin/learning/archive", methods=["POST"])
-@admin_required
+@require_permission("edit_learning")
 def admin_archive_learning():
     """Move the visible run history into the archive. Nothing is deleted."""
     if archive_all_learning_runs():
@@ -15079,7 +15592,7 @@ def admin_archive_learning():
 
 
 @app.route("/admin/learning/archive", methods=["GET"])
-@admin_required
+@require_permission("edit_learning")
 def admin_view_learning_archive():
     """Every archived run, newest first."""
     runs = recent_learning_runs(limit=500, archived=True)
@@ -15087,7 +15600,7 @@ def admin_view_learning_archive():
 
 
 @app.route("/admin/advisors", methods=["POST"])
-@admin_required
+@require_permission("edit_advisors")
 def admin_save_advisor():
     """Create or update an advisor profile."""
     name = (request.form.get("name") or "").strip()[:80]
@@ -15155,7 +15668,7 @@ def admin_save_advisor():
 
 
 @app.route("/admin/advisors/delete/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_advisors")
 def admin_delete_advisor(slug):
     """Remove an advisor profile and its photo."""
     if delete_advisor(slug):
@@ -15166,7 +15679,7 @@ def admin_delete_advisor(slug):
 
 
 @app.route("/admin/advisors/portal-token/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_advisors")
 def admin_advisor_portal_token(slug):
     """Generate, regenerate, or revoke an advisor's dedicated portal link.
     Regenerating immediately invalidates whatever link they had before —
@@ -15189,7 +15702,7 @@ def admin_advisor_portal_token(slug):
 
 
 @app.route("/admin/advisors/360/download/<slug>")
-@admin_required
+@require_permission("edit_onboarding_data")
 def admin_download_advisor_360(slug):
     """The advisor's 360 feedback file — admin-only, never read by the AI
     or shown to participants."""
@@ -15204,7 +15717,7 @@ def admin_download_advisor_360(slug):
 
 
 @app.route("/admin/advisors/voice/upload/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_voice")
 def admin_upload_advisor_voice(slug):
     """A voice sample — recorded live in the browser or uploaded as a file.
     Requires the consent checkbox; without it, nothing is saved, since a
@@ -15245,7 +15758,7 @@ def admin_upload_advisor_voice(slug):
 
 
 @app.route("/admin/advisors/voice/play/<slug>")
-@admin_required
+@require_permission("edit_voice")
 def admin_play_advisor_voice(slug):
     """Streams the stored sample back for an admin to confirm it's the
     right recording — admin-only, same as the 360 file."""
@@ -15257,7 +15770,7 @@ def admin_play_advisor_voice(slug):
 
 
 @app.route("/admin/advisors/voice/delete/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_voice")
 def admin_delete_advisor_voice(slug):
     if delete_advisor_voice_sample(slug):
         flash("✓ Removed the voice sample.")
@@ -15267,7 +15780,7 @@ def admin_delete_advisor_voice(slug):
 
 
 @app.route("/admin/advisors/bio/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_advisors")
 def admin_save_advisor_bio(slug):
     """Save the admin-curated, client-facing 'about this advisor' blurb.
     Never written automatically — always a deliberate save by an admin,
@@ -15284,7 +15797,7 @@ def admin_save_advisor_bio(slug):
 
 
 @app.route("/admin/advisors/expertise/<slug>", methods=["POST"])
-@admin_required
+@require_permission("edit_advisors")
 def admin_save_advisor_expertise(slug):
     """Save this advisor's own subject-matter expertise — fed to the model
     itself (see advisor_voice_guard), not just displayed, so it actually
@@ -15301,7 +15814,7 @@ def admin_save_advisor_expertise(slug):
 
 
 @app.route("/admin/participant-links", methods=["POST"])
-@admin_required
+@require_permission("edit_participant_links")
 def admin_create_participant_link():
     label = (request.form.get("label") or "").strip()
     advisor_slug = (request.form.get("advisor_slug") or "").strip()
@@ -15315,7 +15828,7 @@ def admin_create_participant_link():
 
 
 @app.route("/admin/participant-links/toggle/<int:link_id>", methods=["POST"])
-@admin_required
+@require_permission("edit_participant_links")
 def admin_toggle_participant_link(link_id):
     enable = request.form.get("enable") == "1"
     if set_participant_link_enabled(link_id, enable):
@@ -15326,7 +15839,7 @@ def admin_toggle_participant_link(link_id):
 
 
 @app.route("/admin/participant-links/delete/<int:link_id>", methods=["POST"])
-@admin_required
+@require_permission("edit_participant_links")
 def admin_delete_participant_link(link_id):
     if delete_participant_link(link_id):
         flash("✓ Link removed.")
@@ -15336,7 +15849,7 @@ def admin_delete_participant_link(link_id):
 
 
 @app.route("/admin/settings", methods=["POST"])
-@admin_required
+@require_permission("edit_settings")
 def admin_settings():
     """Persist the display toggles from the admin panel."""
     # Settings now live in more than one form, so each form declares which
@@ -15381,7 +15894,7 @@ def admin_settings():
 
 
 @app.route("/admin/upload", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_upload():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot upload: RAG not fully configured.")
@@ -15433,7 +15946,7 @@ def admin_upload():
 
 
 @app.route("/admin/upload-folder", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_upload_folder():
     """Bulk-upload all supported files from a folder in one request.
 
@@ -15552,7 +16065,7 @@ def ingest_folder_batch(files, folder_title: str = "", scope_slugs=None, owner: 
 
 
 @app.route("/admin/upload-text", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_upload_text():
     """Paste content straight in — transcripts, show notes, anything a
     JavaScript page won't hand over."""
@@ -15721,7 +16234,7 @@ def fetch_url_metadata(url: str):
 
 
 @app.route("/admin/upload-url", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_upload_url():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot ingest URL: RAG not fully configured.")
@@ -15847,7 +16360,7 @@ def ingest_url_content(url: str, custom_title: str = "", scope_slugs=None, owner
 
 
 @app.route("/admin/delete/<int:doc_id>", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_delete(doc_id):
     try:
         db.delete_document(doc_id)
@@ -15858,7 +16371,7 @@ def admin_delete(doc_id):
 
 
 @app.route("/admin/document-advisors", methods=["POST"])
-@admin_required
+@require_permission("edit_knowledge")
 def admin_set_document_advisors():
     """Reassign an already-uploaded document to zero or more advisors from
     the Knowledge Base table — the shared J3P base, one advisor, or several."""
@@ -15882,7 +16395,7 @@ def admin_set_document_advisors():
 
 
 @app.route("/admin/biometric/upload", methods=["POST"])
-@admin_required
+@require_permission("edit_biometric")
 def admin_upload_biometric():
     """Attach a wearable/lab export to a participant's email for the J3P
     team to review — never read by the advisor."""
@@ -15913,7 +16426,7 @@ def admin_upload_biometric():
 
 
 @app.route("/admin/biometric/download/<int:file_id>")
-@admin_required
+@require_permission("edit_biometric")
 def admin_download_biometric(file_id):
     result = get_biometric_file(file_id)
     if not result:
@@ -15926,7 +16439,7 @@ def admin_download_biometric(file_id):
 
 
 @app.route("/admin/biometric/delete/<int:file_id>", methods=["POST"])
-@admin_required
+@require_permission("edit_biometric")
 def admin_delete_biometric(file_id):
     if delete_biometric_file(file_id):
         flash("Deleted.")
@@ -16003,7 +16516,7 @@ def _export_error(kind: str, err: Exception):
 
 
 @app.route("/admin/export/feedback.csv")
-@admin_required
+@require_permission("view_conversation_log")
 def admin_export_feedback():
     """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
     import csv
@@ -16056,7 +16569,7 @@ def admin_export_feedback():
 
 
 @app.route("/admin/export/feedback.xlsx")
-@admin_required
+@require_permission("view_conversation_log")
 def admin_export_feedback_xlsx():
     """Stream all feedback as an Excel (.xlsx) download with formatting."""
     from flask import Response
@@ -16167,7 +16680,7 @@ def admin_export_feedback_xlsx():
 
 
 @app.route("/admin/feedback/delete-selected", methods=["POST"])
-@admin_required
+@require_permission("edit_conversation_log")
 def admin_delete_selected_feedback():
     """Delete one or more feedback rows by ID (checkboxes from the table)."""
     ids = request.form.getlist("feedback_ids")
@@ -16184,7 +16697,7 @@ def admin_delete_selected_feedback():
 
 
 @app.route("/admin/feedback/delete-all", methods=["POST"])
-@admin_required
+@require_permission("edit_conversation_log")
 def admin_delete_all_feedback():
     """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
     confirm = (request.form.get("confirm") or "").strip()
@@ -16201,7 +16714,7 @@ def admin_delete_all_feedback():
 
 
 @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
-@admin_required
+@require_permission("edit_learning")
 def admin_approve_lesson(feedback_id):
     """Approve a thumbs-down feedback row as a learning example.
 
@@ -16238,7 +16751,7 @@ def admin_approve_lesson(feedback_id):
 
 
 @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
-@admin_required
+@require_permission("edit_learning")
 def admin_revoke_lesson(feedback_id):
     """Stop using this feedback as a lesson going forward."""
     try:
@@ -16250,6 +16763,105 @@ def admin_revoke_lesson(feedback_id):
     except Exception as e:
         flash(f"Revoke failed: {str(e)[:200]}")
     return redirect(url_for("admin_dashboard"))
+
+
+@app.route("/admin/users", methods=["POST"])
+@owner_required
+def admin_create_user():
+    """Only an owner can create new logins — this is the actual delegation
+    mechanism the tiered access is built around."""
+    email = (request.form.get("email") or "").strip()
+    name = (request.form.get("name") or "").strip()
+    password = request.form.get("password") or ""
+    role = (request.form.get("role") or "").strip()
+    result = create_admin_user(email, name, password, role)
+    if result["ok"]:
+        flash(f"✓ Created a {role} account for {name} ({email}).")
+    else:
+        flash(result["error"])
+    return redirect(url_for("admin_dashboard") + "#users")
+
+
+@app.route("/admin/users/role/<int:user_id>", methods=["POST"])
+@owner_required
+def admin_set_user_role(user_id):
+    role = (request.form.get("role") or "").strip()
+    identity = current_admin_identity()
+    if identity.get("email") and get_admin_user(user_id) and \
+            get_admin_user(user_id)["email"] == identity["email"] and role != "owner":
+        flash("You can't demote your own account — have another owner do it, "
+              "so there's always at least one owner who can undo a mistake.")
+        return redirect(url_for("admin_dashboard") + "#users")
+    if set_admin_user_role(user_id, role):
+        flash(f"✓ Role updated to {role}.")
+    else:
+        flash("Could not update that role.")
+    return redirect(url_for("admin_dashboard") + "#users")
+
+
+@app.route("/admin/users/enabled/<int:user_id>", methods=["POST"])
+@owner_required
+def admin_set_user_enabled(user_id):
+    enable = request.form.get("enable") == "1"
+    if not enable and session.get("admin_user_id") == user_id:
+        flash("You can't disable the account you're currently logged in as.")
+        return redirect(url_for("admin_dashboard") + "#users")
+    if set_admin_user_enabled(user_id, enable):
+        flash("✓ Account enabled." if enable else "✓ Account disabled — access is blocked immediately.")
+    else:
+        flash("Could not update that account.")
+    return redirect(url_for("admin_dashboard") + "#users")
+
+
+@app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
+@owner_required
+def admin_delete_user(user_id):
+    if session.get("admin_user_id") == user_id:
+        flash("You can't delete the account you're currently logged in as.")
+        return redirect(url_for("admin_dashboard") + "#users")
+    if delete_admin_user(user_id):
+        flash("✓ Account removed.")
+    else:
+        flash("Could not remove that account.")
+    return redirect(url_for("admin_dashboard") + "#users")
+
+
+@app.route("/admin/users/password/<int:user_id>", methods=["POST"])
+@owner_required
+def admin_reset_user_password(user_id):
+    """An owner resetting someone else's forgotten password. Not the same
+    route as a person changing their own — see admin_change_my_password."""
+    new_password = request.form.get("new_password") or ""
+    result = set_admin_user_password(user_id, new_password)
+    if result["ok"]:
+        flash("✓ Password updated. Share the new password with them directly and securely.")
+    else:
+        flash(result["error"])
+    return redirect(url_for("admin_dashboard") + "#users")
+
+
+@app.route("/admin/my-password", methods=["POST"])
+@admin_required
+def admin_change_my_password():
+    """Anyone logged in with an individual account (any role) can change
+    their own password — this needs no special permission beyond being
+    logged in as that account; it isn't available to a master-key session
+    since that isn't tied to any single account's password."""
+    uid = session.get("admin_user_id")
+    if not uid:
+        flash("Sign in with your individual account to change its password "
+              "(the master key isn't tied to a single account).")
+        return redirect(url_for("admin_dashboard"))
+    current_password = request.form.get("current_password") or ""
+    new_password = request.form.get("new_password") or ""
+    user = get_admin_user(uid)
+    from werkzeug.security import check_password_hash
+    if not user or not check_password_hash(user["password_hash"], current_password):
+        flash("Current password is incorrect.")
+        return redirect(url_for("admin_dashboard") + "#users")
+    result = set_admin_user_password(uid, new_password)
+    flash("✓ Your password has been updated." if result["ok"] else result["error"])
+    return redirect(url_for("admin_dashboard") + "#users")
 
 
 @app.route("/webhook/email", methods=["POST"])
