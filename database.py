@@ -32,9 +32,62 @@ def is_enabled() -> bool:
 
 @contextmanager
 def get_conn():
-    """Yield a Postgres connection. Caller is responsible for transactions."""
+    """Yield a Postgres connection.
+
+    Reused for the rest of the current request via Flask's g when one is
+    available — every one of the ~18 functions in this module was
+    opening a brand-new connection (TCP handshake, TLS, auth) on every
+    single call, and one admin dashboard load calls several of them
+    (list_documents, list_feedback, feedback_stats,
+    list_feedback_personas), each paying that connection-setup latency
+    separately rather than sharing one. The actual closing of the shared
+    connection happens in app.py's teardown handler, once, at the real
+    end of the request — not here, since this function gets entered and
+    exited many times within that same request.
+
+    Outside of any Flask request (a one-off script, or the rare case
+    where reaching into Flask fails for some reason), falls back to a
+    plain connection that's opened and closed right here, exactly as
+    before.
+    """
     if not is_enabled():
         raise RuntimeError("Database not configured")
+
+    # Everything above the yield — deciding which connection to use — is
+    # safe to wrap in a broad except: it's just setup. The yield itself
+    # must NOT be inside that try/except: when the caller's own code
+    # inside `with get_conn() as conn:` raises, that exception is thrown
+    # back in at this yield point, and an except here would silently
+    # swallow errors from every single caller of this function instead of
+    # letting them propagate normally.
+    shared_conn = None
+    try:
+        from flask import g, has_app_context
+        if has_app_context():
+            if "db_shared_conn" not in g:
+                g.db_shared_conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
+            shared_conn = g.db_shared_conn
+            # Several functions in this module (insert_document in
+            # particular) have no try/except of their own around a
+            # multi-statement transaction, so a failure partway through
+            # can leave the connection in Postgres's aborted-transaction
+            # state with no explicit rollback. That was harmless before,
+            # since each call got its own fresh connection either way —
+            # now that one connection is shared for the rest of the
+            # request, an earlier failure would otherwise silently break
+            # every database call after it in the same request.
+            try:
+                if shared_conn.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
+                    shared_conn.rollback()
+            except Exception:
+                pass
+    except Exception:
+        shared_conn = None
+
+    if shared_conn is not None:
+        yield shared_conn
+        return
+
     conn = psycopg.connect(DATABASE_URL, row_factory=dict_row)
     try:
         yield conn

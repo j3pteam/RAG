@@ -317,6 +317,16 @@ def _close_settings_db_conn(exception=None):
             conn._real.close()
         except Exception:
             pass
+    # database.py's get_conn() shares a connection the same way, via
+    # g.db_shared_conn — it never closes it, since it gets entered and
+    # exited many times within one request; this closes the real thing
+    # once, here, at the actual end of the request.
+    db_conn = g.pop("db_shared_conn", None)
+    if db_conn is not None:
+        try:
+            db_conn.close()
+        except Exception:
+            pass
 
 
 def _settings_ensure_table(conn):
