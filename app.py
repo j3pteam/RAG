@@ -12609,15 +12609,15 @@ body { font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif; backg
    inside a 1000px column on a large screen. */
 .admin-shell { display: flex; align-items: flex-start; min-height: 100vh; }
 .admin-sidebar {
-  width: 232px; flex-shrink: 0; background: var(--paper);
-  border-right: 1px solid var(--line); padding: 1.5rem 1rem;
+  width: 232px; flex-shrink: 0; background: var(--navy);
+  border-right: 1px solid var(--navy); padding: 1.5rem 1rem;
   position: sticky; top: 0; height: 100vh; overflow-y: auto;
   display: flex; flex-direction: column; box-sizing: border-box;
 }
 .admin-main { flex: 1; min-width: 0; max-width: 1600px; padding: 2rem 2.5rem 3rem; box-sizing: border-box; }
 @media (max-width: 900px) {
   .admin-shell { flex-direction: column; }
-  .admin-sidebar { width: 100%; height: auto; position: static; border-right: none; border-bottom: 1px solid var(--line); }
+  .admin-sidebar { width: 100%; height: auto; position: static; border-right: none; }
   .admin-main { padding: 1.5rem 1.25rem 2.5rem; }
 }
 /* A wide log scrolls inside its own card rather than the whole page */
@@ -12707,31 +12707,34 @@ body { font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif; backg
   border-bottom: 2px solid var(--gold);
 }
 
-/* Sidebar navigation — one persistent left rail instead of a top tab bar */
+/* Sidebar navigation — one persistent left rail instead of a top tab bar.
+   Solid navy, matching the client-facing page's own header bar, rather
+   than the cream used everywhere else in the admin panel — light text on
+   top of it, same as that header treats its own gold-on-navy links. */
 .admin-sidebar-brand {
   display: flex; flex-direction: column; align-items: flex-start; gap: 0.5rem;
   padding: 0 0.4rem 1.2rem; border-bottom: 2px solid var(--gold); margin-bottom: 1rem;
 }
 .admin-brand-logo { height: 30px; width: auto; max-width: 100%; display: block; }
 .admin-brand-text { display: flex; align-items: baseline; gap: 0.4rem; }
-.admin-sidebar-brand .name { font-size: 0.78rem; font-weight: 500; color: var(--navy); }
-.admin-sidebar-brand .build { font-size: 0.6rem; color: var(--muted); }
+.admin-sidebar-brand .name { font-size: 0.78rem; font-weight: 500; color: var(--paper); }
+.admin-sidebar-brand .build { font-size: 0.6rem; color: rgba(210, 188, 141, 0.55); }
 .admin-sidebar-nav { display: flex; flex-direction: column; gap: 2px; flex: 1; }
 .tab-btn {
   display: flex; align-items: center; gap: 0.65rem;
   background: transparent; border: none; cursor: pointer; font-family: inherit;
   padding: 0.55rem 0.6rem; font-size: 0.8rem; text-align: left;
-  color: var(--muted); border-radius: 6px; width: 100%; box-sizing: border-box;
+  color: rgba(250, 246, 240, 0.65); border-radius: 6px; width: 100%; box-sizing: border-box;
 }
 .tab-btn svg { width: 16px; height: 16px; flex-shrink: 0; }
-.tab-btn.active { color: var(--navy); font-weight: 500; background: rgba(210, 188, 141, 0.35); }
-.tab-btn:hover:not(.active) { color: var(--navy); background: rgba(39, 51, 74, 0.05); }
+.tab-btn.active { color: var(--gold); font-weight: 500; background: rgba(210, 188, 141, 0.18); }
+.tab-btn:hover:not(.active) { color: var(--paper); background: rgba(255, 255, 255, 0.07); }
 .admin-sidebar-foot {
-  border-top: 1px solid var(--line); padding-top: 0.9rem; margin-top: 0.9rem;
+  border-top: 1px solid rgba(210, 188, 141, 0.25); padding-top: 0.9rem; margin-top: 0.9rem;
   display: flex; flex-direction: column; gap: 0.5rem;
 }
-.admin-sidebar-foot a { font-size: 0.78rem; color: var(--muted); text-decoration: none; }
-.admin-sidebar-foot a:hover { color: var(--navy); }
+.admin-sidebar-foot a { font-size: 0.78rem; color: rgba(210, 188, 141, 0.7); text-decoration: none; }
+.admin-sidebar-foot a:hover { color: var(--gold); }
 .tab-pane { display: none; }
 .tab-pane.active { display: block; }
 .tab-pane .group-heading:first-child { margin-top: 0; }
