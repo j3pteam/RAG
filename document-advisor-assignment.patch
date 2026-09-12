@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..2bc52ff 100644
+index 4b5a702..83b52ce 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -15,11 +15,11 @@ index 4b5a702..2bc52ff 100644
  from flask import (
      Flask, request, jsonify, session, render_template_string,
 -    send_from_directory, redirect, url_for, flash,
-+    send_from_directory, redirect, url_for, flash, Response,
++    send_from_directory, redirect, url_for, flash, Response, g,
  )
  import anthropic
  
-@@ -209,14 +210,40 @@ _SETTINGS_DEFAULTS = {
+@@ -209,29 +210,118 @@ _SETTINGS_DEFAULTS = {
      "auto_learning": False,
      # Show the advisor photo beside replies
      "show_avatar": True,
@@ -57,10 +57,82 @@ index 4b5a702..2bc52ff 100644
 +    _TABLES_ENSURED.add(name)
 +    return False
 +
++
++class _NonClosingConnProxy:
++    """Wraps a real psycopg connection so that each individual caller's own
++    conn.close() — every one of the ~50 settings-table functions has its
++    own try/finally: conn.close() — becomes a harmless no-op. The real
++    connection is only closed once, by _close_settings_db_conn below, at
++    the actual end of the request. Removing .close() from each of those
++    ~50 functions individually would be a much larger, riskier change
++    than making it safe to call redundantly from here.
++
++    cursor() also defensively rolls back before handing out a new cursor
++    if the connection is currently sitting in an aborted-transaction
++    state (INERROR) — a previous call earlier in this same request may
++    have hit an error and returned without an explicit rollback, and
++    without this, that one failure would silently break every other
++    settings-table call for the rest of the request, since they're all
++    now sharing this same connection instead of each getting a fresh one.
++    Everything else (commit, rollback, and anything not overridden here)
++    passes straight through to the real connection unchanged.
++    """
++    def __init__(self, real_conn):
++        self._real = real_conn
++
++    def close(self):
++        pass
++
++    def cursor(self, *args, **kwargs):
++        try:
++            import psycopg
++            if self._real.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
++                self._real.rollback()
++        except Exception:
++            pass
++        return self._real.cursor(*args, **kwargs)
++
++    def __getattr__(self, name):
++        return getattr(self._real, name)
++
  
  def _settings_db_conn():
-     """Connection for the settings table, or None when Postgres isn't set up."""
-@@ -232,6 +259,8 @@ def _settings_db_conn():
+-    """Connection for the settings table, or None when Postgres isn't set up."""
++    """Connection for the settings table, or None when Postgres isn't set
++    up. Reused for the rest of the current request via Flask's g —
++    opening a fresh Postgres connection (TCP handshake, TLS, auth) is
++    real, measurable latency on a remote managed database, and a single
++    admin dashboard or participant chat page load can call this dozens
++    of times (advisor lookups, personality/behavioral/voice data,
++    participant links...). Each one previously opened and closed its own
++    brand-new connection from scratch, and that overhead was compounding
++    into the page-load slowness reported directly."""
++    if "settings_db_conn" in g:
++        return g.settings_db_conn
+     url = os.environ.get("DATABASE_URL")
+     if not url:
++        g.settings_db_conn = None
+         return None
+     try:
+         import psycopg
+-        return psycopg.connect(url)
++        real_conn = psycopg.connect(url)
++        g.settings_db_conn = _NonClosingConnProxy(real_conn)
+     except Exception as e:
+         app.logger.warning(f"[settings] Postgres unavailable: {e}")
+-        return None
++        g.settings_db_conn = None
++    return g.settings_db_conn
++
++
++@app.teardown_appcontext
++def _close_settings_db_conn(exception=None):
++    conn = g.pop("settings_db_conn", None)
++    if conn is not None:
++        try:
++            conn._real.close()
++        except Exception:
++            pass
  
  
  def _settings_ensure_table(conn):
@@ -69,7 +141,7 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS app_settings (
-@@ -393,6 +422,8 @@ def resolve_location(ip: str):
+@@ -393,6 +483,8 @@ def resolve_location(ip: str):
  
  
  def _ack_ensure_table(conn):
@@ -78,7 +150,7 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS interaction_ack (
-@@ -462,7 +493,216 @@ def acknowledgements_for(interaction_ids):
+@@ -462,7 +554,216 @@ def acknowledgements_for(interaction_ids):
      return out
  
  
@@ -295,7 +367,58 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS interaction_geo (
-@@ -794,9 +1034,14 @@ def mail_transport_configured() -> bool:
+@@ -477,28 +778,33 @@ def _geo_ensure_table(conn):
+ 
+ 
+ def record_location(interaction_id: int, ip: str):
+-    """Look up and store the location for one logged interaction."""
++    """Look up and store the location for one logged interaction. Always
++    runs on the background thread record_location_async spawns below,
++    never synchronously inside a real request — so it pushes its own app
++    context here, since _settings_db_conn() now needs one (via g) and
++    there's no request already supplying it."""
+     if not (GEO_LOOKUP_ENABLED and interaction_id and ip):
+         return
+     loc = resolve_location(ip)
+     if not loc:
+         return
+-    conn = _settings_db_conn()
+-    if not conn:
+-        return
+-    try:
+-        _geo_ensure_table(conn)
+-        with conn.cursor() as cur:
+-            cur.execute("""
+-                INSERT INTO interaction_geo (interaction_id, city, region, country)
+-                VALUES (%s, %s, %s, %s)
+-                ON CONFLICT (interaction_id) DO NOTHING
+-            """, (int(interaction_id), loc["city"], loc["region"], loc["country"]))
+-        conn.commit()
+-    except Exception as e:
+-        app.logger.error(f"[geo] store failed: {e}")
+-    finally:
+-        conn.close()
++    with app.app_context():
++        conn = _settings_db_conn()
++        if not conn:
++            return
++        try:
++            _geo_ensure_table(conn)
++            with conn.cursor() as cur:
++                cur.execute("""
++                    INSERT INTO interaction_geo (interaction_id, city, region, country)
++                    VALUES (%s, %s, %s, %s)
++                    ON CONFLICT (interaction_id) DO NOTHING
++                """, (int(interaction_id), loc["city"], loc["region"], loc["country"]))
++            conn.commit()
++        except Exception as e:
++            app.logger.error(f"[geo] store failed: {e}")
++        finally:
++            conn.close()
+ 
+ 
+ def record_location_async(interaction_id: int, ip: str):
+@@ -794,9 +1100,14 @@ def mail_transport_configured() -> bool:
  
  
  def login_is_required() -> bool:
@@ -312,7 +435,7 @@ index 4b5a702..2bc52ff 100644
      except Exception:
          return REQUIRE_LOGIN
  
-@@ -832,6 +1077,16 @@ def current_user() -> str:
+@@ -832,6 +1143,16 @@ def current_user() -> str:
      return session.get("user_email", "")
  
  
@@ -329,7 +452,7 @@ index 4b5a702..2bc52ff 100644
  def login_required(f):
      """Require a signed-in participant when REQUIRE_LOGIN is on."""
      @wraps(f)
-@@ -981,6 +1236,8 @@ LEARNING_BATCH_CAP = 25
+@@ -981,6 +1302,8 @@ LEARNING_BATCH_CAP = 25
  
  
  def _learning_ensure_table(conn):
@@ -338,16 +461,41 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS learning_runs (
-@@ -1240,7 +1497,7 @@ def _learning_loop():
+@@ -1240,19 +1563,21 @@ def _learning_loop():
      time.sleep(120 + (os.getpid() % 47))
      while True:
          try:
 -            if load_settings().get("auto_learning"):
-+            if load_settings(force=True).get("auto_learning"):
-                 conn = _settings_db_conn()
-                 may_run = True
-                 if conn:
-@@ -1269,16 +1526,62 @@ def start_learning_scheduler():
+-                conn = _settings_db_conn()
+-                may_run = True
+-                if conn:
+-                    try:
+-                        may_run = _claim_scheduled_run(conn)
+-                    finally:
+-                        conn.close()
+-                if may_run:
+-                    with app.app_context():
++            # Everything in this pass that touches the database — the claim
++            # check and the learning cycle itself — needs to run inside a
++            # single app context now: _settings_db_conn() reuses a
++            # connection via Flask's g, and g only exists inside one. This
++            # thread has no real HTTP request to supply that context, so it
++            # pushes its own, once, around the whole pass rather than just
++            # around run_learning_cycle() as before.
++            with app.app_context():
++                if load_settings(force=True).get("auto_learning"):
++                    conn = _settings_db_conn()
++                    may_run = _claim_scheduled_run(conn) if conn else True
++                    if may_run:
+                         run_learning_cycle(trigger="scheduled")
+-                else:
+-                    app.logger.info("[learning] another worker ran recently — skipping")
++                    else:
++                        app.logger.info("[learning] another worker ran recently — skipping")
+         except Exception as e:
+             app.logger.error(f"[learning] scheduled run failed: {e}")
+         time.sleep(max(1, LEARNING_INTERVAL_HOURS) * 3600)
+@@ -1269,16 +1594,62 @@ def start_learning_scheduler():
  
  
  def admin_required(f):
@@ -413,7 +561,7 @@ index 4b5a702..2bc52ff 100644
  # ---------------------------------------------------------------------------
  # Main chat HTML
  # ---------------------------------------------------------------------------
-@@ -1651,6 +1954,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1651,6 +2022,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
        content: ""; position: absolute; left: 0; top: 0; bottom: 0;
        width: 3px; background: var(--gold);
      }
@@ -429,7 +577,7 @@ index 4b5a702..2bc52ff 100644
      /* Acknowledgment gate — shown at the start of every session */
      .ack-overlay {
        position: fixed; inset: 0; z-index: 100;
-@@ -1716,7 +2028,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1716,7 +2096,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        margin: 0.18rem 0 0 0; width: 17px; height: 17px;
        accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
      }
@@ -438,7 +586,7 @@ index 4b5a702..2bc52ff 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,18 +2036,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,18 +2104,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -485,7 +633,7 @@ index 4b5a702..2bc52ff 100644
  
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
-@@ -1857,7 +2192,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1857,7 +2260,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
  
      /* Share menu popover */
@@ -494,7 +642,7 @@ index 4b5a702..2bc52ff 100644
        position: relative; display: inline-flex;
        align-items: center; line-height: 0;
      }
-@@ -1889,7 +2224,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1889,7 +2292,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      /* Persistent avatar presence — always on screen, always animating */
      .presence {
@@ -503,7 +651,7 @@ index 4b5a702..2bc52ff 100644
        width: 104px; text-align: center; user-select: none;
      }
      .presence-frame {
-@@ -1983,18 +2318,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1983,18 +2386,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {
        /* Smaller, and above the composer — the send button owns the bottom
@@ -524,7 +672,7 @@ index 4b5a702..2bc52ff 100644
      @media (prefers-reduced-motion: reduce) {
        .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
        .presence.speaking .presence-ring,
-@@ -2200,7 +2531,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2200,7 +2599,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
      .attach-btn:hover { color: var(--navy); background: var(--paper); }
      .attach-btn svg { width: 18px; height: 18px; }
@@ -533,7 +681,7 @@ index 4b5a702..2bc52ff 100644
        position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
        background: transparent; border: none;
        color: var(--muted); cursor: pointer;
-@@ -2208,6 +2539,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2208,6 +2607,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
        display: flex; align-items: center; justify-content: center;
        transition: all 0.2s ease; padding: 0;
      }
@@ -551,7 +699,7 @@ index 4b5a702..2bc52ff 100644
      .folder-btn:hover { color: var(--navy); background: var(--paper); }
      .folder-btn svg { width: 18px; height: 18px; }
      #file-input, #folder-input-chat { display: none; }
-@@ -2230,7 +2572,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2230,7 +2640,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .attached-file button:hover { color: var(--rust); }
      .attached-file button svg { width: 14px; height: 14px; }
      input[type="text"] {
@@ -560,7 +708,7 @@ index 4b5a702..2bc52ff 100644
        border: 1px solid var(--line); border-radius: 2px;
        font-size: 0.95rem; font-family: inherit; outline: none;
        background: var(--paper); color: var(--text); width: 100%;
-@@ -2265,19 +2607,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2265,19 +2675,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
        border: 5px solid transparent; border-top-color: var(--navy);
      }
      /* Anchored under each button, which sits at a fixed offset from the right */
@@ -587,7 +735,7 @@ index 4b5a702..2bc52ff 100644
      @media (max-width: 640px) {
        .input-tip { font-size: 0.68rem; padding: 0.35rem 0.6rem; white-space: normal; max-width: 60vw; }
      }
-@@ -2303,15 +2648,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2303,15 +2716,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
        opacity: 1; visibility: visible; transform: translateY(0);
      }
      /* Once recording starts the hint bar takes over */
@@ -606,7 +754,7 @@ index 4b5a702..2bc52ff 100644
      .voice-hint {
        display: none; align-items: center; gap: 0.55rem;
        margin: 0 1.75rem 0.5rem; padding: 0.5rem 0.8rem;
-@@ -2336,10 +2679,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2336,10 +2747,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
        font-size: 0.75rem; color: var(--gold); letter-spacing: 0.06em;
      }
      .voice-hint.cancel .voice-timer { color: #fff; }
@@ -653,7 +801,7 @@ index 4b5a702..2bc52ff 100644
      @keyframes pulse {
        0%, 100% { box-shadow: 0 0 0 0 rgba(157, 67, 44, 0.6); }
        50% { box-shadow: 0 0 0 8px rgba(157, 67, 44, 0); }
-@@ -2371,6 +2750,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2371,6 +2818,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                    box-shadow 0.2s ease, transform 0.12s ease;
      }
      .cta-btn { cursor: pointer; user-select: none; }
@@ -661,7 +809,7 @@ index 4b5a702..2bc52ff 100644
      .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
      .cta-btn:hover {
        background: var(--navy); color: var(--gold);
-@@ -2389,7 +2769,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2389,7 +2837,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
      .footer-note a:hover { color: var(--rust); }
      @media (max-width: 640px) {
@@ -670,7 +818,7 @@ index 4b5a702..2bc52ff 100644
        header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
        .brand-logo { height: 40px; }
        .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
-@@ -2397,7 +2777,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2397,7 +2845,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
        #chat { padding: 1.5rem 1rem 0.75rem; }
        form { padding: 0.75rem 1rem; gap: 0.4rem; }
@@ -679,7 +827,7 @@ index 4b5a702..2bc52ff 100644
        button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
        .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
        .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
-@@ -2490,6 +2870,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2490,6 +2938,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
      </div>
    </div>
  
@@ -748,7 +896,7 @@ index 4b5a702..2bc52ff 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2541,14 +2983,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2541,14 +3051,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div id="chat-wrap">
      <div id="chat">
        <div class="msg assistant">{{ cfg.opening }}</div>
@@ -769,7 +917,7 @@ index 4b5a702..2bc52ff 100644
      </div>
      <div id="attached-file" class="attached-file" aria-live="polite">
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-@@ -2575,7 +3022,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2575,7 +3090,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
          </button>
          <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
@@ -785,7 +933,7 @@ index 4b5a702..2bc52ff 100644
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-@@ -2583,7 +3037,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2583,7 +3105,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
              <line x1="8" y1="23" x2="16" y2="23"/>
            </svg>
          </button>
@@ -794,7 +942,7 @@ index 4b5a702..2bc52ff 100644
        </div>
        <button type="submit" id="send-btn">Send</button>
      </form>
-@@ -2622,9 +3076,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +3144,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -806,7 +954,7 @@ index 4b5a702..2bc52ff 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +3159,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +3227,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -913,7 +1061,7 @@ index 4b5a702..2bc52ff 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3258,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3326,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
@@ -943,7 +1091,7 @@ index 4b5a702..2bc52ff 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3282,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3350,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -963,7 +1111,7 @@ index 4b5a702..2bc52ff 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -2772,6 +3299,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2772,6 +3367,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const resetBtn = document.getElementById("reset-btn");
      const chatWrap = document.getElementById("chat-wrap");
      const OPENING = {{ cfg.opening|tojson }};
@@ -977,7 +1125,7 @@ index 4b5a702..2bc52ff 100644
  
      // -------------------------------------------------------------
      // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
-@@ -3306,13 +3840,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3306,13 +3908,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // Turning OFF should stop anything currently speaking
          if (!autoSpeakEnabled) {
            J3PSpeech.stop();
@@ -994,7 +1142,7 @@ index 4b5a702..2bc52ff 100644
          }
        });
      }
-@@ -3872,7 +4402,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4470,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -1003,7 +1151,7 @@ index 4b5a702..2bc52ff 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -4211,8 +4741,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4211,8 +4809,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
              }
            }
  
@@ -1013,7 +1161,7 @@ index 4b5a702..2bc52ff 100644
          });
        }
  
-@@ -4293,8 +4822,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4293,8 +4890,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        // browser's own speech, which is instant and free.
        wrap.addEventListener("click", async () => {
          if (!TALKING_AVATAR_ON) {
@@ -1023,7 +1171,7 @@ index 4b5a702..2bc52ff 100644
            return;
          }
          if (wrap.classList.contains("is-video")) {
-@@ -4330,8 +4858,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4330,8 +4926,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            // Never leave a dead frame — fall back to browser speech
            wrap.classList.remove("is-loading", "is-video");
            if (hint) hint.textContent = "Click to listen";
@@ -1033,7 +1181,7 @@ index 4b5a702..2bc52ff 100644
          }
        });
  
-@@ -4406,7 +4933,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4406,7 +5001,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
      }
  
@@ -1042,7 +1190,7 @@ index 4b5a702..2bc52ff 100644
        const div = document.createElement("div");
        div.className = "msg " + role;
        if (interactionId) div.dataset.interactionId = String(interactionId);
-@@ -4420,7 +4947,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4420,7 +5015,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          textNode.textContent = text;
        }
        div.appendChild(textNode);
@@ -1051,7 +1199,7 @@ index 4b5a702..2bc52ff 100644
        // Advisor replies are preceded by the avatar, when one is configured.
        // If the image fails to load it removes itself, so a missing file just
        // leaves the reply looking as it did before.
-@@ -4431,17 +4958,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4431,17 +5026,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        chatWrap.scrollTop = chatWrap.scrollHeight;
        // If auto-speak is enabled and this is a fresh assistant reply (with feedback
        // row, meaning it was just received from the API), start reading it aloud.
@@ -1072,7 +1220,7 @@ index 4b5a702..2bc52ff 100644
        const wrap = document.createElement("div");
        wrap.className = "feedback";
        wrap.innerHTML = `
-@@ -4456,20 +4982,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4456,20 +5050,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
              <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
            </svg>
          </button>
@@ -1107,7 +1255,7 @@ index 4b5a702..2bc52ff 100644
          <span class="download-wrap">
            <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-@@ -4599,13 +5130,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4599,13 +5198,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
            }
          });
        });
@@ -1127,7 +1275,7 @@ index 4b5a702..2bc52ff 100644
          // Strip markdown so the reader doesn't literally say "star star bold star star"
          const stripMarkdown = (t) => (t || "")
            .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
-@@ -4625,80 +5155,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4625,80 +5223,36 @@ INDEX_HTML = r"""<!DOCTYPE html>
            .trim();
  
          function resetSpeakUI() {
@@ -1222,10 +1370,14 @@ index 4b5a702..2bc52ff 100644
        }
  
        // === COPY button ===
-@@ -4728,15 +5214,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4728,26 +5282,94 @@ INDEX_HTML = r"""<!DOCTYPE html>
          }
        });
  
+-      // === SAVE / DOWNLOAD button ===
+-      const downloadBtn = wrap.querySelector(".download-btn");
+-      const downloadMenu = wrap.querySelector(".download-menu");
+-      const downloadLabel = downloadBtn.querySelector(".download-label");
 +      // === CITE button — copies an APA or MLA citation for this exchange ===
 +      const citeBtn = wrap.querySelector(".cite-btn");
 +      const citeMenu = wrap.querySelector(".cite-menu");
@@ -1238,7 +1390,9 @@ index 4b5a702..2bc52ff 100644
 +          ? `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
 +          : String(d.getFullYear());
 +      }
-+
+ 
+-      downloadBtn.addEventListener("click", () => {
+-        // Close the share menu if it's open, then toggle this one
 +      function buildCitation(style) {
 +        const now = new Date();
 +        const url = window.location.origin + window.location.pathname;
@@ -1258,14 +1412,23 @@ index 4b5a702..2bc52ff 100644
 +
 +      citeBtn.addEventListener("click", () => {
 +        // Close the other popovers if open, then toggle this one
-+        const sm = wrap.querySelector(".share-wrap > .share-menu");
+         const sm = wrap.querySelector(".share-wrap > .share-menu");
 +        const dm = wrap.querySelector(".download-menu");
-+        if (sm) sm.classList.remove("open");
+         if (sm) sm.classList.remove("open");
+-        downloadMenu.classList.toggle("open");
+-        if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
 +        if (dm) dm.classList.remove("open");
 +        citeMenu.classList.toggle("open");
 +        if (citeMenu.classList.contains("open")) positionMenu(citeMenu);
-+      });
-+
+       });
+ 
+-      // When the reply holds more than one deliverable, rebuild the menu so
+-      // each document can be downloaded separately in its own format.
+-      const multiDocs = Array.isArray(documents) && documents.length > 1;
+-      if (multiDocs) {
+-        const FMT_LABEL = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
+-        downloadMenu.classList.add("multi-doc");
+-        downloadMenu.innerHTML = documents.map(doc => {
 +      citeMenu.querySelectorAll("[data-style]").forEach(item => {
 +        item.addEventListener("click", async () => {
 +          const citation = buildCitation(item.dataset.style);
@@ -1293,21 +1456,31 @@ index 4b5a702..2bc52ff 100644
 +        });
 +      });
 +
-       // === SAVE / DOWNLOAD button ===
-       const downloadBtn = wrap.querySelector(".download-btn");
-       const downloadMenu = wrap.querySelector(".download-menu");
-       const downloadLabel = downloadBtn.querySelector(".download-label");
- 
-       downloadBtn.addEventListener("click", () => {
--        // Close the share menu if it's open, then toggle this one
++      // === SAVE / DOWNLOAD button ===
++      const downloadBtn = wrap.querySelector(".download-btn");
++      const downloadMenu = wrap.querySelector(".download-menu");
++      const downloadLabel = downloadBtn.querySelector(".download-label");
++
++      downloadBtn.addEventListener("click", () => {
 +        // Close the other popovers if open, then toggle this one
-         const sm = wrap.querySelector(".share-wrap > .share-menu");
-         if (sm) sm.classList.remove("open");
++        const sm = wrap.querySelector(".share-wrap > .share-menu");
++        if (sm) sm.classList.remove("open");
 +        citeMenu.classList.remove("open");
-         downloadMenu.classList.toggle("open");
-         if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
-       });
-@@ -4862,6 +5416,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
++        downloadMenu.classList.toggle("open");
++        if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
++      });
++
++      // When the reply holds more than one deliverable, rebuild the menu so
++      // each document can be downloaded separately in its own format.
++      const multiDocs = Array.isArray(documents) && documents.length > 1;
++      if (multiDocs) {
++        const FMT_LABEL = { docx: "Word", pptx: "PowerPoint", xlsx: "Excel", pdf: "PDF" };
++        downloadMenu.classList.add("multi-doc");
++        downloadMenu.innerHTML = documents.map(doc => {
+           const safeTitle = String(doc.title || "Document")
+             .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+           const chips = ["docx", "pptx", "xlsx", "pdf"].map(f => {
+@@ -4862,6 +5484,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
              Copy link
            </button>
          `;
@@ -1316,22 +1489,10 @@ index 4b5a702..2bc52ff 100644
          shareMenu.classList.add("open");
          positionMenu(shareMenu);
  
-@@ -5028,43 +5584,209 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5652,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
--    folderInput.addEventListener("change", () => {
--      const all = Array.from(folderInput.files || []);
--      // Filter to documents only (images not supported in folder-attach mode)
--      const docs = all.filter(f => DOC_RE.test(f.name));
--      if (docs.length === 0) {
--        const legacyInFolder = all.filter(f => /\.(ppt|doc|xls)$/i.test(f.name));
--        alert(legacyInFolder.length
--          ? "This folder only contains older Office files (.ppt/.doc/.xls), which " +
--            "can't be read. Re-save them as .pptx/.docx/.xlsx and try again."
--          : "No supported documents found in this folder (PDF, Word, Excel, " +
--            "PowerPoint, CSV, TXT, MD, RTF).");
--        clearAttachment(); return;
 +    // -------------------------------------------------------------
 +    // Camera capture — feeds directly into the same attachedFiles state
 +    // the paperclip button above uses. Deliberately does NOT try to
@@ -1366,31 +1527,8 @@ index 4b5a702..2bc52ff 100644
 +        console.error("[camera] missing element(s), capture UI not wired up:", missing.join(", "));
 +        cameraBtn.classList.add("unsupported");
 +        return;
-       }
--      const capped = docs.slice(0, MAX_FOLDER_FILES);
--      // webkitRelativePath looks like "FolderName/sub/file.pdf" — extract the top-level folder name
--      const first = capped[0].webkitRelativePath || capped[0].name;
--      const folderName = first.split("/")[0] || "Folder";
--      attachedFolderFiles = capped;
--      attachedFolderName = folderName;
--      let msg = `${folderName} · ${capped.length} file${capped.length === 1 ? "" : "s"}`;
--      if (docs.length > MAX_FOLDER_FILES) msg += ` (first ${MAX_FOLDER_FILES} only)`;
--      if (docs.length < all.length) msg += ` · ${all.length - docs.length} skipped`;
--      attachedFileName.textContent = msg;
--      attachedFileSize.textContent = "";
--      attachedFileDiv.classList.add("visible");
--    });
- 
--    form.addEventListener("submit", async (e) => {
--      e.preventDefault();
--      cancelIdlePrompt();
--      const text = input.value.trim();
--      const wasFarewell = looksLikeFarewell(text);
--      const paperclipFiles = attachedFiles.slice();
--      const folderFiles = attachedFolderFiles.slice();
--      const folderName = attachedFolderName;
--      // Require at least one of: text, single/multi file(s), or folder
--      if (!text && paperclipFiles.length === 0 && folderFiles.length === 0) return;
++      }
++
 +      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
 +        // No camera API at all (very old browser, or a non-HTTPS context)
 +        // — hide the option rather than offer a button that can't work.
@@ -1521,47 +1659,10 @@ index 4b5a702..2bc52ff 100644
 +      overlay.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCamera(); });
 +    })();
 +
-+    folderInput.addEventListener("change", () => {
-+      const all = Array.from(folderInput.files || []);
-+      // Filter to documents only (images not supported in folder-attach mode)
-+      const docs = all.filter(f => DOC_RE.test(f.name));
-+      if (docs.length === 0) {
-+        const legacyInFolder = all.filter(f => /\.(ppt|doc|xls)$/i.test(f.name));
-+        alert(legacyInFolder.length
-+          ? "This folder only contains older Office files (.ppt/.doc/.xls), which " +
-+            "can't be read. Re-save them as .pptx/.docx/.xlsx and try again."
-+          : "No supported documents found in this folder (PDF, Word, Excel, " +
-+            "PowerPoint, CSV, TXT, MD, RTF).");
-+        clearAttachment(); return;
-+      }
-+      const capped = docs.slice(0, MAX_FOLDER_FILES);
-+      // webkitRelativePath looks like "FolderName/sub/file.pdf" — extract the top-level folder name
-+      const first = capped[0].webkitRelativePath || capped[0].name;
-+      const folderName = first.split("/")[0] || "Folder";
-+      attachedFolderFiles = capped;
-+      attachedFolderName = folderName;
-+      let msg = `${folderName} · ${capped.length} file${capped.length === 1 ? "" : "s"}`;
-+      if (docs.length > MAX_FOLDER_FILES) msg += ` (first ${MAX_FOLDER_FILES} only)`;
-+      if (docs.length < all.length) msg += ` · ${all.length - docs.length} skipped`;
-+      attachedFileName.textContent = msg;
-+      attachedFileSize.textContent = "";
-+      attachedFileDiv.classList.add("visible");
-+    });
-+
-+    form.addEventListener("submit", async (e) => {
-+      e.preventDefault();
-+      cancelIdlePrompt();
-+      const text = input.value.trim();
-+      const wasFarewell = looksLikeFarewell(text);
-+      const paperclipFiles = attachedFiles.slice();
-+      const folderFiles = attachedFolderFiles.slice();
-+      const folderName = attachedFolderName;
-+      // Require at least one of: text, single/multi file(s), or folder
-+      if (!text && paperclipFiles.length === 0 && folderFiles.length === 0) return;
- 
-       // Already waiting on a reply? Hold this one rather than running two
-       // requests at once, and show it in the transcript so the participant
-@@ -5115,6 +5837,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+     folderInput.addEventListener("change", () => {
+       const all = Array.from(folderInput.files || []);
+       // Filter to documents only (images not supported in folder-attach mode)
+@@ -5115,6 +5905,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review these attached documents.");
            fd.append("folder_name", folderNameForRequest);
@@ -1569,7 +1670,7 @@ index 4b5a702..2bc52ff 100644
            folderFilesForRequest.forEach(f => fd.append("files", f, f.name));
            res = await fetch("/chat", { method: "POST", body: fd });
          } else if (paperclipFilesForRequest.length === 1) {
-@@ -5122,6 +5845,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5122,6 +5913,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review this attached file.");
            fd.append("file", paperclipFilesForRequest[0]);
@@ -1577,7 +1678,7 @@ index 4b5a702..2bc52ff 100644
            res = await fetch("/chat", { method: "POST", body: fd });
          } else if (paperclipFilesForRequest.length > 1) {
            // Multi-file paperclip — use the same multi-file field as folder,
-@@ -5129,12 +5853,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5129,12 +5921,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review these attached files.");
            fd.append("attachment_label", "Attachments");   // shown in chat/logs
@@ -1592,7 +1693,7 @@ index 4b5a702..2bc52ff 100644
            });
          }
          // Railway's proxy returns plain text like "upstream error" on a 502,
-@@ -5157,7 +5882,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5157,7 +5950,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          setAvatarThinking(false);
          if (data.reply) {
            const msgDiv = addMessage(data.reply, "assistant", true,
@@ -1601,7 +1702,7 @@ index 4b5a702..2bc52ff 100644
            // Nothing downloads on its own. When the reply looks like a
            // deliverable, offer a download and let the user decide.
            setAvatarResponding(msgDiv);
-@@ -5208,7 +5933,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5208,7 +6001,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        resetArmed = false;
        // Stop any in-progress speech before wiping the chat
        J3PSpeech.stop();
@@ -1610,7 +1711,7 @@ index 4b5a702..2bc52ff 100644
        await fetch("/reset", { method: "POST" });
        chat.innerHTML = "";
        const div = document.createElement("div");
-@@ -5219,36 +5944,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5219,36 +6012,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
      });
  
      // -------------------------------------------------------------
@@ -1660,7 +1761,7 @@ index 4b5a702..2bc52ff 100644
  
        function setHint(msg, danger) {
          if (!voiceHintText) return;
-@@ -5269,24 +5997,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5269,24 +6065,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
          voiceTimer.textContent = `${m}:${ss}`;
        }
  
@@ -1691,7 +1792,7 @@ index 4b5a702..2bc52ff 100644
          showHint(true);
          tickTimer();
          timerId = setInterval(tickTimer, 250);
-@@ -5295,52 +6021,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5295,52 +6089,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
          catch (err) { /* already started — harmless */ }
        }
  
@@ -1762,7 +1863,7 @@ index 4b5a702..2bc52ff 100644
  
        recognition.addEventListener("result", (event) => {
          interimText = "";
-@@ -5355,15 +6059,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5355,15 +6127,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
  
        recognition.addEventListener("end", () => {
@@ -1786,7 +1887,7 @@ index 4b5a702..2bc52ff 100644
            setTimeout(() => showHint(false), 1400);
            return;
          }
-@@ -5376,13 +6083,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5376,13 +6151,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
  
        recognition.addEventListener("error", (event) => {
@@ -1806,7 +1907,7 @@ index 4b5a702..2bc52ff 100644
            setHint("Didn\u2019t catch that \u2014 try again", true);
            setTimeout(() => showHint(false), 1600);
          } else {
-@@ -5417,6 +6127,8 @@ CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
+@@ -5417,6 +6195,8 @@ CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
  
  
  def _history_ensure_table(conn):
@@ -1815,7 +1916,7 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS chat_history (
-@@ -5437,8 +6149,11 @@ def _history_ensure_table(conn):
+@@ -5437,8 +6217,11 @@ def _history_ensure_table(conn):
  def _history_token() -> str:
      """Identifies whose transcript this is.
  
@@ -1829,7 +1930,7 @@ index 4b5a702..2bc52ff 100644
      """
      email = session.get("user_email", "")
      if email:
-@@ -5446,6 +6161,12 @@ def _history_token() -> str:
+@@ -5446,6 +6229,12 @@ def _history_token() -> str:
          digest = hashlib.sha256(
              (app.secret_key + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
          return "u_" + digest
@@ -1842,7 +1943,7 @@ index 4b5a702..2bc52ff 100644
      token = session.get("chat_token")
      if not token:
          token = os.urandom(16).hex()
-@@ -5823,12 +6544,14 @@ def _did_request(text: str):
+@@ -5823,12 +6612,14 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -1858,7 +1959,7 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS advisor_avatar (
-@@ -5930,13 +6653,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6721,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -1900,7 +2001,7 @@ index 4b5a702..2bc52ff 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6694,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6762,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -1909,7 +2010,7 @@ index 4b5a702..2bc52ff 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5961,6 +6707,8 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5961,6 +6775,8 @@ def placeholder_avatar_svg(name: str) -> str:
  
  
  def _advisors_ensure_table(conn):
@@ -1918,7 +2019,7 @@ index 4b5a702..2bc52ff 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS advisors (
-@@ -5979,6 +6727,50 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6795,50 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -1969,7 +2070,7 @@ index 4b5a702..2bc52ff 100644
      conn.commit()
  
  
-@@ -5987,14 +6779,32 @@ def slugify_advisor(name: str) -> str:
+@@ -5987,14 +6847,32 @@ def slugify_advisor(name: str) -> str:
      return base[:40] or "advisor"
  
  
@@ -2007,7 +2108,7 @@ index 4b5a702..2bc52ff 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6819,28 @@ def list_advisors():
+@@ -6009,13 +6887,28 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -2039,7 +2140,7 @@ index 4b5a702..2bc52ff 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +6857,23 @@ def get_advisor(slug: str):
+@@ -6032,11 +6925,23 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -2066,7 +2167,7 @@ index 4b5a702..2bc52ff 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,798 +6881,2451 @@ def get_advisor(slug: str):
+@@ -6044,974 +6949,2723 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -2566,7 +2667,7 @@ index 4b5a702..2bc52ff 100644
 -        "are reading from an uploaded library; just use it.\n\n"
 -        + "\n\n".join(parts) + "\n"
 -    )
- 
++
 +def touch_admin_user_login(user_id):
 +    conn = _settings_db_conn()
 +    if not conn:
@@ -2582,6 +2683,7 @@ index 4b5a702..2bc52ff 100644
 +    finally:
 +        conn.close()
  
+ 
 -# ---------------------------------------------------------------------------
 -# Participant profile
 -# ---------------------------------------------------------------------------
@@ -2589,8 +2691,6 @@ index 4b5a702..2bc52ff 100644
 -# surname, no email beyond what sign-in already holds, nothing that would
 -# identify the person or their organisation. Enough for the advisor to stop
 -# being generic; not enough to be a personnel record.
- 
--PROFILE_FIELDS = ("first_name", "role", "specialty")
 +def current_admin_role() -> str:
 +    """'owner' | 'admin' | 'viewer' | '' (nobody logged in, or their account
 +    was disabled after they logged in)."""
@@ -2648,8 +2748,8 @@ index 4b5a702..2bc52ff 100644
 +    same check, used specifically for the admin-management routes."""
 +    return require_permission("manage_admins")(f)
  
+-PROFILE_FIELDS = ("first_name", "role", "specialty")
  
--def _profile_ensure_table(conn):
 +# ---------------------------------------------------------------------------
 +# Participant links — one dedicated, admin-issued link per specific person.
 +# Distinct from advisor links (those are for an advisor's own identity and
@@ -2657,7 +2757,8 @@ index 4b5a702..2bc52ff 100644
 +# reach the chat at all, independent of the general/shared link. Turning one
 +# off blocks access immediately without touching that participant's history.
 +# ---------------------------------------------------------------------------
-+
+ 
+-def _profile_ensure_table(conn):
 +def _participant_links_ensure_table(conn):
 +    if _already_ensured("participant_links"):
 +        return
@@ -3171,7 +3272,7 @@ index 4b5a702..2bc52ff 100644
 -        conn.close()
 +def participant_token() -> str:
 +    """Identifies whose materials these are.
- 
++
 +    Deliberately NOT the chat history token: that one is cleared by New
 +    Conversation and regenerated for anonymous visitors on each visit, which
 +    would silently orphan someone's library. Signed in, this is derived from
@@ -3200,8 +3301,8 @@ index 4b5a702..2bc52ff 100644
 +        session.permanent = True
 +    return token
  
+ 
 -def list_plans(limit=10):
-+
 +def list_participant_docs(token=None):
 +    token = token or participant_token()
      conn = _settings_db_conn()
@@ -3251,6 +3352,8 @@ index 4b5a702..2bc52ff 100644
 -        return True
 -    except Exception as e:
 -        app.logger.error(f"[plans] delete failed: {e}")
+-        return False
+-    finally:
 +            cur.execute("SELECT COUNT(*) FROM participant_documents WHERE token = %s",
 +                        (token,))
 +            row = cur.fetchone()
@@ -3265,8 +3368,8 @@ index 4b5a702..2bc52ff 100644
 +        return True
 +    except Exception as e:
 +        app.logger.error(f"[materials] add failed: {e}")
-         return False
-     finally:
++        return False
++    finally:
          conn.close()
  
  
@@ -3747,13 +3850,18 @@ index 4b5a702..2bc52ff 100644
  
  
 -def document_owners() -> dict:
+-    """{title: advisor_slug} for every assigned document."""
 +def get_personality_scores() -> dict:
-+    conn = _settings_db_conn()
-+    if not conn:
+     conn = _settings_db_conn()
+     if not conn:
+-        return {}
 +        return session.get("personality") or {}
-+    try:
+     try:
+-        _doc_owner_ensure_table(conn)
 +        _personality_ensure_table(conn)
-+        with conn.cursor() as cur:
+         with conn.cursor() as cur:
+-            cur.execute("SELECT title, advisor_slug FROM document_owner")
+-            return {row[0]: row[1] for row in cur.fetchall()}
 +            cur.execute("""
 +                SELECT openness, conscientiousness, extraversion,
 +                       agreeableness, stability
@@ -3763,13 +3871,17 @@ index 4b5a702..2bc52ff 100644
 +            if not row:
 +                return session.get("personality") or {}
 +            return {k: v for k, v in zip(_PERSONALITY_TRAITS, row) if v is not None}
-+    except Exception as e:
+     except Exception as e:
+-        app.logger.error(f"[kb] owner read failed: {e}")
+-        return {}
 +        app.logger.error(f"[personality] read failed: {e}")
 +        return session.get("personality") or {}
-+    finally:
-+        conn.close()
-+
-+
+     finally:
+         conn.close()
+ 
+ 
+-def filter_chunks_for_advisor(results, advisor_slug):
+-    """Shared documents plus this advisor's own. Others are dropped.
 +# ---------------------------------------------------------------------------
 +# Advisor onboarding: the advisor's own TIPI self-report (persistent, keyed
 +# by slug — unlike participant_personality above, which is deliberately
@@ -3777,7 +3889,19 @@ index 4b5a702..2bc52ff 100644
 +# the advisor portal and the admin panel; neither is ever read by the AI
 +# during a chat session or exposed to participants directly.
 +# ---------------------------------------------------------------------------
-+
+ 
+-    An unassigned document belongs to the shared J3P base and is always
+-    available; an assigned one is reachable only in that advisor's sessions.
+-    """
+-    owners = document_owners()
+-    if not owners:
+-        return results
+-    keep = []
+-    for r in results:
+-        owner = owners.get(r.get("title"))
+-        if not owner or owner == advisor_slug:
+-            keep.append(r)
+-    return keep
 +def _advisor_personality_ensure_table(conn):
 +    if _already_ensured("advisor_personality"):
 +        return
@@ -3794,13 +3918,19 @@ index 4b5a702..2bc52ff 100644
 +            )
 +        """)
 +    conn.commit()
-+
-+
+ 
+ 
+-def detect_deliverable_request(text: str) -> bool:
+-    """True when the user is asking for a written document of some kind."""
+-    import re as _r
+-    if not text:
 +def save_advisor_personality_scores(slug: str, answers: dict) -> bool:
 +    """answers: {trait: 1-7} — TIPI trait averages (already computed by
 +    score_tipi()). Persistent per advisor, overwritten on retake."""
 +    if not slug:
-+        return False
+         return False
+-    low = text.lower()
+-    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
 +    clean = {}
 +    for trait in _PERSONALITY_TRAITS:
 +        if trait not in answers:
@@ -3835,8 +3965,16 @@ index 4b5a702..2bc52ff 100644
 +        return False
 +    finally:
 +        conn.close()
-+
-+
+ 
+ 
+-# "one pdf", "a single document", "not separate files" — the user wants
+-# everything in one file rather than one file per deliverable.
+-_SINGLE_FILE_RE = (
+-    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
+-    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
+-    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
+-    r"\bas one\b|\bsingle file\b)"
+-)
 +def get_advisor_personality(slug: str) -> dict:
 +    """{scores: {...}, completed_at: datetime} or {} if never completed."""
 +    if not slug:
@@ -3864,8 +4002,15 @@ index 4b5a702..2bc52ff 100644
 +        return {}
 +    finally:
 +        conn.close()
-+
-+
+ 
+ 
+-_SEPARATE_FILES_RE = (
+-    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
+-    r"\bindividual\s+(?:files?|documents?)\b|"
+-    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
+-    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
+-    r"\bsplit\s+(?:them|it|into)\b)"
+-)
 +def _advisor_behavioral_ensure_table(conn):
 +    if _already_ensured("advisor_behavioral"):
 +        return
@@ -3878,15 +4023,36 @@ index 4b5a702..2bc52ff 100644
 +            )
 +        """)
 +    conn.commit()
-+
-+
+ 
+ 
+-def wants_separate_files(text: str) -> bool:
+-    """True only when the user explicitly asked for more than one file."""
+-    import re as _r
+-    if not text:
 +def save_advisor_behavioral_scores(slug: str, domain_scores: dict) -> bool:
 +    """domain_scores: {domain: 1-5 average}, from score_behavioral()."""
 +    if not slug or not domain_scores:
-+        return False
+         return False
+-    low = text.lower()
+-    if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
 +    conn = _settings_db_conn()
 +    if not conn:
-+        return False
+         return False
+-    return bool(_r.search(_SEPARATE_FILES_RE, low))
+-
+-
+-def wants_single_file(text: str) -> bool:
+-    """True when the user explicitly asked for one combined file."""
+-    import re as _r
+-    return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
+-
+-
+-# ---------------------------------------------------------------------------
+-# Attachment text extraction
+-# ---------------------------------------------------------------------------
+-# embeddings.extract_text_from_upload handles PDF, DOCX, TXT and MD. Spreadsheets
+-# and slide decks are read here so people can attach the formats they actually
+-# work in — an Excel model, a PowerPoint deck, a CSV export.
 +    try:
 +        _advisor_behavioral_ensure_table(conn)
 +        with conn.cursor() as cur:
@@ -3903,8 +4069,12 @@ index 4b5a702..2bc52ff 100644
 +        return False
 +    finally:
 +        conn.close()
-+
-+
+ 
+-SPREADSHEET_EXTS = ('.xlsx', '.xlsm', '.xltx')
+-SLIDES_EXTS = ('.pptx', '.potx')
+-DELIMITED_EXTS = ('.csv', '.tsv')
+-LEGACY_OFFICE_EXTS = ('.doc', '.xls', '.ppt')
+ 
 +def get_advisor_behavioral(slug: str) -> dict:
 +    """{scores: {domain: 1-5}, completed_at: datetime} or {} if never
 +    completed."""
@@ -3935,8 +4105,27 @@ index 4b5a702..2bc52ff 100644
 +        return {}
 +    finally:
 +        conn.close()
-+
-+
+ 
+-def _extract_spreadsheet(file_bytes: bytes, max_chars: int = 40000) -> str:
+-    """Flatten a workbook to text, one row per line, sheet by sheet."""
+-    import io as _io
+-    from openpyxl import load_workbook
+-    wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
+-    out, total = [], 0
+-    for ws in wb.worksheets:
+-        out.append(f"--- SHEET: {ws.title} ---")
+-        for row in ws.iter_rows(values_only=True):
+-            cells = ["" if c is None else str(c) for c in row]
+-            if not any(c.strip() for c in cells):
+-                continue
+-            line = " | ".join(cells).rstrip(" |")
+-            out.append(line)
+-            total += len(line)
+-            if total > max_chars:
+-                out.append("[... spreadsheet truncated for length ...]")
+-                return "\n".join(out)
+-    return "\n".join(out)
+ 
 +def advisor_style_bio(name: str, scores: dict) -> str:
 +    """A warm, third-person, client-facing style blurb built from the
 +    advisor's own personality self-report — meant as a starting point an
@@ -3974,8 +4163,52 @@ index 4b5a702..2bc52ff 100644
 +    first_name = (name or "Your advisor").split()[0]
 +    body = phrases[0] if len(phrases) == 1 else ", ".join(phrases[:-1]) + ", and " + phrases[-1]
 +    return f"{first_name} {body}."
-+
-+
+ 
+-def _extract_slides(file_bytes: bytes) -> str:
+-    """Pull the text of every slide, including speaker notes."""
+-    import io as _io
+-    from pptx import Presentation
+-    prs = Presentation(_io.BytesIO(file_bytes))
+-    out = []
+-    def walk(shapes, out):
+-        """Collect text from shapes, tables, and grouped shapes alike."""
+-        for shape in shapes:
+-            # Grouped shapes hide their contents one level down
+-            if shape.shape_type == 6 and hasattr(shape, "shapes"):
+-                walk(shape.shapes, out)
+-                continue
+-            if getattr(shape, "has_table", False):
+-                for row in shape.table.rows:
+-                    cells = [c.text.strip().replace("\n", " ") for c in row.cells]
+-                    if any(cells):
+-                        out.append(" | ".join(cells))
+-                continue
+-            if shape.has_text_frame and shape.text_frame.text.strip():
+-                out.append(shape.text_frame.text.strip())
+-            # Charts carry their categories/series names
+-            if getattr(shape, "has_chart", False):
+-                try:
+-                    plot = shape.chart.plots[0]
+-                    cats = [str(c) for c in plot.categories]
+-                    if cats:
+-                        out.append("Chart categories: " + ", ".join(cats))
+-                    for series in plot.series:
+-                        vals = ", ".join("" if v is None else str(v) for v in series.values)
+-                        out.append(f"Chart series {series.name}: {vals}")
+-                except Exception:
+-                    pass
+ 
+-    for i, slide in enumerate(prs.slides, 1):
+-        out.append(f"--- SLIDE {i} ---")
+-        walk(slide.shapes, out)
+-        try:
+-            if slide.has_notes_slide:
+-                notes = slide.notes_slide.notes_text_frame.text.strip()
+-                if notes:
+-                    out.append(f"[Speaker notes: {notes}]")
+-        except Exception:
+-            pass
+-    return "\n".join(out)
 +def _advisor_360_ensure_table(conn):
 +    if _already_ensured("advisor_360_feedback"):
 +        return
@@ -3996,8 +4229,11 @@ index 4b5a702..2bc52ff 100644
 +            ON advisor_360_feedback (advisor_slug)
 +        """)
 +    conn.commit()
-+
-+
+ 
+ 
+-def _extract_delimited(file_bytes: bytes) -> str:
+-    text = file_bytes.decode("utf-8", errors="replace")
+-    return text if len(text) <= 40000 else text[:40000] + "\n[... truncated ...]"
 +def save_advisor_360_feedback(slug: str, filename: str, mime: str, content: bytes) -> bool:
 +    """One 360 file per advisor — a fresh upload replaces whatever was
 +    there before, same as the photo-upload pattern elsewhere."""
@@ -4022,8 +4258,10 @@ index 4b5a702..2bc52ff 100644
 +        return False
 +    finally:
 +        conn.close()
-+
-+
+ 
+ 
+-def extract_attachment_text(filename: str, file_bytes: bytes) -> str:
+-    """Extract text from any supported attachment type.
 +def get_advisor_360_meta(slug: str):
 +    """Filename/size/date only — for display, never the content itself."""
 +    if not slug:
@@ -4047,8 +4285,16 @@ index 4b5a702..2bc52ff 100644
 +        return None
 +    finally:
 +        conn.close()
-+
-+
+ 
+-    Raises ValueError with a user-facing message for formats we can't read.
+-    """
+-    name = (filename or "").lower()
+-    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
+ 
+-    if ext in SPREADSHEET_EXTS:
+-        return _extract_spreadsheet(file_bytes)
+-    if ext in SLIDES_EXTS:
+-        return _extract_slides(file_bytes)
 +def get_advisor_360_content(slug: str):
 +    """(bytes, mime, filename) for a download, or None."""
 +    if not slug:
@@ -5049,13 +5295,22 @@ index 4b5a702..2bc52ff 100644
 +
 +
 +def document_owners() -> dict:
-     """{title: advisor_slug} for every assigned document."""
-     conn = _settings_db_conn()
-     if not conn:
-@@ -6852,19 +9342,115 @@ def document_owners() -> dict:
-         conn.close()
- 
- 
++    """{title: advisor_slug} for every assigned document."""
++    conn = _settings_db_conn()
++    if not conn:
++        return {}
++    try:
++        _doc_owner_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("SELECT title, advisor_slug FROM document_owner")
++            return {row[0]: row[1] for row in cur.fetchall()}
++    except Exception as e:
++        app.logger.error(f"[kb] owner read failed: {e}")
++        return {}
++    finally:
++        conn.close()
++
++
 +def _doc_advisors_ensure_table(conn):
 +    if _already_ensured("document_advisors"):
 +        return
@@ -5150,32 +5405,172 @@ index 4b5a702..2bc52ff 100644
 +    return out
 +
 +
- def filter_chunks_for_advisor(results, advisor_slug):
--    """Shared documents plus this advisor's own. Others are dropped.
++def filter_chunks_for_advisor(results, advisor_slug):
 +    """Shared documents plus every advisor this doc is assigned to. Others
 +    are dropped.
- 
--    An unassigned document belongs to the shared J3P base and is always
--    available; an assigned one is reachable only in that advisor's sessions.
++
 +    A document with no assignments belongs to the shared J3P base and is
 +    always available; an assigned one is reachable only to the advisor(s)
 +    it's been given to.
-     """
--    owners = document_owners()
--    if not owners:
++    """
 +    advisor_map = document_advisor_map()
 +    if not advisor_map:
-         return results
-     keep = []
-     for r in results:
--        owner = owners.get(r.get("title"))
--        if not owner or owner == advisor_slug:
++        return results
++    keep = []
++    for r in results:
 +        slugs = advisor_map.get(r.get("title"))
 +        if not slugs or advisor_slug in slugs:
-             keep.append(r)
-     return keep
- 
-@@ -7101,20 +9687,66 @@ def retrieve_context(query: str) -> str:
++            keep.append(r)
++    return keep
++
++
++def detect_deliverable_request(text: str) -> bool:
++    """True when the user is asking for a written document of some kind."""
++    import re as _r
++    if not text:
++        return False
++    low = text.lower()
++    return bool(_r.search(_DELIVERABLE_VERBS, low) and _r.search(_DELIVERABLE_NOUNS, low))
++
++
++# "one pdf", "a single document", "not separate files" — the user wants
++# everything in one file rather than one file per deliverable.
++_SINGLE_FILE_RE = (
++    r"(\b(?:one|single|1)\s+(?:file|document|doc|pdf|deck|letter|attachment)\b|"
++    r"\bnot\s+separate\b|\bno\s+separate\b|\bdon'?t\s+want\s+separate\b|"
++    r"\bcombined?\s+(?:into|in)\s+(?:one|a single)\b|\ball in one\b|"
++    r"\bas one\b|\bsingle file\b)"
++)
++
++
++_SEPARATE_FILES_RE = (
++    r"(\bseparate\s+(?:files?|documents?|docs?)\b|"
++    r"\bindividual\s+(?:files?|documents?)\b|"
++    r"\beach\s+(?:as|in)\s+(?:its|their)\s+own\b|"
++    r"\btwo\s+(?:files?|documents?)\b|\bboth\s+as\s+separate\b|"
++    r"\bsplit\s+(?:them|it|into)\b)"
++)
++
++
++def wants_separate_files(text: str) -> bool:
++    """True only when the user explicitly asked for more than one file."""
++    import re as _r
++    if not text:
++        return False
++    low = text.lower()
++    if _r.search(r"(not|no|don'?t|do not)\s+(?:want\s+)?separate", low):
++        return False
++    return bool(_r.search(_SEPARATE_FILES_RE, low))
++
++
++def wants_single_file(text: str) -> bool:
++    """True when the user explicitly asked for one combined file."""
++    import re as _r
++    return bool(text and _r.search(_SINGLE_FILE_RE, text.lower()))
++
++
++# ---------------------------------------------------------------------------
++# Attachment text extraction
++# ---------------------------------------------------------------------------
++# embeddings.extract_text_from_upload handles PDF, DOCX, TXT and MD. Spreadsheets
++# and slide decks are read here so people can attach the formats they actually
++# work in — an Excel model, a PowerPoint deck, a CSV export.
++
++SPREADSHEET_EXTS = ('.xlsx', '.xlsm', '.xltx')
++SLIDES_EXTS = ('.pptx', '.potx')
++DELIMITED_EXTS = ('.csv', '.tsv')
++LEGACY_OFFICE_EXTS = ('.doc', '.xls', '.ppt')
++
++
++def _extract_spreadsheet(file_bytes: bytes, max_chars: int = 40000) -> str:
++    """Flatten a workbook to text, one row per line, sheet by sheet."""
++    import io as _io
++    from openpyxl import load_workbook
++    wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
++    out, total = [], 0
++    for ws in wb.worksheets:
++        out.append(f"--- SHEET: {ws.title} ---")
++        for row in ws.iter_rows(values_only=True):
++            cells = ["" if c is None else str(c) for c in row]
++            if not any(c.strip() for c in cells):
++                continue
++            line = " | ".join(cells).rstrip(" |")
++            out.append(line)
++            total += len(line)
++            if total > max_chars:
++                out.append("[... spreadsheet truncated for length ...]")
++                return "\n".join(out)
++    return "\n".join(out)
++
++
++def _extract_slides(file_bytes: bytes) -> str:
++    """Pull the text of every slide, including speaker notes."""
++    import io as _io
++    from pptx import Presentation
++    prs = Presentation(_io.BytesIO(file_bytes))
++    out = []
++    def walk(shapes, out):
++        """Collect text from shapes, tables, and grouped shapes alike."""
++        for shape in shapes:
++            # Grouped shapes hide their contents one level down
++            if shape.shape_type == 6 and hasattr(shape, "shapes"):
++                walk(shape.shapes, out)
++                continue
++            if getattr(shape, "has_table", False):
++                for row in shape.table.rows:
++                    cells = [c.text.strip().replace("\n", " ") for c in row.cells]
++                    if any(cells):
++                        out.append(" | ".join(cells))
++                continue
++            if shape.has_text_frame and shape.text_frame.text.strip():
++                out.append(shape.text_frame.text.strip())
++            # Charts carry their categories/series names
++            if getattr(shape, "has_chart", False):
++                try:
++                    plot = shape.chart.plots[0]
++                    cats = [str(c) for c in plot.categories]
++                    if cats:
++                        out.append("Chart categories: " + ", ".join(cats))
++                    for series in plot.series:
++                        vals = ", ".join("" if v is None else str(v) for v in series.values)
++                        out.append(f"Chart series {series.name}: {vals}")
++                except Exception:
++                    pass
++
++    for i, slide in enumerate(prs.slides, 1):
++        out.append(f"--- SLIDE {i} ---")
++        walk(slide.shapes, out)
++        try:
++            if slide.has_notes_slide:
++                notes = slide.notes_slide.notes_text_frame.text.strip()
++                if notes:
++                    out.append(f"[Speaker notes: {notes}]")
++        except Exception:
++            pass
++    return "\n".join(out)
++
++
++def _extract_delimited(file_bytes: bytes) -> str:
++    text = file_bytes.decode("utf-8", errors="replace")
++    return text if len(text) <= 40000 else text[:40000] + "\n[... truncated ...]"
++
++
++def extract_attachment_text(filename: str, file_bytes: bytes) -> str:
++    """Extract text from any supported attachment type.
++
++    Raises ValueError with a user-facing message for formats we can't read.
++    """
++    name = (filename or "").lower()
++    ext = "." + name.rsplit(".", 1)[-1] if "." in name else ""
++
++    if ext in SPREADSHEET_EXTS:
++        return _extract_spreadsheet(file_bytes)
++    if ext in SLIDES_EXTS:
++        return _extract_slides(file_bytes)
+     if ext in DELIMITED_EXTS:
+         return _extract_delimited(file_bytes)
+     if ext in LEGACY_OFFICE_EXTS:
+@@ -7101,20 +9755,66 @@ def retrieve_context(query: str) -> str:
      return context
  
  
@@ -5248,7 +5643,7 @@ index 4b5a702..2bc52ff 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +9755,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +9823,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -5260,7 +5655,7 @@ index 4b5a702..2bc52ff 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +9772,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +9840,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -5269,7 +5664,7 @@ index 4b5a702..2bc52ff 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +9780,34 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +9848,34 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
@@ -5306,7 +5701,7 @@ index 4b5a702..2bc52ff 100644
      )
  
  
-@@ -7173,6 +9816,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +9884,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -5319,7 +5714,7 @@ index 4b5a702..2bc52ff 100644
      return _render_chat()
  
  
-@@ -7182,6 +9831,7 @@ def index():
+@@ -7182,6 +9899,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -5327,7 +5722,7 @@ index 4b5a702..2bc52ff 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7269,12 +9919,56 @@ def _advisor_not_found(slug):
+@@ -7269,12 +9987,56 @@ def _advisor_not_found(slug):
              f"</div>"), 404
  
  
@@ -5384,7 +5779,7 @@ index 4b5a702..2bc52ff 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7306,13 +10000,44 @@ def chat():
+@@ -7306,13 +10068,44 @@ def chat():
  
      if uploaded_file or folder_files:
          user_input = (request.form.get("message") or "").strip()
@@ -5429,7 +5824,7 @@ index 4b5a702..2bc52ff 100644
      # Extension-based routing between document vs image
      DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
                  '.csv', '.tsv', '.txt', '.md', '.rtf')
-@@ -7506,7 +10231,7 @@ def chat():
+@@ -7506,7 +10299,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -5438,7 +5833,7 @@ index 4b5a702..2bc52ff 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7731,7 +10456,16 @@ def chat():
+@@ -7731,7 +10524,16 @@ def chat():
          "13. SAY THE HARD THING. Generic assistants hedge toward the "
          "agreeable. When the person's plan has a real problem, name it plainly "
          "in the first paragraph rather than burying it after praise. It is "
@@ -5456,7 +5851,7 @@ index 4b5a702..2bc52ff 100644
      )
  
      scope_guard = (
-@@ -7903,6 +10637,10 @@ def chat():
+@@ -7903,6 +10705,10 @@ def chat():
          f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
      )
  
@@ -5467,7 +5862,7 @@ index 4b5a702..2bc52ff 100644
      if context:
          composed_prompt = (
              base_prompt
-@@ -7918,12 +10656,16 @@ def chat():
+@@ -7918,12 +10724,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -5484,7 +5879,7 @@ index 4b5a702..2bc52ff 100644
          )
  
      try:
-@@ -8207,12 +10949,13 @@ def chat():
+@@ -8207,12 +11017,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -5499,7 +5894,7 @@ index 4b5a702..2bc52ff 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +11020,28 @@ def acknowledge_release():
+@@ -8277,6 +11088,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -5528,7 +5923,7 @@ index 4b5a702..2bc52ff 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +11120,12 @@ def feedback():
+@@ -8355,12 +11188,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -5543,7 +5938,7 @@ index 4b5a702..2bc52ff 100644
      )
      return jsonify({"ok": True})
  
-@@ -8614,7 +11379,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +11447,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -5554,7 +5949,7 @@ index 4b5a702..2bc52ff 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +11587,23 @@ def advisor_avatar():
+@@ -8820,8 +11655,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -5579,7 +5974,7 @@ index 4b5a702..2bc52ff 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8837,35 +11619,45 @@ def advisor_avatar():
+@@ -8837,35 +11687,45 @@ def advisor_avatar():
  
  
  @app.route("/admin/avatar", methods=["POST"])
@@ -5645,7 +6040,7 @@ index 4b5a702..2bc52ff 100644
  def admin_delete_avatar():
      """Revert to the photo bundled with the app."""
      if clear_avatar():
-@@ -8879,11 +11671,136 @@ def admin_delete_avatar():
+@@ -8879,11 +11739,136 @@ def admin_delete_avatar():
  # Admin panel
  # ---------------------------------------------------------------------------
  
@@ -5784,7 +6179,7 @@ index 4b5a702..2bc52ff 100644
  <link rel="icon" href="{{ cfg.favicon_url }}" />
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8901,7 +11818,7 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8901,7 +11886,7 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
      min-height: 100vh; padding: 1.25rem;
    }
    .box {
@@ -5793,7 +6188,7 @@ index 4b5a702..2bc52ff 100644
      box-shadow: 0 18px 50px rgba(39,51,74,0.18); overflow: hidden;
    }
    .box-head {
-@@ -8916,54 +11833,621 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8916,54 +11901,621 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
    }
    .content { padding: 1.75rem 2rem 1.7rem; }
    h1 {
@@ -6453,7 +6848,7 @@ index 4b5a702..2bc52ff 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9089,15 +12573,71 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +12641,71 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -6527,7 +6922,7 @@ index 4b5a702..2bc52ff 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +12659,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +12727,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -6551,7 +6946,7 @@ index 4b5a702..2bc52ff 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +12684,13 @@ form.upload {
+@@ -9133,8 +12752,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -6567,7 +6962,7 @@ index 4b5a702..2bc52ff 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +12726,41 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +12794,41 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -6609,7 +7004,7 @@ index 4b5a702..2bc52ff 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9216,6 +12807,28 @@ input[type="file"], input[type="text"] {
+@@ -9216,6 +12875,28 @@ input[type="file"], input[type="text"] {
  .kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 8%; }
  .kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 14%; }
  .kb-table th:nth-child(6), .kb-table td:nth-child(6) { width: 10%; }
@@ -6638,7 +7033,7 @@ index 4b5a702..2bc52ff 100644
  .kb-title { font-weight: 500; word-break: break-word; }
  .kb-source {
    font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
-@@ -9226,6 +12839,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +12907,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -6662,7 +7057,7 @@ index 4b5a702..2bc52ff 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9324,25 +12954,222 @@ input[type="file"], input[type="text"] {
+@@ -9324,25 +13022,222 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -6892,7 +7287,7 @@ index 4b5a702..2bc52ff 100644
            </span>
          </span>
        </label>
-@@ -9350,26 +13177,48 @@ input[type="file"], input[type="text"] {
+@@ -9350,26 +13245,48 @@ input[type="file"], input[type="text"] {
                      cursor: pointer; font-size: 0.9rem; line-height: 1.5;
                      margin-top: 1.1rem; padding-top: 1.1rem;
                      border-top: 1px dashed var(--line);">
@@ -6949,7 +7344,7 @@ index 4b5a702..2bc52ff 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +13229,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +13297,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -6984,7 +7379,7 @@ index 4b5a702..2bc52ff 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +13266,47 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +13334,47 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -7043,7 +7438,7 @@ index 4b5a702..2bc52ff 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,14 +13315,17 @@ input[type="file"], input[type="text"] {
+@@ -9419,14 +13383,17 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -7063,7 +7458,7 @@ index 4b5a702..2bc52ff 100644
          <div class="advisor-link-row">
            <div class="muted advisor-link-label">{{ label }}</div>
            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-@@ -9460,18 +13359,21 @@ input[type="file"], input[type="text"] {
+@@ -9460,18 +13427,21 @@ input[type="file"], input[type="text"] {
          </form>
        </div>
  
@@ -7089,7 +7484,7 @@ index 4b5a702..2bc52ff 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,43 +13382,300 @@ input[type="file"], input[type="text"] {
+@@ -9480,43 +13450,300 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -7417,7 +7812,7 @@ index 4b5a702..2bc52ff 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9525,10 +13684,10 @@ input[type="file"], input[type="text"] {
+@@ -9525,10 +13752,10 @@ input[type="file"], input[type="text"] {
            &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
          </p>
          {% endif %}
@@ -7431,7 +7826,7 @@ index 4b5a702..2bc52ff 100644
          {% if adv.briefings %}
          <table style="font-size: 0.8rem;">
            <tr><th style="width: 22%;">When</th><th>Participant</th>
-@@ -9557,33 +13716,20 @@ input[type="file"], input[type="text"] {
+@@ -9557,33 +13784,20 @@ input[type="file"], input[type="text"] {
            {{ adv.name }}'s links.
          </p>
          {% endif %}
@@ -7470,7 +7865,7 @@ index 4b5a702..2bc52ff 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9620,7 +13766,215 @@ input[type="file"], input[type="text"] {
+@@ -9620,7 +13834,215 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
      </form>
    </div>
@@ -7686,7 +8081,7 @@ index 4b5a702..2bc52ff 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +14137,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +14205,14 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7701,7 +8096,7 @@ index 4b5a702..2bc52ff 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +14179,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +14247,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7710,7 +8105,7 @@ index 4b5a702..2bc52ff 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +14208,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +14276,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -7728,7 +8123,7 @@ index 4b5a702..2bc52ff 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +14270,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +14338,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7756,7 +8151,7 @@ index 4b5a702..2bc52ff 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +14478,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +14546,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7766,7 +8161,7 @@ index 4b5a702..2bc52ff 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +14499,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +14567,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7789,7 +8184,7 @@ index 4b5a702..2bc52ff 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,7 +14632,10 @@ input[type="file"], input[type="text"] {
+@@ -10250,7 +14700,10 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7800,7 +8195,7 @@ index 4b5a702..2bc52ff 100644
  
  </div>
  
-@@ -10458,34 +14843,472 @@ input[type="file"], input[type="text"] {
+@@ -10458,34 +14911,472 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -8297,7 +8692,7 @@ index 4b5a702..2bc52ff 100644
        })();
      </script>
  </body></html>"""
-@@ -10493,14 +15316,29 @@ input[type="file"], input[type="text"] {
+@@ -10493,14 +15384,29 @@ input[type="file"], input[type="text"] {
  
  @app.route("/admin/login", methods=["GET", "POST"])
  def admin_login():
@@ -8333,7 +8728,7 @@ index 4b5a702..2bc52ff 100644
          return redirect(url_for("admin_dashboard"))
      return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
  
-@@ -10508,9 +15346,285 @@ def admin_login():
+@@ -10508,9 +15414,285 @@ def admin_login():
  @app.route("/admin/logout")
  def admin_logout():
      session.pop("is_admin", None)
@@ -8619,7 +9014,7 @@ index 4b5a702..2bc52ff 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,19 +15637,42 @@ def admin_dashboard():
+@@ -10523,19 +15705,42 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8664,7 +9059,7 @@ index 4b5a702..2bc52ff 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,14 +15682,31 @@ def admin_dashboard():
+@@ -10545,14 +15750,31 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8697,7 +9092,7 @@ index 4b5a702..2bc52ff 100644
  def admin_set_rating(feedback_id):
      """Set or clear a rating from the conversation log."""
      value = (request.form.get("rating") or "").strip().lower()
-@@ -10563,7 +15717,7 @@ def admin_set_rating(feedback_id):
+@@ -10563,7 +15785,7 @@ def admin_set_rating(feedback_id):
  
  
  @app.route("/admin/learning/run", methods=["POST"])
@@ -8706,7 +9101,7 @@ index 4b5a702..2bc52ff 100644
  def admin_run_learning():
      """Process pending feedback into lessons now."""
      dry = bool(request.form.get("preview"))
-@@ -10587,7 +15741,7 @@ def admin_run_learning():
+@@ -10587,7 +15809,7 @@ def admin_run_learning():
  
  
  @app.route("/admin/learning/archive", methods=["POST"])
@@ -8715,7 +9110,7 @@ index 4b5a702..2bc52ff 100644
  def admin_archive_learning():
      """Move the visible run history into the archive. Nothing is deleted."""
      if archive_all_learning_runs():
-@@ -10598,7 +15752,7 @@ def admin_archive_learning():
+@@ -10598,7 +15820,7 @@ def admin_archive_learning():
  
  
  @app.route("/admin/learning/archive", methods=["GET"])
@@ -8724,7 +9119,7 @@ index 4b5a702..2bc52ff 100644
  def admin_view_learning_archive():
      """Every archived run, newest first."""
      runs = recent_learning_runs(limit=500, archived=True)
-@@ -10606,7 +15760,7 @@ def admin_view_learning_archive():
+@@ -10606,7 +15828,7 @@ def admin_view_learning_archive():
  
  
  @app.route("/admin/advisors", methods=["POST"])
@@ -8733,7 +9128,7 @@ index 4b5a702..2bc52ff 100644
  def admin_save_advisor():
      """Create or update an advisor profile."""
      name = (request.form.get("name") or "").strip()[:80]
-@@ -10631,23 +15785,50 @@ def admin_save_advisor():
+@@ -10631,23 +15853,50 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8791,7 +9186,7 @@ index 4b5a702..2bc52ff 100644
  def admin_delete_advisor(slug):
      """Remove an advisor profile and its photo."""
      if delete_advisor(slug):
-@@ -10657,8 +15838,178 @@ def admin_delete_advisor(slug):
+@@ -10657,8 +15906,178 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8971,7 +9366,7 @@ index 4b5a702..2bc52ff 100644
  def admin_settings():
      """Persist the display toggles from the admin panel."""
      # Settings now live in more than one form, so each form declares which
-@@ -10672,21 +16023,14 @@ def admin_settings():
+@@ -10672,21 +16091,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -8995,7 +9390,7 @@ index 4b5a702..2bc52ff 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10710,7 +16054,7 @@ def admin_settings():
+@@ -10710,7 +16122,7 @@ def admin_settings():
  
  
  @app.route("/admin/upload", methods=["POST"])
@@ -9004,7 +9399,7 @@ index 4b5a702..2bc52ff 100644
  def admin_upload():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot upload: RAG not fully configured.")
-@@ -10762,7 +16106,7 @@ def admin_upload():
+@@ -10762,7 +16174,7 @@ def admin_upload():
  
  
  @app.route("/admin/upload-folder", methods=["POST"])
@@ -9013,7 +9408,7 @@ index 4b5a702..2bc52ff 100644
  def admin_upload_folder():
      """Bulk-upload all supported files from a folder in one request.
  
-@@ -10781,22 +16125,34 @@ def admin_upload_folder():
+@@ -10781,22 +16193,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -9054,7 +9449,7 @@ index 4b5a702..2bc52ff 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +16165,6 @@ def admin_upload_folder():
+@@ -10809,7 +16233,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -9062,7 +9457,7 @@ index 4b5a702..2bc52ff 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +16193,10 @@ def admin_upload_folder():
+@@ -10838,7 +16261,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -9074,7 +9469,7 @@ index 4b5a702..2bc52ff 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +16204,12 @@ def admin_upload_folder():
+@@ -10846,14 +16272,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -9089,7 +9484,7 @@ index 4b5a702..2bc52ff 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,12 +16217,15 @@ def admin_upload_folder():
+@@ -10861,12 +16285,15 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -9108,7 +9503,7 @@ index 4b5a702..2bc52ff 100644
  def admin_upload_text():
      """Paste content straight in — transcripts, show notes, anything a
      JavaScript page won't hand over."""
-@@ -11035,7 +16394,7 @@ def fetch_url_metadata(url: str):
+@@ -11035,7 +16462,7 @@ def fetch_url_metadata(url: str):
  
  
  @app.route("/admin/upload-url", methods=["POST"])
@@ -9117,7 +9512,7 @@ index 4b5a702..2bc52ff 100644
  def admin_upload_url():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot ingest URL: RAG not fully configured.")
-@@ -11043,25 +16402,34 @@ def admin_upload_url():
+@@ -11043,25 +16470,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -9159,7 +9554,7 @@ index 4b5a702..2bc52ff 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +16450,10 @@ def admin_upload_url():
+@@ -11082,7 +16518,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -9171,7 +9566,7 @@ index 4b5a702..2bc52ff 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +16461,7 @@ def admin_upload_url():
+@@ -11090,8 +16529,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9181,7 +9576,7 @@ index 4b5a702..2bc52ff 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +16471,14 @@ def admin_upload_url():
+@@ -11101,14 +16539,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9199,7 +9594,7 @@ index 4b5a702..2bc52ff 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,36 +16491,36 @@ def admin_upload_url():
+@@ -11121,36 +16559,36 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9253,7 +9648,7 @@ index 4b5a702..2bc52ff 100644
  def admin_delete(doc_id):
      try:
          db.delete_document(doc_id)
-@@ -11160,6 +16530,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +16598,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -9338,7 +9733,7 @@ index 4b5a702..2bc52ff 100644
  def _fmt_ts(value) -> str:
      """Format a timestamp defensively — drivers don't always return datetimes."""
      if not value:
-@@ -11228,7 +16676,7 @@ def _export_error(kind: str, err: Exception):
+@@ -11228,7 +16744,7 @@ def _export_error(kind: str, err: Exception):
  
  
  @app.route("/admin/export/feedback.csv")
@@ -9347,7 +9742,7 @@ index 4b5a702..2bc52ff 100644
  def admin_export_feedback():
      """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
      import csv
-@@ -11281,7 +16729,7 @@ def admin_export_feedback():
+@@ -11281,7 +16797,7 @@ def admin_export_feedback():
  
  
  @app.route("/admin/export/feedback.xlsx")
@@ -9356,7 +9751,7 @@ index 4b5a702..2bc52ff 100644
  def admin_export_feedback_xlsx():
      """Stream all feedback as an Excel (.xlsx) download with formatting."""
      from flask import Response
-@@ -11392,7 +16840,7 @@ def admin_export_feedback_xlsx():
+@@ -11392,7 +16908,7 @@ def admin_export_feedback_xlsx():
  
  
  @app.route("/admin/feedback/delete-selected", methods=["POST"])
@@ -9365,7 +9760,7 @@ index 4b5a702..2bc52ff 100644
  def admin_delete_selected_feedback():
      """Delete one or more feedback rows by ID (checkboxes from the table)."""
      ids = request.form.getlist("feedback_ids")
-@@ -11409,7 +16857,7 @@ def admin_delete_selected_feedback():
+@@ -11409,7 +16925,7 @@ def admin_delete_selected_feedback():
  
  
  @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -9374,7 +9769,7 @@ index 4b5a702..2bc52ff 100644
  def admin_delete_all_feedback():
      """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
      confirm = (request.form.get("confirm") or "").strip()
-@@ -11426,7 +16874,7 @@ def admin_delete_all_feedback():
+@@ -11426,7 +16942,7 @@ def admin_delete_all_feedback():
  
  
  @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -9383,7 +9778,7 @@ index 4b5a702..2bc52ff 100644
  def admin_approve_lesson(feedback_id):
      """Approve a thumbs-down feedback row as a learning example.
  
-@@ -11463,7 +16911,7 @@ def admin_approve_lesson(feedback_id):
+@@ -11463,7 +16979,7 @@ def admin_approve_lesson(feedback_id):
  
  
  @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -9392,7 +9787,7 @@ index 4b5a702..2bc52ff 100644
  def admin_revoke_lesson(feedback_id):
      """Stop using this feedback as a lesson going forward."""
      try:
-@@ -11477,6 +16925,105 @@ def admin_revoke_lesson(feedback_id):
+@@ -11477,6 +16993,105 @@ def admin_revoke_lesson(feedback_id):
      return redirect(url_for("admin_dashboard"))
  
  

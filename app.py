@@ -25,7 +25,7 @@ from pathlib import Path
 from functools import wraps
 from flask import (
     Flask, request, jsonify, session, render_template_string,
-    send_from_directory, redirect, url_for, flash, Response,
+    send_from_directory, redirect, url_for, flash, Response, g,
 )
 import anthropic
 
@@ -245,17 +245,78 @@ def _already_ensured(name: str) -> bool:
     return False
 
 
+class _NonClosingConnProxy:
+    """Wraps a real psycopg connection so that each individual caller's own
+    conn.close() — every one of the ~50 settings-table functions has its
+    own try/finally: conn.close() — becomes a harmless no-op. The real
+    connection is only closed once, by _close_settings_db_conn below, at
+    the actual end of the request. Removing .close() from each of those
+    ~50 functions individually would be a much larger, riskier change
+    than making it safe to call redundantly from here.
+
+    cursor() also defensively rolls back before handing out a new cursor
+    if the connection is currently sitting in an aborted-transaction
+    state (INERROR) — a previous call earlier in this same request may
+    have hit an error and returned without an explicit rollback, and
+    without this, that one failure would silently break every other
+    settings-table call for the rest of the request, since they're all
+    now sharing this same connection instead of each getting a fresh one.
+    Everything else (commit, rollback, and anything not overridden here)
+    passes straight through to the real connection unchanged.
+    """
+    def __init__(self, real_conn):
+        self._real = real_conn
+
+    def close(self):
+        pass
+
+    def cursor(self, *args, **kwargs):
+        try:
+            import psycopg
+            if self._real.info.transaction_status == psycopg.pq.TransactionStatus.INERROR:
+                self._real.rollback()
+        except Exception:
+            pass
+        return self._real.cursor(*args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
 def _settings_db_conn():
-    """Connection for the settings table, or None when Postgres isn't set up."""
+    """Connection for the settings table, or None when Postgres isn't set
+    up. Reused for the rest of the current request via Flask's g —
+    opening a fresh Postgres connection (TCP handshake, TLS, auth) is
+    real, measurable latency on a remote managed database, and a single
+    admin dashboard or participant chat page load can call this dozens
+    of times (advisor lookups, personality/behavioral/voice data,
+    participant links...). Each one previously opened and closed its own
+    brand-new connection from scratch, and that overhead was compounding
+    into the page-load slowness reported directly."""
+    if "settings_db_conn" in g:
+        return g.settings_db_conn
     url = os.environ.get("DATABASE_URL")
     if not url:
+        g.settings_db_conn = None
         return None
     try:
         import psycopg
-        return psycopg.connect(url)
+        real_conn = psycopg.connect(url)
+        g.settings_db_conn = _NonClosingConnProxy(real_conn)
     except Exception as e:
         app.logger.warning(f"[settings] Postgres unavailable: {e}")
-        return None
+        g.settings_db_conn = None
+    return g.settings_db_conn
+
+
+@app.teardown_appcontext
+def _close_settings_db_conn(exception=None):
+    conn = g.pop("settings_db_conn", None)
+    if conn is not None:
+        try:
+            conn._real.close()
+        except Exception:
+            pass
 
 
 def _settings_ensure_table(conn):
@@ -717,28 +778,33 @@ def _geo_ensure_table(conn):
 
 
 def record_location(interaction_id: int, ip: str):
-    """Look up and store the location for one logged interaction."""
+    """Look up and store the location for one logged interaction. Always
+    runs on the background thread record_location_async spawns below,
+    never synchronously inside a real request — so it pushes its own app
+    context here, since _settings_db_conn() now needs one (via g) and
+    there's no request already supplying it."""
     if not (GEO_LOOKUP_ENABLED and interaction_id and ip):
         return
     loc = resolve_location(ip)
     if not loc:
         return
-    conn = _settings_db_conn()
-    if not conn:
-        return
-    try:
-        _geo_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                INSERT INTO interaction_geo (interaction_id, city, region, country)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (interaction_id) DO NOTHING
-            """, (int(interaction_id), loc["city"], loc["region"], loc["country"]))
-        conn.commit()
-    except Exception as e:
-        app.logger.error(f"[geo] store failed: {e}")
-    finally:
-        conn.close()
+    with app.app_context():
+        conn = _settings_db_conn()
+        if not conn:
+            return
+        try:
+            _geo_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    INSERT INTO interaction_geo (interaction_id, city, region, country)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (interaction_id) DO NOTHING
+                """, (int(interaction_id), loc["city"], loc["region"], loc["country"]))
+            conn.commit()
+        except Exception as e:
+            app.logger.error(f"[geo] store failed: {e}")
+        finally:
+            conn.close()
 
 
 def record_location_async(interaction_id: int, ip: str):
@@ -1497,19 +1563,21 @@ def _learning_loop():
     time.sleep(120 + (os.getpid() % 47))
     while True:
         try:
-            if load_settings(force=True).get("auto_learning"):
-                conn = _settings_db_conn()
-                may_run = True
-                if conn:
-                    try:
-                        may_run = _claim_scheduled_run(conn)
-                    finally:
-                        conn.close()
-                if may_run:
-                    with app.app_context():
+            # Everything in this pass that touches the database — the claim
+            # check and the learning cycle itself — needs to run inside a
+            # single app context now: _settings_db_conn() reuses a
+            # connection via Flask's g, and g only exists inside one. This
+            # thread has no real HTTP request to supply that context, so it
+            # pushes its own, once, around the whole pass rather than just
+            # around run_learning_cycle() as before.
+            with app.app_context():
+                if load_settings(force=True).get("auto_learning"):
+                    conn = _settings_db_conn()
+                    may_run = _claim_scheduled_run(conn) if conn else True
+                    if may_run:
                         run_learning_cycle(trigger="scheduled")
-                else:
-                    app.logger.info("[learning] another worker ran recently — skipping")
+                    else:
+                        app.logger.info("[learning] another worker ran recently — skipping")
         except Exception as e:
             app.logger.error(f"[learning] scheduled run failed: {e}")
         time.sleep(max(1, LEARNING_INTERVAL_HOURS) * 3600)
