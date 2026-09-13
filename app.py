@@ -8587,38 +8587,135 @@ def delete_advisor_voice_sample(slug: str) -> bool:
         conn.close()
 
 
-def synthesize_advisor_voice(slug: str, text: str):
-    """The one function that needs real work once a provider is chosen.
-    Returns (audio_bytes, mime) if this advisor has a consented voice
-    sample AND a configured provider, else None — every caller treats
-    None as "fall back to the browser's own text-to-speech," so this is
-    always safe to leave a no-op indefinitely.
+def set_advisor_voice_provider(slug: str, provider: str, provider_voice_id: str) -> bool:
+    """Records which cloned voice a provider assigned this advisor, so
+    synthesize_advisor_voice() only clones once and reuses the same
+    voice_id on every later call instead of re-cloning every time."""
+    if not slug:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE advisor_voice_samples
+                SET provider = %s, provider_voice_id = %s
+                WHERE advisor_slug = %s
+            """, (provider, provider_voice_id, slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] provider save failed: {e}")
+        return False
+    finally:
+        conn.close()
 
-    NOT YET WIRED TO A REAL PROVIDER. To activate (ElevenLabs is the
-    standard choice for this — voice cloning is its core product, and it
-    verifies consent for exactly this reason):
-      1. Sign up, get an API key, set it as an env var (e.g.
-         ELEVENLABS_API_KEY) and read it below instead of the placeholder
-         check.
-      2. The first time a given advisor is used with consent_given=True
-         and no provider_voice_id yet, POST their stored sample
-         (get_advisor_voice_content) to the provider's voice-creation
-         endpoint, then save the returned ID with a new
-         set_advisor_voice_provider() call (not yet written — add it next
-         to save_advisor_voice_sample above) so future calls skip
-         re-cloning and go straight to synthesis.
-      3. With a provider_voice_id in hand, POST `text` to the provider's
-         text-to-speech endpoint for that voice ID and return the audio
-         bytes it sends back, with the correct mime type.
+
+def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
+    """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
+    Returns the new voice_id, or raises on any failure — caller decides
+    what to do with that (synthesize_advisor_voice treats it as
+    fall-back-to-browser-TTS, same as every other failure mode here)."""
+    import urllib.request as _url
+    import json as _j
+    import uuid as _uuid
+
+    boundary = f"----j3pVoice{_uuid.uuid4().hex}"
+    body = bytearray()
+    body += f"--{boundary}\r\nContent-Disposition: form-data; name=\"name\"\r\n\r\n{name}\r\n".encode("utf-8")
+    body += (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="files"; filename="{filename or "sample.webm"}"\r\n'
+        f"Content-Type: {mime or 'audio/webm'}\r\n\r\n"
+    ).encode("utf-8")
+    body += audio_bytes
+    body += f"\r\n--{boundary}--\r\n".encode("utf-8")
+
+    req = _url.Request(
+        "https://api.elevenlabs.io/v1/voices/add",
+        data=bytes(body),
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        },
+        method="POST",
+    )
+    with _url.urlopen(req, timeout=30) as resp:
+        data = _j.loads(resp.read().decode("utf-8"))
+    voice_id = data.get("voice_id")
+    if not voice_id:
+        raise RuntimeError(f"ElevenLabs voice-add returned no voice_id: {data}")
+    return voice_id
+
+
+def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
+    """POST text to ElevenLabs' text-to-speech endpoint for one voice_id.
+    Returns (audio_bytes, mime), or raises on failure."""
+    import urllib.request as _url
+    import json as _j
+
+    body = _j.dumps({
+        "text": text,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+    }).encode("utf-8")
+    req = _url.Request(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
+        data=body,
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        },
+        method="POST",
+    )
+    with _url.urlopen(req, timeout=30) as resp:
+        audio_bytes = resp.read()
+    return audio_bytes, "audio/mpeg"
+
+
+def synthesize_advisor_voice(slug: str, text: str):
+    """Returns (audio_bytes, mime) if this advisor has a consented voice
+    sample AND ElevenLabs is configured, else None — every caller treats
+    None as "fall back to the browser's own text-to-speech."
+
+    Wired to ElevenLabs (voice cloning is its core product, and it
+    verifies consent for exactly this reason). To activate: sign up at
+    elevenlabs.io, generate an API key under Profile Settings, and set it
+    as the ELEVENLABS_API_KEY environment variable on Railway. Nothing
+    else to change — the first call for a given advisor clones their
+    stored sample automatically and remembers the resulting voice_id
+    (via set_advisor_voice_provider), so only the very first synthesis
+    call per advisor pays the cloning cost; every call after that goes
+    straight to text-to-speech.
+
+    ElevenLabs' exact endpoints, required fields, and model names can
+    change over time — if this starts failing, check their current API
+    reference (elevenlabs.io/docs/api-reference) against the two helper
+    functions above rather than assuming this code is still exactly
+    right.
     """
     meta = get_advisor_voice_meta(slug)
     if not meta or not meta.get("consent_given"):
         return None
-    api_key = os.environ.get("VOICE_SYNTHESIS_API_KEY", "")
+    api_key = os.environ.get("ELEVENLABS_API_KEY", "")
     if not api_key:
         return None   # not configured yet — expected, safe no-op
-    # TODO: real provider call goes here once VOICE_SYNTHESIS_API_KEY is set.
-    return None
+    try:
+        voice_id = meta.get("provider_voice_id")
+        if not voice_id:
+            content = get_advisor_voice_content(slug)
+            if not content:
+                return None
+            audio_bytes, mime, filename = content
+            voice_id = _elevenlabs_clone_voice(
+                api_key, f"J3P Advisor — {slug}", audio_bytes, mime, filename)
+            set_advisor_voice_provider(slug, "elevenlabs", voice_id)
+        return _elevenlabs_text_to_speech(api_key, voice_id, text)
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] synthesis failed for {slug}: {e}")
+        return None
 
 
 def personality_style_block() -> str:
