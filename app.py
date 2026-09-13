@@ -14209,6 +14209,7 @@ input[type="file"], input[type="text"] {
             <option value="{{ p }}" {% if log_persona == p %}selected{% endif %}>{{ p }}</option>
             {% endfor %}
           </select>
+          <input type="hidden" name="log_limit" value="{{ log_limit }}" />
         </form>
         {% if stats.total > 0 %}
         <button type="button" id="export-csv" class="btn"
@@ -14220,7 +14221,12 @@ input[type="file"], input[type="text"] {
     </div>
     <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
       Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
-      Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}.
+      Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}{% if log_limit < 10000 %} (most recent first — kept short so this page loads quickly){% endif %}.
+      {% if log_limit < 10000 and feedback_rows|length >= log_limit %}
+      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=all">Show full history</a> instead.
+      {% elif log_limit >= 10000 %}
+      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=25">Show recent only</a> for a faster-loading page.
+      {% endif %}
       Tick rows to export or delete just those; with nothing ticked, export includes every record.
     </p>
     {% if feedback_rows %}
@@ -15708,8 +15714,24 @@ def admin_dashboard():
     log_persona = request.args.get("advisor") or ""
     if log_persona not in log_personas:
         log_persona = ""
+    # Page size for the log — kept small by default on purpose. Each row
+    # renders to roughly 5 KB of HTML (message, reply, rating controls,
+    # personality notes), so the previous fixed limit of 100 meant the
+    # conversation log alone was over half a megabyte of HTML on every
+    # single admin page load, all of it sitting in the DOM whether the
+    # Activity tab was open or not — a real, measured contributor to the
+    # page feeling slow, distinct from the database-side fixes elsewhere.
+    # "?log_limit=all" (or any value over 100) still lets an admin pull
+    # the full history when they actually need to search further back.
+    try:
+        log_limit = int(request.args.get("log_limit", 25))
+    except (TypeError, ValueError):
+        log_limit = 25
+    if request.args.get("log_limit") == "all":
+        log_limit = 10000
+    log_limit = max(1, min(log_limit, 10000))
     feedback_rows = db.list_feedback(
-        limit=100,
+        limit=log_limit,
         rating=(None if log_filter == "all" else log_filter),
         persona=(log_persona or None),
     ) if db_ok else []
@@ -15764,6 +15786,7 @@ def admin_dashboard():
         log_filter=log_filter,
         log_personas=log_personas,
         log_persona=log_persona,
+        log_limit=log_limit,
         admin_identity=current_admin_identity(),
         admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
         admin_users=list_admin_users(),

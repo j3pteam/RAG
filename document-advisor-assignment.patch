@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..25eaaaf 100644
+index 4b5a702..c12a9ca 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -5747,6 +5747,17 @@ index 4b5a702..25eaaaf 100644
 +  .pq-row {
 +    background: #fff; border: 1px solid var(--line); border-radius: 4px;
 +    padding: 1.1rem 1.2rem; margin-bottom: 0.9rem;
++  }
++  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
++  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
++  .pq-scale label { flex: 1 1 90px; text-align: center; cursor: pointer; }
++  .pq-scale input[type="radio"] {
++    position: absolute; opacity: 0; width: 0; height: 0;
++  }
++  .pq-scale span {
++    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
++    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
++    font-size: 0.76rem; transition: all 0.15s ease;
    }
 -  input:focus { outline: none; border-color: var(--gold); background: #fff; }
 -  button {
@@ -5755,28 +5766,14 @@ index 4b5a702..25eaaaf 100644
 -    border-radius: 2px; cursor: pointer; font-family: inherit;
 -    font-size: 0.78rem; letter-spacing: 0.18em; text-transform: uppercase;
 -    transition: background 0.2s ease, color 0.2s ease;
-+  .pq-statement { margin: 0 0 0.7rem; font-size: 0.92rem; line-height: 1.5; }
-+  .pq-scale { display: flex; gap: 0.35rem; flex-wrap: wrap; }
-+  .pq-scale label { flex: 1 1 90px; text-align: center; cursor: pointer; }
-+  .pq-scale input[type="radio"] {
-+    position: absolute; opacity: 0; width: 0; height: 0;
++  .pq-scale input[type="radio"]:checked + span {
++    background: var(--navy); color: var(--gold); border-color: var(--navy);
    }
 -  button:hover { background: var(--gold); color: var(--navy); }
 -  .err {
 -    background: #FEE; color: var(--rust); border: 1px solid #E7C3BA;
 -    padding: 0.65rem 0.85rem; border-radius: 2px;
 -    font-size: 0.85rem; margin-bottom: 1rem;
-+  .pq-scale span {
-+    display: block; padding: 0.5rem 0.3rem; border-radius: 2px;
-+    background: rgba(210, 188, 141, 0.28); border: 1px solid rgba(210, 188, 141, 0.6);
-+    font-size: 0.76rem; transition: all 0.15s ease;
-   }
--  .foot {
--    margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
--    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
-+  .pq-scale input[type="radio"]:checked + span {
-+    background: var(--navy); color: var(--gold); border-color: var(--navy);
-+  }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
@@ -5784,13 +5781,16 @@ index 4b5a702..25eaaaf 100644
 +    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
    }
+-  .foot {
+-    margin-top: 1.1rem; font-size: 0.62rem; color: var(--muted);
+-    letter-spacing: 0.1em; text-transform: uppercase; text-align: center;
 +  .btn:hover { background: var(--gold); color: var(--navy); }
 +  .btn-secondary {
 +    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
 +    border: 1px solid var(--line); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none;
 +    display: inline-flex; align-items: center;
-+  }
+   }
 +  .btn-secondary:hover { border-color: var(--navy); }
    @media (max-width: 480px) {
 -    .box-head { padding: 0.85rem 1.2rem; gap: 0.7rem; }
@@ -6799,29 +6799,10 @@ index 4b5a702..25eaaaf 100644
 +          are only visible to Admin and Owner roles.
 +        </p>
 +        {% endif %}
- 
--      <div class="advisor-links">
--        <h3>Scheduling Links</h3>
--        {% for path, label in [
--            ('/scheduling', 'Booking button always shown'),
--            ('/no-scheduling', 'Booking button always hidden'),
--            ('', 'Follows the Display Settings toggle')] %}
--        <div class="advisor-link-row">
--          <div class="muted advisor-link-label">{{ label }}</div>
--          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
--            <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
--               class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
--            <button type="button" class="copy-link"
--                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
--            <button type="button" class="share-link"
--                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
--                    data-advisor="{{ adv.name }}">Share</button>
--          </div>
++
 +        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
 +          Areas of expertise
-         </div>
--        {% endfor %}
--      </div>
++        </div>
 +        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
 +          {{ adv.name }}'s own subject-matter background — e.g. "academic
 +          surgical leadership; conflict resolution with senior faculty."
@@ -6840,14 +6821,27 @@ index 4b5a702..25eaaaf 100644
 +        </form>
  
 -      <div class="advisor-links">
--        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
--        {% if adv.documents %}
--        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
--          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
--        </ul>
+-        <h3>Scheduling Links</h3>
+-        {% for path, label in [
+-            ('/scheduling', 'Booking button always shown'),
+-            ('/no-scheduling', 'Booking button always hidden'),
+-            ('', 'Follows the Display Settings toggle')] %}
+-        <div class="advisor-link-row">
+-          <div class="muted advisor-link-label">{{ label }}</div>
+-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+-            <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
+-               class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
+-            <button type="button" class="copy-link"
+-                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
+-            <button type="button" class="share-link"
+-                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
+-                    data-advisor="{{ adv.name }}">Share</button>
+-          </div>
 +        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1rem 0 0.4rem;">
 +          Client-facing bio
-+        </div>
+         </div>
+-        {% endfor %}
+-      </div>
 +        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
 +          A short "about your advisor" style preview. Shown to participants
 +          in the chat itself, and — like expertise above — given to the
@@ -6873,7 +6867,13 @@ index 4b5a702..25eaaaf 100644
 +          {% endif %}
 +        </form>
 +      </details>
-+
+ 
+-      <div class="advisor-links">
+-        <h3>Knowledge{% if adv.documents %} ({{ adv.documents|length }}){% endif %}</h3>
+-        {% if adv.documents %}
+-        <ul style="margin: 0; padding-left: 1.1rem; font-size: 0.8rem; line-height: 1.7;">
+-          {% for t in adv.documents %}<li>{{ t }}</li>{% endfor %}
+-        </ul>
 +      <details class="advisor-section">
 +        {% set adv_docs = advisor_docs.get(adv.slug, []) %}
 +        <summary>Knowledge{% if adv_docs %} ({{ adv_docs|length }}){% endif %}</summary>
@@ -7165,7 +7165,7 @@ index 4b5a702..25eaaaf 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +14201,14 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +14201,15 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7177,10 +7177,25 @@ index 4b5a702..25eaaaf 100644
 +            <option value="{{ p }}" {% if log_persona == p %}selected{% endif %}>{{ p }}</option>
 +            {% endfor %}
 +          </select>
++          <input type="hidden" name="log_limit" value="{{ log_limit }}" />
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9817,7 +14243,7 @@ input[type="file"], input[type="text"] {
+@@ -9794,7 +14221,12 @@ input[type="file"], input[type="text"] {
+     </div>
+     <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
+       Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
+-      Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}.
++      Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}{% if log_limit < 10000 %} (most recent first — kept short so this page loads quickly){% endif %}.
++      {% if log_limit < 10000 and feedback_rows|length >= log_limit %}
++      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=all">Show full history</a> instead.
++      {% elif log_limit >= 10000 %}
++      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=25">Show recent only</a> for a faster-loading page.
++      {% endif %}
+       Tick rows to export or delete just those; with nothing ticked, export includes every record.
+     </p>
+     {% if feedback_rows %}
+@@ -9817,7 +14249,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7189,7 +7204,7 @@ index 4b5a702..25eaaaf 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +14272,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +14278,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -7207,7 +7222,7 @@ index 4b5a702..25eaaaf 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +14334,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +14340,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7235,7 +7250,7 @@ index 4b5a702..25eaaaf 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +14542,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +14548,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7245,7 +7260,7 @@ index 4b5a702..25eaaaf 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +14563,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +14569,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7268,7 +7283,7 @@ index 4b5a702..25eaaaf 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,8 +14696,12 @@ input[type="file"], input[type="text"] {
+@@ -10250,8 +14702,12 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7281,7 +7296,7 @@ index 4b5a702..25eaaaf 100644
  </div>
  
      <script>
-@@ -10458,34 +14908,472 @@ input[type="file"], input[type="text"] {
+@@ -10458,34 +14914,472 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -7778,7 +7793,7 @@ index 4b5a702..25eaaaf 100644
        })();
      </script>
  </body></html>"""
-@@ -10493,14 +15381,29 @@ input[type="file"], input[type="text"] {
+@@ -10493,14 +15387,29 @@ input[type="file"], input[type="text"] {
  
  @app.route("/admin/login", methods=["GET", "POST"])
  def admin_login():
@@ -7814,7 +7829,7 @@ index 4b5a702..25eaaaf 100644
          return redirect(url_for("admin_dashboard"))
      return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
  
-@@ -10508,9 +15411,285 @@ def admin_login():
+@@ -10508,9 +15417,285 @@ def admin_login():
  @app.route("/admin/logout")
  def admin_logout():
      session.pop("is_admin", None)
@@ -8100,7 +8115,7 @@ index 4b5a702..25eaaaf 100644
  @app.route("/admin")
  @admin_required
  def admin_dashboard():
-@@ -10523,19 +15702,42 @@ def admin_dashboard():
+@@ -10523,19 +15708,58 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8110,8 +8125,25 @@ index 4b5a702..25eaaaf 100644
 +    log_persona = request.args.get("advisor") or ""
 +    if log_persona not in log_personas:
 +        log_persona = ""
++    # Page size for the log — kept small by default on purpose. Each row
++    # renders to roughly 5 KB of HTML (message, reply, rating controls,
++    # personality notes), so the previous fixed limit of 100 meant the
++    # conversation log alone was over half a megabyte of HTML on every
++    # single admin page load, all of it sitting in the DOM whether the
++    # Activity tab was open or not — a real, measured contributor to the
++    # page feeling slow, distinct from the database-side fixes elsewhere.
++    # "?log_limit=all" (or any value over 100) still lets an admin pull
++    # the full history when they actually need to search further back.
++    try:
++        log_limit = int(request.args.get("log_limit", 25))
++    except (TypeError, ValueError):
++        log_limit = 25
++    if request.args.get("log_limit") == "all":
++        log_limit = 10000
++    log_limit = max(1, min(log_limit, 10000))
      feedback_rows = db.list_feedback(
-         limit=100,
+-        limit=100,
++        limit=log_limit,
          rating=(None if log_filter == "all" else log_filter),
 +        persona=(log_persona or None),
      ) if db_ok else []
@@ -8145,7 +8177,7 @@ index 4b5a702..25eaaaf 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,14 +15747,31 @@ def admin_dashboard():
+@@ -10545,14 +15769,32 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8166,6 +8198,7 @@ index 4b5a702..25eaaaf 100644
          log_filter=log_filter,
 +        log_personas=log_personas,
 +        log_persona=log_persona,
++        log_limit=log_limit,
 +        admin_identity=current_admin_identity(),
 +        admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
 +        admin_users=list_admin_users(),
@@ -8178,7 +8211,7 @@ index 4b5a702..25eaaaf 100644
  def admin_set_rating(feedback_id):
      """Set or clear a rating from the conversation log."""
      value = (request.form.get("rating") or "").strip().lower()
-@@ -10563,7 +15782,7 @@ def admin_set_rating(feedback_id):
+@@ -10563,7 +15805,7 @@ def admin_set_rating(feedback_id):
  
  
  @app.route("/admin/learning/run", methods=["POST"])
@@ -8187,7 +8220,7 @@ index 4b5a702..25eaaaf 100644
  def admin_run_learning():
      """Process pending feedback into lessons now."""
      dry = bool(request.form.get("preview"))
-@@ -10587,7 +15806,7 @@ def admin_run_learning():
+@@ -10587,7 +15829,7 @@ def admin_run_learning():
  
  
  @app.route("/admin/learning/archive", methods=["POST"])
@@ -8196,7 +8229,7 @@ index 4b5a702..25eaaaf 100644
  def admin_archive_learning():
      """Move the visible run history into the archive. Nothing is deleted."""
      if archive_all_learning_runs():
-@@ -10598,7 +15817,7 @@ def admin_archive_learning():
+@@ -10598,7 +15840,7 @@ def admin_archive_learning():
  
  
  @app.route("/admin/learning/archive", methods=["GET"])
@@ -8205,7 +8238,7 @@ index 4b5a702..25eaaaf 100644
  def admin_view_learning_archive():
      """Every archived run, newest first."""
      runs = recent_learning_runs(limit=500, archived=True)
-@@ -10606,7 +15825,7 @@ def admin_view_learning_archive():
+@@ -10606,7 +15848,7 @@ def admin_view_learning_archive():
  
  
  @app.route("/admin/advisors", methods=["POST"])
@@ -8214,7 +8247,7 @@ index 4b5a702..25eaaaf 100644
  def admin_save_advisor():
      """Create or update an advisor profile."""
      name = (request.form.get("name") or "").strip()[:80]
-@@ -10631,23 +15850,50 @@ def admin_save_advisor():
+@@ -10631,23 +15873,50 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8272,7 +8305,7 @@ index 4b5a702..25eaaaf 100644
  def admin_delete_advisor(slug):
      """Remove an advisor profile and its photo."""
      if delete_advisor(slug):
-@@ -10657,8 +15903,178 @@ def admin_delete_advisor(slug):
+@@ -10657,8 +15926,178 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8452,7 +8485,7 @@ index 4b5a702..25eaaaf 100644
  def admin_settings():
      """Persist the display toggles from the admin panel."""
      # Settings now live in more than one form, so each form declares which
-@@ -10672,21 +16088,14 @@ def admin_settings():
+@@ -10672,21 +16111,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -8476,7 +8509,7 @@ index 4b5a702..25eaaaf 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10710,7 +16119,7 @@ def admin_settings():
+@@ -10710,7 +16142,7 @@ def admin_settings():
  
  
  @app.route("/admin/upload", methods=["POST"])
@@ -8485,7 +8518,7 @@ index 4b5a702..25eaaaf 100644
  def admin_upload():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot upload: RAG not fully configured.")
-@@ -10762,7 +16171,7 @@ def admin_upload():
+@@ -10762,7 +16194,7 @@ def admin_upload():
  
  
  @app.route("/admin/upload-folder", methods=["POST"])
@@ -8494,7 +8527,7 @@ index 4b5a702..25eaaaf 100644
  def admin_upload_folder():
      """Bulk-upload all supported files from a folder in one request.
  
-@@ -10781,22 +16190,34 @@ def admin_upload_folder():
+@@ -10781,22 +16213,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -8535,7 +8568,7 @@ index 4b5a702..25eaaaf 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +16230,6 @@ def admin_upload_folder():
+@@ -10809,7 +16253,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -8543,7 +8576,7 @@ index 4b5a702..25eaaaf 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +16258,10 @@ def admin_upload_folder():
+@@ -10838,7 +16281,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -8555,7 +8588,7 @@ index 4b5a702..25eaaaf 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +16269,12 @@ def admin_upload_folder():
+@@ -10846,14 +16292,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -8570,7 +8603,7 @@ index 4b5a702..25eaaaf 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,12 +16282,15 @@ def admin_upload_folder():
+@@ -10861,12 +16305,15 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -8589,7 +8622,7 @@ index 4b5a702..25eaaaf 100644
  def admin_upload_text():
      """Paste content straight in — transcripts, show notes, anything a
      JavaScript page won't hand over."""
-@@ -11035,7 +16459,7 @@ def fetch_url_metadata(url: str):
+@@ -11035,7 +16482,7 @@ def fetch_url_metadata(url: str):
  
  
  @app.route("/admin/upload-url", methods=["POST"])
@@ -8598,7 +8631,7 @@ index 4b5a702..25eaaaf 100644
  def admin_upload_url():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot ingest URL: RAG not fully configured.")
-@@ -11043,25 +16467,34 @@ def admin_upload_url():
+@@ -11043,25 +16490,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -8640,7 +8673,7 @@ index 4b5a702..25eaaaf 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +16515,10 @@ def admin_upload_url():
+@@ -11082,7 +16538,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -8652,7 +8685,7 @@ index 4b5a702..25eaaaf 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +16526,7 @@ def admin_upload_url():
+@@ -11090,8 +16549,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -8662,7 +8695,7 @@ index 4b5a702..25eaaaf 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +16536,14 @@ def admin_upload_url():
+@@ -11101,14 +16559,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -8680,7 +8713,7 @@ index 4b5a702..25eaaaf 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,36 +16556,36 @@ def admin_upload_url():
+@@ -11121,36 +16579,36 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -8734,7 +8767,7 @@ index 4b5a702..25eaaaf 100644
  def admin_delete(doc_id):
      try:
          db.delete_document(doc_id)
-@@ -11160,6 +16595,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +16618,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8819,7 +8852,7 @@ index 4b5a702..25eaaaf 100644
  def _fmt_ts(value) -> str:
      """Format a timestamp defensively — drivers don't always return datetimes."""
      if not value:
-@@ -11228,7 +16741,7 @@ def _export_error(kind: str, err: Exception):
+@@ -11228,7 +16764,7 @@ def _export_error(kind: str, err: Exception):
  
  
  @app.route("/admin/export/feedback.csv")
@@ -8828,7 +8861,7 @@ index 4b5a702..25eaaaf 100644
  def admin_export_feedback():
      """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
      import csv
-@@ -11281,7 +16794,7 @@ def admin_export_feedback():
+@@ -11281,7 +16817,7 @@ def admin_export_feedback():
  
  
  @app.route("/admin/export/feedback.xlsx")
@@ -8837,7 +8870,7 @@ index 4b5a702..25eaaaf 100644
  def admin_export_feedback_xlsx():
      """Stream all feedback as an Excel (.xlsx) download with formatting."""
      from flask import Response
-@@ -11392,7 +16905,7 @@ def admin_export_feedback_xlsx():
+@@ -11392,7 +16928,7 @@ def admin_export_feedback_xlsx():
  
  
  @app.route("/admin/feedback/delete-selected", methods=["POST"])
@@ -8846,7 +8879,7 @@ index 4b5a702..25eaaaf 100644
  def admin_delete_selected_feedback():
      """Delete one or more feedback rows by ID (checkboxes from the table)."""
      ids = request.form.getlist("feedback_ids")
-@@ -11409,7 +16922,7 @@ def admin_delete_selected_feedback():
+@@ -11409,7 +16945,7 @@ def admin_delete_selected_feedback():
  
  
  @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -8855,7 +8888,7 @@ index 4b5a702..25eaaaf 100644
  def admin_delete_all_feedback():
      """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
      confirm = (request.form.get("confirm") or "").strip()
-@@ -11426,7 +16939,7 @@ def admin_delete_all_feedback():
+@@ -11426,7 +16962,7 @@ def admin_delete_all_feedback():
  
  
  @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -8864,7 +8897,7 @@ index 4b5a702..25eaaaf 100644
  def admin_approve_lesson(feedback_id):
      """Approve a thumbs-down feedback row as a learning example.
  
-@@ -11463,7 +16976,7 @@ def admin_approve_lesson(feedback_id):
+@@ -11463,7 +16999,7 @@ def admin_approve_lesson(feedback_id):
  
  
  @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -8873,7 +8906,7 @@ index 4b5a702..25eaaaf 100644
  def admin_revoke_lesson(feedback_id):
      """Stop using this feedback as a lesson going forward."""
      try:
-@@ -11477,6 +16990,105 @@ def admin_revoke_lesson(feedback_id):
+@@ -11477,6 +17013,105 @@ def admin_revoke_lesson(feedback_id):
      return redirect(url_for("admin_dashboard"))
  
  
