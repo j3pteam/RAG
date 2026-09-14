@@ -5329,6 +5329,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
 
           const cleanText = stripMarkdown(replyText);
+          // Captures why the cloned voice wasn't used, so it can be shown
+          // in the same visible "Speaking (...)" label under the avatar —
+          // that label has already proven to be something a person can
+          // read back accurately without opening DevTools, so the actual
+          // reason belongs there directly rather than in a console log
+          // that's hard to get relayed back reliably.
+          let fallbackReason = "";
 
           // Try this advisor's own cloned voice first (ElevenLabs, when
           // configured for this advisor with a consented sample) — every
@@ -5379,10 +5386,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 await audio.play();
                 return;
               }
+              fallbackReason = "empty audio returned";
+            } else {
+              fallbackReason = voiceStatus;
             }
           } catch (e) {
             // Network error, timeout, or a rejected play() — fall through
             // to the browser's own voice below rather than surface this.
+            fallbackReason = "request failed: " + (e && e.message ? e.message : "unknown");
             console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
           }
           } // end participant-chose-default-voice skip
@@ -5392,7 +5403,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
               window.__activeSpeakMsg = msgDiv;
               clearAllAvatarStates();
               setAvatarSpeaking(msgDiv, true);
-              Presence.set("speaking", "default voice");
+              Presence.set("speaking", fallbackReason
+                ? ("default voice — " + fallbackReason.slice(0, 70))
+                : "default voice");
             },
             onEnd: () => resetSpeakUI(),
             onError: (reason) => {
