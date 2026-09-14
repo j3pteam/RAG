@@ -10049,6 +10049,34 @@ def _fit_history(messages: list) -> list:
     return trimmed
 
 
+def build_retrieval_query(current_question: str, prior_user_msg: str = "",
+                           prior_assistant_msg: str = "") -> str:
+    """Builds the text actually embedded for RAG/lesson search.
+
+    A bare follow-up like "what about for smaller teams?" carries no
+    topic on its own — the embedding model has nothing to anchor it to
+    without knowing what it's a follow-up to, so retrieval for a
+    multi-turn conversation was silently weaker than for a first
+    message, even though most real coaching conversations are follow-ups
+    by their second or third turn. Prepending the previous exchange gives
+    the embedding real content to match against, without an extra LLM
+    call (and its latency/cost) to rewrite the query — a plain,
+    deterministic concatenation, kept to the single most recent exchange
+    only, so a long conversation's older turns don't dilute what the
+    current question is actually about.
+
+    Only applied when there IS a prior exchange; a first message in a
+    session is embedded exactly as before."""
+    if not prior_assistant_msg:
+        return current_question
+    pieces = []
+    if prior_user_msg:
+        pieces.append(f"Previous question: {prior_user_msg[:300]}")
+    pieces.append(f"Previous reply: {prior_assistant_msg[:300]}")
+    pieces.append(f"Current question: {current_question}")
+    return "\n".join(pieces)
+
+
 def retrieve_context_and_lessons(query: str) -> tuple:
     """Search knowledge base AND approved lessons for material relevant to the query.
 
@@ -10675,6 +10703,16 @@ def chat():
 
     messages = load_history()
 
+    # Captured now, before this turn gets appended to `messages` below —
+    # used later to give RAG/lesson retrieval a follow-up question some
+    # actual context to embed against (see _build_retrieval_query).
+    _prior_user_msg = ""
+    _prior_assistant_msg = ""
+    if len(messages) >= 2 and messages[-1].get("role") == "assistant":
+        _prior_assistant_msg = messages[-1].get("content") or ""
+        if messages[-2].get("role") == "user":
+            _prior_user_msg = messages[-2].get("content") or ""
+
     # A long transcript plus a large attachment can push the request big enough
     # to time out or exhaust the worker — which surfaces to the user as an
     # "upstream error". Trim history when an attachment carries most of the
@@ -10726,7 +10764,8 @@ def chat():
 
     # Build system prompt — base prompt + retrieved context if available
     base_prompt = CONFIG["system_prompt"]
-    context, lessons = retrieve_context_and_lessons(user_input)
+    retrieval_query = build_retrieval_query(user_input, _prior_user_msg, _prior_assistant_msg)
+    context, lessons = retrieve_context_and_lessons(retrieval_query)
 
     # Build lessons block: things we got wrong before and shouldn't repeat
     lessons_block = ""

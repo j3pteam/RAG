@@ -430,7 +430,19 @@ def delete_all_feedback() -> int:
 
 
 def approve_feedback_as_lesson(feedback_id: int, question_embedding: list) -> bool:
-    """Mark a thumbs-down feedback row as approved for use as a learning example.
+    """Mark a feedback row as approved for use as a learning example — a
+    thumbs-down with an explanation teaches what to avoid, a thumbs-up
+    teaches the shape of a reply that worked. The caller (run_learning_cycle)
+    already enforces the quality bar for each rating before ever calling
+    this (a down needs a real comment, an up needs a substantial reply),
+    so this only re-checks the one condition that actually matters at the
+    database level: a down-rated row must still have a non-empty comment,
+    since approving one without one would leave a lesson with nothing to
+    learn from. This used to hard-require rating = 'down' specifically,
+    which meant every thumbs-up approval attempt silently no-op'd here —
+    the caller's own up-rating logic, and the prompt-injection code that
+    already knows how to present a "what worked" lesson, were both fully
+    built and never actually reachable because of this one filter.
 
     The question embedding is stored at approval time (not at feedback time) so
     that we only spend embedding tokens on items that actually get used.
@@ -441,16 +453,17 @@ def approve_feedback_as_lesson(feedback_id: int, question_embedding: list) -> bo
     embedding_str = "[" + ",".join(str(x) for x in question_embedding) + "]"
     with get_conn() as conn:
         with conn.cursor() as cur:
-            # Only approve rows that are thumbs-down AND have a comment
             cur.execute(
                 """
                 UPDATE feedback
                 SET approved_for_learning = TRUE,
                     question_embedding = %s::vector
                 WHERE id = %s
-                  AND rating = 'down'
-                  AND comment IS NOT NULL
-                  AND TRIM(comment) <> '';
+                  AND rating IN ('up', 'down')
+                  AND (
+                    rating = 'up'
+                    OR (comment IS NOT NULL AND TRIM(comment) <> '')
+                  );
                 """,
                 (embedding_str, feedback_id),
             )
@@ -486,9 +499,12 @@ def get_feedback(feedback_id: int) -> Optional[dict]:
 
 def search_lessons(query_embedding: list, limit: int = 3, min_similarity: float = 0.5) -> list:
     """Find approved lessons whose user-question is semantically similar to the
-    current question. Used at chat time to inject 'what to avoid' guidance.
+    current question. Used at chat time to inject "what worked" / "what to
+    avoid" guidance — app.py's prompt-building code checks each lesson's
+    own rating and presents it accordingly, so this returns both kinds
+    together and lets the caller sort out which is which.
 
-    Returns rows with: user_message, bot_reply, comment, similarity.
+    Returns rows with: user_message, bot_reply, comment, rating, similarity.
     Only returns rows above min_similarity to avoid distracting the bot with
     weakly related lessons.
     """
@@ -500,7 +516,7 @@ def search_lessons(query_embedding: list, limit: int = 3, min_similarity: float 
             cur.execute(
                 """
                 SELECT
-                    id, user_message, bot_reply, comment,
+                    id, user_message, bot_reply, comment, rating,
                     1 - (question_embedding <=> %s::vector) AS similarity
                 FROM feedback
                 WHERE approved_for_learning = TRUE
