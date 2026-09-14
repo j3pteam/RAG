@@ -7479,13 +7479,23 @@ def _participant_links_ensure_table(conn):
                         "first_name TEXT NOT NULL DEFAULT ''")
         except Exception:
             pass
+        # Added later still: optional email, purely for the admin's own
+        # record-keeping and for the bulk-upload/export workflow below —
+        # never used to authenticate or to send anything automatically.
+        try:
+            cur.execute("ALTER TABLE participant_links ADD COLUMN IF NOT EXISTS "
+                        "email TEXT NOT NULL DEFAULT ''")
+        except Exception:
+            pass
     conn.commit()
 
 
-def create_participant_link(label: str, advisor_slug: str = "", first_name: str = "") -> dict:
+def create_participant_link(label: str, advisor_slug: str = "", first_name: str = "",
+                             email: str = "") -> dict:
     """Generates a new participant link. Returns {"ok", "token"/"error"}."""
     label = (label or "").strip()[:200]
     first_name = (first_name or "").strip()[:80]
+    email = (email or "").strip()[:200]
     if not label:
         return {"ok": False, "error": "A label is required."}
     conn = _settings_db_conn()
@@ -7496,9 +7506,9 @@ def create_participant_link(label: str, advisor_slug: str = "", first_name: str 
         token = secrets.token_urlsafe(24)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO participant_links (token, label, advisor_slug, first_name)
-                VALUES (%s, %s, %s, %s)
-            """, (token, label, (advisor_slug or None), first_name))
+                INSERT INTO participant_links (token, label, advisor_slug, first_name, email)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (token, label, (advisor_slug or None), first_name, email))
         conn.commit()
         return {"ok": True, "token": token}
     except Exception as e:
@@ -7518,7 +7528,7 @@ def list_participant_links() -> list:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, token, label, advisor_slug, enabled, created_at,
-                       last_used_at, first_name
+                       last_used_at, first_name, email
                 FROM participant_links ORDER BY created_at DESC
             """)
             for row in cur.fetchall():
@@ -7526,13 +7536,114 @@ def list_participant_links() -> list:
                     "id": row[0], "token": row[1], "label": row[2],
                     "advisor_slug": row[3] or "", "enabled": bool(row[4]),
                     "created_at": row[5], "last_used_at": row[6],
-                    "first_name": row[7] or "",
+                    "first_name": row[7] or "", "email": row[8] or "",
                 })
     except Exception as e:
         app.logger.error(f"[participant-links] list failed: {e}")
     finally:
         conn.close()
     return out
+
+
+def _parse_participant_bulk_file(file_bytes: bytes, filename: str) -> list:
+    """Parses an uploaded CSV or XLSX of participants into a list of
+    {"name", "first_name", "email", "advisor"} dicts, one per row.
+
+    Header matching is case-insensitive and tolerant of a few common
+    variants (Name/Label, First Name/First). Raises ValueError with a
+    human-readable message — shown back to the admin as a flash — on
+    anything that doesn't look like a usable list, rather than silently
+    creating nothing or half-garbage links."""
+    ext = (filename or "").rsplit(".", 1)[-1].lower() if "." in (filename or "") else ""
+    rows_raw = []
+    if ext in ("xlsx", "xlsm", "xltx"):
+        import io as _io
+        from openpyxl import load_workbook
+        wb = load_workbook(_io.BytesIO(file_bytes), data_only=True, read_only=True)
+        ws = wb.worksheets[0]
+        for row in ws.iter_rows(values_only=True):
+            rows_raw.append(["" if c is None else str(c).strip() for c in row])
+    elif ext in ("csv", "tsv"):
+        import csv as _csv
+        import io as _io
+        delimiter = "\t" if ext == "tsv" else ","
+        text = file_bytes.decode("utf-8-sig", errors="replace")
+        rows_raw = [[c.strip() for c in row]
+                    for row in _csv.reader(_io.StringIO(text), delimiter=delimiter)]
+    else:
+        raise ValueError("Unsupported file type — upload a .csv or .xlsx file.")
+
+    rows_raw = [r for r in rows_raw if any(c for c in r)]  # drop fully blank rows
+    if not rows_raw:
+        raise ValueError("The file is empty.")
+
+    header = [c.strip().lower() for c in rows_raw[0]]
+
+    def _find_col(*names):
+        for name in names:
+            if name in header:
+                return header.index(name)
+        return None
+
+    name_col = _find_col("name", "label", "full name")
+    first_name_col = _find_col("first name", "first_name", "firstname", "first")
+    email_col = _find_col("email", "email address")
+    advisor_col = _find_col("advisor", "advisor name", "persona")
+
+    if name_col is None:
+        raise ValueError(
+            "No \u201cName\u201d (or \u201cLabel\u201d) column found — the first row "
+            "must be a header row with at least a Name column.")
+
+    out = []
+    for r in rows_raw[1:]:
+        def _cell(idx):
+            return r[idx].strip() if idx is not None and idx < len(r) else ""
+        name = _cell(name_col)
+        if not name:
+            continue
+        first_name = _cell(first_name_col) or (name.split()[0] if name.split() else "")
+        out.append({
+            "name": name,
+            "first_name": first_name,
+            "email": _cell(email_col),
+            "advisor": _cell(advisor_col),
+        })
+    if not out:
+        raise ValueError("No usable rows found — every row is missing a Name.")
+    return out
+
+
+def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") -> dict:
+    """Creates one participant link per parsed row. A row's own "advisor"
+    value (matched case-insensitively against an advisor's name or slug)
+    overrides default_advisor_slug for that row only; blank or
+    unrecognized falls back to default_advisor_slug (itself possibly
+    blank, meaning the default persona). Returns the created rows
+    (each with its new token and resolved advisor_slug) plus any errors,
+    so the caller can build an enriched export of exactly this batch."""
+    advisors = list_advisors()
+    name_to_slug = {}
+    for a in advisors:
+        name_to_slug[(a.get("name") or "").strip().lower()] = a["slug"]
+        name_to_slug[a["slug"].lower()] = a["slug"]
+
+    created, errors = [], []
+    for row in rows:
+        advisor_raw = (row.get("advisor") or "").strip().lower()
+        # A recognized name/slug in the row wins; blank OR unrecognized
+        # both fall back to the form's own default — an unrecognized
+        # value should not silently become "no advisor" instead of the
+        # default the admin actually selected.
+        advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
+        result = create_participant_link(
+            label=row["name"], advisor_slug=advisor_slug,
+            first_name=row.get("first_name", ""), email=row.get("email", ""))
+        if result["ok"]:
+            created.append({**row, "token": result["token"], "advisor_slug": advisor_slug})
+        else:
+            errors.append({"name": row["name"], "error": result["error"]})
+    return {"created": created, "errors": errors}
 
 
 def get_participant_link(token: str):
@@ -13114,14 +13225,15 @@ input[type="file"], input[type="text"] {
 .kb-table.users-table th:nth-child(5), .kb-table.users-table td:nth-child(5) { width: 11%; }
 .kb-table.users-table th:nth-child(6), .kb-table.users-table td:nth-child(6) { width: 13%; }
 .kb-table.users-table th:nth-child(7), .kb-table.users-table td:nth-child(7) { width: 24%; }
-.kb-table.plinks-table th:nth-child(1), .kb-table.plinks-table td:nth-child(1) { width: 12%; }
-.kb-table.plinks-table th:nth-child(2), .kb-table.plinks-table td:nth-child(2) { width: 8%; }
-.kb-table.plinks-table th:nth-child(3), .kb-table.plinks-table td:nth-child(3) { width: 9%; }
-.kb-table.plinks-table th:nth-child(4), .kb-table.plinks-table td:nth-child(4) { width: 30%; }
-.kb-table.plinks-table th:nth-child(5), .kb-table.plinks-table td:nth-child(5) { width: 7%; }
-.kb-table.plinks-table th:nth-child(6), .kb-table.plinks-table td:nth-child(6) { width: 9%; }
-.kb-table.plinks-table th:nth-child(7), .kb-table.plinks-table td:nth-child(7) { width: 10%; }
-.kb-table.plinks-table th:nth-child(8), .kb-table.plinks-table td:nth-child(8) { width: 15%; }
+.kb-table.plinks-table th:nth-child(1), .kb-table.plinks-table td:nth-child(1) { width: 11%; }
+.kb-table.plinks-table th:nth-child(2), .kb-table.plinks-table td:nth-child(2) { width: 7%; }
+.kb-table.plinks-table th:nth-child(3), .kb-table.plinks-table td:nth-child(3) { width: 12%; }
+.kb-table.plinks-table th:nth-child(4), .kb-table.plinks-table td:nth-child(4) { width: 8%; }
+.kb-table.plinks-table th:nth-child(5), .kb-table.plinks-table td:nth-child(5) { width: 26%; }
+.kb-table.plinks-table th:nth-child(6), .kb-table.plinks-table td:nth-child(6) { width: 6%; }
+.kb-table.plinks-table th:nth-child(7), .kb-table.plinks-table td:nth-child(7) { width: 8%; }
+.kb-table.plinks-table th:nth-child(8), .kb-table.plinks-table td:nth-child(8) { width: 9%; }
+.kb-table.plinks-table th:nth-child(9), .kb-table.plinks-table td:nth-child(9) { width: 13%; }
 .kb-title { font-weight: 500; word-break: break-word; }
 .kb-source {
   font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
@@ -14161,6 +14273,7 @@ input[type="file"], input[type="text"] {
     <form method="POST" action="{{ url_for('admin_create_participant_link') }}" class="upload">
       <input type="text" name="label" placeholder="Label for your own reference (e.g. Cohort 2026 — Jane Smith)" required />
       <input type="text" name="first_name" placeholder="Their first name (for the greeting) — optional" />
+      <input type="email" name="email" placeholder="Their email — optional, for your own records" />
       <select name="advisor_slug" title="Which advisor this participant lands on">
         <option value="">Default persona</option>
         {% for adv in advisors %}
@@ -14177,17 +14290,51 @@ input[type="file"], input[type="text"] {
   </div>
 
   <div class="section">
-    <h2>Existing links{% if participant_links %} ({{ participant_links|length }}){% endif %}</h2>
+    <h2>Bulk-create from a list</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Upload a .csv or .xlsx with a <strong>Name</strong> column (used as
+      each link's label) and, optionally, <strong>First Name</strong>,
+      <strong>Email</strong>, and <strong>Advisor</strong> columns (an
+      advisor name or blank for the default persona — this overrides the
+      dropdown below just for that row). Column names aren't
+      case-sensitive. Every row becomes a real participant link, saved
+      below same as one created by hand — and the same file comes right
+      back with a Link column added, ready to send out.
+    </p>
+    <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
+          enctype="multipart/form-data" class="upload">
+      <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required />
+      <select name="advisor_slug" title="Default advisor for rows that don't specify their own">
+        <option value="">Default persona (unless a row specifies one)</option>
+        {% for adv in advisors %}
+        <option value="{{ adv.slug }}">{{ adv.name }}</option>
+        {% endfor %}
+      </select>
+      <button type="submit" class="btn">Upload &amp; create links</button>
+    </form>
+  </div>
+
+  <div class="section">
+    <div style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem;">
+      <h2 style="margin: 0; border: none; padding: 0;">Existing links{% if participant_links %} ({{ participant_links|length }}){% endif %}</h2>
+      {% if participant_links %}
+      <div style="display: flex; gap: 0.5rem;">
+        <a href="{{ url_for('admin_export_participant_links_csv') }}" class="btn" style="font-size: 0.64rem;">↓ CSV</a>
+        <a href="{{ url_for('admin_export_participant_links_xlsx') }}" class="btn" style="font-size: 0.64rem;">↓ Excel</a>
+      </div>
+      {% endif %}
+    </div>
     {% if participant_links %}
     <table class="kb-table plinks-table">
       <tr>
-        <th>Label</th><th>First name</th><th>Advisor</th><th>Link</th><th>Status</th>
+        <th>Label</th><th>First name</th><th>Email</th><th>Advisor</th><th>Link</th><th>Status</th>
         <th>Created</th><th>Last used</th><th></th>
       </tr>
       {% for l in participant_links %}
       <tr>
         <td>{{ l.label }}</td>
         <td class="muted">{{ l.first_name or "—" }}</td>
+        <td class="muted">{{ l.email or "—" }}</td>
         <td class="muted">{{ advisor_names.get(l.advisor_slug, "Default") if l.advisor_slug else "Default" }}</td>
         <td>
           <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
@@ -16256,12 +16403,195 @@ def admin_create_participant_link():
     label = (request.form.get("label") or "").strip()
     advisor_slug = (request.form.get("advisor_slug") or "").strip()
     first_name = (request.form.get("first_name") or "").strip()
-    result = create_participant_link(label, advisor_slug, first_name)
+    email = (request.form.get("email") or "").strip()
+    result = create_participant_link(label, advisor_slug, first_name, email)
     if result["ok"]:
         flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
     else:
         flash(result["error"])
     return redirect(url_for("admin_dashboard") + "#participant-links")
+
+
+@app.route("/admin/participant-links/bulk", methods=["POST"])
+@require_permission("edit_participant_links")
+def admin_bulk_create_participant_links():
+    """Upload a CSV/XLSX of names (+ optional email, advisor), create a
+    participant link for every row, and immediately hand back the same
+    file with a Link column added — the created links are also persisted
+    normally, so they show up in the table below like any other link."""
+    file = request.files.get("bulk_file")
+    if not file or not file.filename:
+        flash("Choose a .csv or .xlsx file first.")
+        return redirect(url_for("admin_dashboard") + "#participant-links")
+
+    default_advisor_slug = (request.form.get("advisor_slug") or "").strip()
+
+    try:
+        file_bytes = file.read()
+        rows = _parse_participant_bulk_file(file_bytes, file.filename)
+    except ValueError as e:
+        flash(str(e))
+        return redirect(url_for("admin_dashboard") + "#participant-links")
+    except Exception as e:
+        app.logger.error(f"[participant-links] bulk parse failed: {e}")
+        flash("Could not read that file — check it's a valid .csv or .xlsx.")
+        return redirect(url_for("admin_dashboard") + "#participant-links")
+
+    result = bulk_create_participant_links(rows, default_advisor_slug)
+    created, errors = result["created"], result["errors"]
+
+    if not created:
+        flash(f"No links were created — {len(errors)} row(s) failed. "
+              f"Check the file has a Name column with values in it.")
+        return redirect(url_for("admin_dashboard") + "#participant-links")
+
+    # Build the enriched export: same format as what was uploaded, plus a
+    # Link column (and an Error column so any failed rows are visible
+    # right in the file, rather than only in a flash message that a file
+    # download wouldn't display anyway).
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower()
+    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
+
+    export_rows = []
+    for c in created:
+        advisor_label = advisor_names.get(c["advisor_slug"], "Default") if c["advisor_slug"] else "Default"
+        export_rows.append([c["name"], c.get("first_name", ""), c.get("email", ""),
+                             advisor_label, f"{base_url}/p/{c['token']}", ""])
+    for e in errors:
+        export_rows.append([e["name"], "", "", "", "", e["error"]])
+
+    headers_out = ["Name", "First Name", "Email", "Advisor", "Link", "Error"]
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if ext in ("xlsx", "xlsm", "xltx"):
+        import io
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Participant Links"
+        ws.append(headers_out)
+        header_font = Font(bold=True, color="D2BC8D")
+        header_fill = PatternFill("solid", fgColor="27334A")
+        for col_idx in range(1, len(headers_out) + 1):
+            cell = ws.cell(row=1, column=col_idx)
+            cell.font = header_font
+            cell.fill = header_fill
+        for r in export_rows:
+            ws.append([xlsx_safe(v) for v in r])
+        ws.column_dimensions["A"].width = 24
+        ws.column_dimensions["E"].width = 50
+        ws.column_dimensions["F"].width = 30
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        return Response(
+            buffer.read(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={
+                "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.xlsx"',
+                "Cache-Control": "no-store",
+            },
+        )
+    else:
+        import csv as _csv
+        import io
+        buffer = io.StringIO()
+        writer = _csv.writer(buffer)
+        writer.writerow(headers_out)
+        writer.writerows(export_rows)
+        return Response(
+            buffer.getvalue(),
+            mimetype="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.csv"',
+                "Cache-Control": "no-store",
+            },
+        )
+
+
+def _participant_links_export_rows():
+    """Shared by both export formats below: every existing link, resolved
+    to a display-ready advisor name and full URL."""
+    links = list_participant_links()
+    advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
+    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    out = []
+    for l in links:
+        advisor_label = advisor_names.get(l["advisor_slug"], "Default") if l["advisor_slug"] else "Default"
+        out.append([
+            l["label"], l["first_name"], l["email"], advisor_label,
+            "Enabled" if l["enabled"] else "Disabled",
+            f"{base_url}/p/{l['token']}",
+            _fmt_ts(l["created_at"]),
+            _fmt_ts(l["last_used_at"]) if l["last_used_at"] else "Never",
+        ])
+    return out
+
+
+@app.route("/admin/export/participant-links.csv")
+@require_permission("view_participant_links")
+def admin_export_participant_links_csv():
+    """All existing participant links (not just a bulk-uploaded batch),
+    for admins who just want an up-to-date list at any time."""
+    import csv as _csv
+    import io
+    buffer = io.StringIO()
+    writer = _csv.writer(buffer)
+    writer.writerow(["Label", "First Name", "Email", "Advisor", "Status",
+                      "Link", "Created", "Last Used"])
+    writer.writerows(_participant_links_export_rows())
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Response(
+        buffer.getvalue(),
+        mimetype="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.csv"',
+            "Cache-Control": "no-store",
+        },
+    )
+
+
+@app.route("/admin/export/participant-links.xlsx")
+@require_permission("view_participant_links")
+def admin_export_participant_links_xlsx():
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill
+    except ImportError:
+        return ("Excel export unavailable: openpyxl not installed. "
+                "Use CSV export instead, or add 'openpyxl' to requirements.txt."), 500
+    import io
+    headers_out = ["Label", "First Name", "Email", "Advisor", "Status",
+                   "Link", "Created", "Last Used"]
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Participant Links"
+    ws.append(headers_out)
+    header_font = Font(bold=True, color="D2BC8D")
+    header_fill = PatternFill("solid", fgColor="27334A")
+    for col_idx in range(1, len(headers_out) + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+    for r in _participant_links_export_rows():
+        ws.append([xlsx_safe(v) for v in r])
+    ws.column_dimensions["A"].width = 24
+    ws.column_dimensions["F"].width = 50
+    ws.freeze_panes = "A2"
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return Response(
+        buffer.read(),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.xlsx"',
+            "Cache-Control": "no-store",
+        },
+    )
 
 
 @app.route("/admin/participant-links/toggle/<int:link_id>", methods=["POST"])
