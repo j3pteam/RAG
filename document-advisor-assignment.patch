@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..deaf673 100644
+index 4b5a702..4efc421 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -642,7 +642,21 @@ index 4b5a702..deaf673 100644
  # ---------------------------------------------------------------------------
  # Main chat HTML
  # ---------------------------------------------------------------------------
-@@ -1651,6 +2062,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1404,6 +1815,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+       font-size: 0.64rem; letter-spacing: 0.14em;
+       text-transform: uppercase; color: var(--muted);
+     }
++    .voice-source-options { display: flex; flex-direction: column; gap: 0.4rem; }
++    .voice-row .voice-source-option {
++      display: flex; align-items: center; gap: 0.5rem;
++      font-size: 0.82rem; letter-spacing: 0; text-transform: none;
++      color: var(--text); cursor: pointer; margin: 0;
++    }
++    .voice-source-option input[type="radio"] { accent-color: var(--navy); cursor: pointer; margin: 0; }
+     .voice-menu select {
+       width: 100%; padding: 0.5rem 0.6rem;
+       border: 1px solid var(--line); border-radius: 2px;
+@@ -1651,6 +2069,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
        content: ""; position: absolute; left: 0; top: 0; bottom: 0;
        width: 3px; background: var(--gold);
      }
@@ -658,7 +672,7 @@ index 4b5a702..deaf673 100644
      /* Acknowledgment gate — shown at the start of every session */
      .ack-overlay {
        position: fixed; inset: 0; z-index: 100;
-@@ -1716,7 +2136,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1716,7 +2143,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        margin: 0.18rem 0 0 0; width: 17px; height: 17px;
        accent-color: var(--navy); flex-shrink: 0; cursor: pointer;
      }
@@ -667,7 +681,7 @@ index 4b5a702..deaf673 100644
        width: 100%; padding: 0.85rem 1rem;
        background: var(--navy); color: var(--gold);
        border: 1px solid var(--navy); border-radius: 2px;
-@@ -1724,18 +2144,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1724,18 +2151,41 @@ INDEX_HTML = r"""<!DOCTYPE html>
        letter-spacing: 0.18em; text-transform: uppercase;
        cursor: pointer; transition: all 0.2s ease;
      }
@@ -714,7 +728,7 @@ index 4b5a702..deaf673 100644
  
      .ack-foot {
        margin: 1.1rem 0 0 0; text-align: center;
-@@ -1857,7 +2300,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1857,7 +2307,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
  
      /* Share menu popover */
@@ -723,7 +737,7 @@ index 4b5a702..deaf673 100644
        position: relative; display: inline-flex;
        align-items: center; line-height: 0;
      }
-@@ -1889,7 +2332,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1889,7 +2339,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      /* Persistent avatar presence — always on screen, always animating */
      .presence {
@@ -732,7 +746,7 @@ index 4b5a702..deaf673 100644
        width: 104px; text-align: center; user-select: none;
      }
      .presence-frame {
-@@ -1983,18 +2426,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -1983,18 +2433,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
  
      @media (max-width: 900px) {
        /* Smaller, and above the composer — the send button owns the bottom
@@ -753,7 +767,7 @@ index 4b5a702..deaf673 100644
      @media (prefers-reduced-motion: reduce) {
        .presence-photo, .presence-pulse, .presence-ring { animation: none !important; }
        .presence.speaking .presence-ring,
-@@ -2200,7 +2639,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2200,7 +2646,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      }
      .attach-btn:hover { color: var(--navy); background: var(--paper); }
      .attach-btn svg { width: 18px; height: 18px; }
@@ -762,7 +776,7 @@ index 4b5a702..deaf673 100644
        position: absolute; right: 5rem; top: 50%; transform: translateY(-50%);
        background: transparent; border: none;
        color: var(--muted); cursor: pointer;
-@@ -2208,6 +2647,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2208,6 +2654,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
        display: flex; align-items: center; justify-content: center;
        transition: all 0.2s ease; padding: 0;
      }
@@ -780,7 +794,7 @@ index 4b5a702..deaf673 100644
      .folder-btn:hover { color: var(--navy); background: var(--paper); }
      .folder-btn svg { width: 18px; height: 18px; }
      #file-input, #folder-input-chat { display: none; }
-@@ -2230,7 +2680,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2230,7 +2687,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .attached-file button:hover { color: var(--rust); }
      .attached-file button svg { width: 14px; height: 14px; }
      input[type="text"] {
@@ -789,7 +803,7 @@ index 4b5a702..deaf673 100644
        border: 1px solid var(--line); border-radius: 2px;
        font-size: 0.95rem; font-family: inherit; outline: none;
        background: var(--paper); color: var(--text); width: 100%;
-@@ -2265,19 +2715,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2265,19 +2722,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
        border: 5px solid transparent; border-top-color: var(--navy);
      }
      /* Anchored under each button, which sits at a fixed offset from the right */
@@ -816,7 +830,7 @@ index 4b5a702..deaf673 100644
      @media (max-width: 640px) {
        .input-tip { font-size: 0.68rem; padding: 0.35rem 0.6rem; white-space: normal; max-width: 60vw; }
      }
-@@ -2303,15 +2756,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2303,15 +2763,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
        opacity: 1; visibility: visible; transform: translateY(0);
      }
      /* Once recording starts the hint bar takes over */
@@ -835,7 +849,7 @@ index 4b5a702..deaf673 100644
      .voice-hint {
        display: none; align-items: center; gap: 0.55rem;
        margin: 0 1.75rem 0.5rem; padding: 0.5rem 0.8rem;
-@@ -2336,10 +2787,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2336,10 +2794,46 @@ INDEX_HTML = r"""<!DOCTYPE html>
        font-size: 0.75rem; color: var(--gold); letter-spacing: 0.06em;
      }
      .voice-hint.cancel .voice-timer { color: #fff; }
@@ -882,7 +896,7 @@ index 4b5a702..deaf673 100644
      @keyframes pulse {
        0%, 100% { box-shadow: 0 0 0 0 rgba(157, 67, 44, 0.6); }
        50% { box-shadow: 0 0 0 8px rgba(157, 67, 44, 0); }
-@@ -2371,6 +2858,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2371,6 +2865,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                    box-shadow 0.2s ease, transform 0.12s ease;
      }
      .cta-btn { cursor: pointer; user-select: none; }
@@ -890,7 +904,7 @@ index 4b5a702..deaf673 100644
      .cta-btn svg { width: 17px; height: 17px; flex-shrink: 0; }
      .cta-btn:hover {
        background: var(--navy); color: var(--gold);
-@@ -2389,7 +2877,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2389,7 +2884,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
      .footer-note a { color: var(--navy); text-decoration: none; border-bottom: 1px solid var(--gold); }
      .footer-note a:hover { color: var(--rust); }
      @media (max-width: 640px) {
@@ -899,7 +913,7 @@ index 4b5a702..deaf673 100644
        header { padding: 0.75rem 0.9rem; gap: 0.5rem; }
        .brand-logo { height: 40px; }
        .brand-tag { font-size: 0.7rem; letter-spacing: 0.18em; }
-@@ -2397,7 +2885,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2397,7 +2892,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        header button { padding: 0.45rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.1em; }
        #chat { padding: 1.5rem 1rem 0.75rem; }
        form { padding: 0.75rem 1rem; gap: 0.4rem; }
@@ -908,7 +922,7 @@ index 4b5a702..deaf673 100644
        button[type="submit"] { padding: 0.75rem 1rem; font-size: 0.7rem; letter-spacing: 0.12em; }
        .footer-note { font-size: 0.62rem; letter-spacing: 0.1em; }
        .footer-cta { padding: 0.3rem 0.75rem 0.65rem; }
-@@ -2490,6 +2978,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2490,6 +2985,68 @@ INDEX_HTML = r"""<!DOCTYPE html>
      </div>
    </div>
  
@@ -977,7 +991,29 @@ index 4b5a702..deaf673 100644
    <header>
      <div class="brand">
        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
-@@ -2541,14 +3091,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2518,6 +3075,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         <span class="voice-label">Voice</span>
+       </button>
+       <div class="voice-menu" id="voice-menu" role="menu">
++        {% if page_voice_mode == "participant_choice" %}
++        <div class="voice-row voice-source-row">
++          <label>Reply voice</label>
++          <div class="voice-source-options">
++            <label class="voice-source-option">
++              <input type="radio" name="voice-source" value="advisor" checked />
++              {{ cfg.persona_name }}'s own voice
++            </label>
++            <label class="voice-source-option">
++              <input type="radio" name="voice-source" value="default" />
++              Default reading voice
++            </label>
++          </div>
++        </div>
++        {% endif %}
+         <div class="voice-row">
+           <label for="voice-select">Reading voice</label>
+           <select id="voice-select"></select>
+@@ -2541,14 +3113,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div id="chat-wrap">
      <div id="chat">
        <div class="msg assistant">{{ cfg.opening }}</div>
@@ -998,7 +1034,7 @@ index 4b5a702..deaf673 100644
      </div>
      <div id="attached-file" class="attached-file" aria-live="polite">
        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-@@ -2575,7 +3130,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2575,7 +3152,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
            </svg>
          </button>
          <span class="input-tip attach-tip" id="attach-tip" role="tooltip">Attach a document or image</span>
@@ -1014,7 +1050,7 @@ index 4b5a702..deaf673 100644
            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
              <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
              <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
-@@ -2583,7 +3145,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2583,7 +3167,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
              <line x1="8" y1="23" x2="16" y2="23"/>
            </svg>
          </button>
@@ -1023,7 +1059,7 @@ index 4b5a702..deaf673 100644
        </div>
        <button type="submit" id="send-btn">Send</button>
      </form>
-@@ -2622,9 +3184,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2622,9 +3206,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
    <div class="presence" id="presence">
      <button type="button" class="presence-frame" id="presence-frame"
              aria-label="Read the latest reply aloud">
@@ -1035,7 +1071,7 @@ index 4b5a702..deaf673 100644
        <video class="presence-loop" id="presence-loop" muted loop playsinline
               autoplay preload="auto" aria-hidden="true"
               onerror="this.style.display='none'">
-@@ -2705,18 +3267,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2705,18 +3289,96 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const chat = document.getElementById("chat");
  
      // -------------------------------------------------------------
@@ -1142,7 +1178,7 @@ index 4b5a702..deaf673 100644
  
        let alreadyAcked = false;
        try {
-@@ -2726,21 +3366,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2726,21 +3388,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // rather than silently skipping it.
          alreadyAcked = false;
        }
@@ -1172,7 +1208,7 @@ index 4b5a702..deaf673 100644
          try {
            sessionStorage.setItem(ACK_KEY, new Date().toISOString());
          } catch (e) { /* not persistable — gate will show again */ }
-@@ -2753,15 +3390,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2753,15 +3412,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
              keepalive: true,
            }).catch(() => {});
          } catch (e) { /* non-blocking — never hold up entry */ }
@@ -1192,7 +1228,7 @@ index 4b5a702..deaf673 100644
          if (e.key === "Escape") e.preventDefault();
        });
      })();
-@@ -2772,6 +3407,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -2772,6 +3429,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
      const resetBtn = document.getElementById("reset-btn");
      const chatWrap = document.getElementById("chat-wrap");
      const OPENING = {{ cfg.opening|tojson }};
@@ -1203,10 +1239,34 @@ index 4b5a702..deaf673 100644
 +    // happens to currently hold (visiting a different advisor's link in one
 +    // tab shouldn't silently change what an already-open tab responds as).
 +    const PAGE_ADVISOR_SLUG = {{ page_advisor_slug|tojson }};
++
++    // Only meaningful value is "participant_choice" — that's the one
++    // case where the chat page itself needs to show a voice-selection
++    // control at all; "auto" and "browser_only" are both decided
++    // entirely server-side with nothing for the page to act on.
++    const PAGE_VOICE_MODE = {{ page_voice_mode|tojson }};
++    let PARTICIPANT_VOICE_PREFERENCE = "advisor"; // "advisor" or "default"
  
      // -------------------------------------------------------------
      // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
-@@ -3306,13 +3948,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3182,6 +3853,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+         return;
+       }
+ 
++      // "participant_choice" mode only — lets them pick between the
++      // advisor's own cloned voice and the plain reading voice, per
++      // request from earlier: a direct choice rather than relying on
++      // automatic fallback logic alone.
++      document.querySelectorAll('input[name="voice-source"]').forEach(function (radio) {
++        radio.addEventListener("change", function () {
++          PARTICIPANT_VOICE_PREFERENCE = radio.checked && radio.value === "default" ? "default" : "advisor";
++        });
++      });
++
+       // Map a language tag to a readable name, so the menu reads
+       // "English — Samantha" rather than "Samantha (en-US)".
+       let langNamer = null;
+@@ -3306,13 +3987,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
          // Turning OFF should stop anything currently speaking
          if (!autoSpeakEnabled) {
            J3PSpeech.stop();
@@ -1223,7 +1283,7 @@ index 4b5a702..deaf673 100644
          }
        });
      }
-@@ -3872,7 +4510,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -3872,7 +4549,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        return html;
      }
  
@@ -1232,7 +1292,7 @@ index 4b5a702..deaf673 100644
      const TALKING_AVATAR_ON = {{ 'true' if cfg.talking_avatar in ('demo','live') else 'false' }};
  
      // ---------------------------------------------------------------
-@@ -4146,10 +4784,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4146,10 +4823,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
          speaking: "Speaking",
        };
  
@@ -1251,7 +1311,7 @@ index 4b5a702..deaf673 100644
          if (frame) {
            frame.setAttribute("aria-label", state === "speaking"
              ? "Stop reading aloud" : "Read the latest reply aloud");
-@@ -4211,8 +4855,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4211,8 +4894,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
              }
            }
  
@@ -1261,7 +1321,7 @@ index 4b5a702..deaf673 100644
          });
        }
  
-@@ -4293,8 +4936,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4293,8 +4975,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        // browser's own speech, which is instant and free.
        wrap.addEventListener("click", async () => {
          if (!TALKING_AVATAR_ON) {
@@ -1271,7 +1331,7 @@ index 4b5a702..deaf673 100644
            return;
          }
          if (wrap.classList.contains("is-video")) {
-@@ -4330,8 +4972,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4330,8 +5011,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            // Never leave a dead frame — fall back to browser speech
            wrap.classList.remove("is-loading", "is-video");
            if (hint) hint.textContent = "Click to listen";
@@ -1281,7 +1341,7 @@ index 4b5a702..deaf673 100644
          }
        });
  
-@@ -4406,7 +5047,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4406,7 +5086,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
      }
  
@@ -1290,7 +1350,7 @@ index 4b5a702..deaf673 100644
        const div = document.createElement("div");
        div.className = "msg " + role;
        if (interactionId) div.dataset.interactionId = String(interactionId);
-@@ -4420,7 +5061,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4420,7 +5100,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          textNode.textContent = text;
        }
        div.appendChild(textNode);
@@ -1299,7 +1359,7 @@ index 4b5a702..deaf673 100644
        // Advisor replies are preceded by the avatar, when one is configured.
        // If the image fails to load it removes itself, so a missing file just
        // leaves the reply looking as it did before.
-@@ -4431,17 +5072,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4431,17 +5111,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        chatWrap.scrollTop = chatWrap.scrollHeight;
        // If auto-speak is enabled and this is a fresh assistant reply (with feedback
        // row, meaning it was just received from the API), start reading it aloud.
@@ -1320,7 +1380,7 @@ index 4b5a702..deaf673 100644
        const wrap = document.createElement("div");
        wrap.className = "feedback";
        wrap.innerHTML = `
-@@ -4456,20 +5096,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4456,20 +5135,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
              <path d="M17 14V2"/><path d="M9 18.12 10 14H4.17a2 2 0 0 1-1.92-2.56l2.33-8A2 2 0 0 1 6.5 2H17v12l-4.69 7.5a2 2 0 0 1-3.31-3.38z"/>
            </svg>
          </button>
@@ -1355,7 +1415,7 @@ index 4b5a702..deaf673 100644
          <span class="download-wrap">
            <button class="action-btn download-btn" aria-label="Download as document" title="Download as Word, PowerPoint, Excel, or PDF">
              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-@@ -4599,13 +5244,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4599,13 +5283,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
            }
          });
        });
@@ -1375,7 +1435,7 @@ index 4b5a702..deaf673 100644
          // Strip markdown so the reader doesn't literally say "star star bold star star"
          const stripMarkdown = (t) => (t || "")
            .replace(/```[\s\S]*?```/g, " ")             // fenced code blocks
-@@ -4625,80 +5269,94 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4625,80 +5308,100 @@ INDEX_HTML = r"""<!DOCTYPE html>
            .trim();
  
          function resetSpeakUI() {
@@ -1392,14 +1452,14 @@ index 4b5a702..deaf673 100644
 -          clearAllAvatarStates();
 -          setAvatarSpeaking(msgDiv, true);
 -          Presence.set("speaking");
--        }
--
--        // On platforms without pause support, make the intent clear up front
--        if (!J3PSpeech.canPause) {
--          speakBtn.title = "Read answer aloud (tap again to stop)";
 +          if (window.__activeSpeakMsg === msgDiv) window.__activeSpeakMsg = null;
          }
  
+-        // On platforms without pause support, make the intent clear up front
+-        if (!J3PSpeech.canPause) {
+-          speakBtn.title = "Read answer aloud (tap again to stop)";
+-        }
+-
 -        speakBtn.addEventListener("click", () => {
 -          // This button is the active one → toggle pause/resume, or stop
 -          if (window.__activeSpeakBtn === speakBtn) {
@@ -1432,8 +1492,6 @@ index 4b5a702..deaf673 100644
 +            J3PSpeech.stop();
 +            if (activeMsg.__serverAudio) activeMsg.__serverAudio.pause();
 +          }
-+
-+          const cleanText = stripMarkdown(replyText);
  
 -          // A different message was playing — reset its button first
 -          if (window.__activeSpeakBtn && window.__activeSpeakBtn !== speakBtn) {
@@ -1441,6 +1499,8 @@ index 4b5a702..deaf673 100644
 -            prev.classList.remove("speaking", "paused");
 -            const prevLabel = prev.querySelector(".speak-label");
 -            if (prevLabel) prevLabel.textContent = "Speak";
++          const cleanText = stripMarkdown(replyText);
++
 +          // Try this advisor's own cloned voice first (ElevenLabs, when
 +          // configured for this advisor with a consented sample) — every
 +          // "not available" case (no key set, no sample, no consent, a
@@ -1448,6 +1508,11 @@ index 4b5a702..deaf673 100644
 +          // text-to-speech below exactly as before. A short timeout keeps
 +          // a slow or unresponsive provider from leaving the Speak button
 +          // stuck instead of just falling back promptly.
++          //
++          // Under "participant_choice" mode, if they've picked the
++          // default voice there's no reason to round-trip to the server
++          // just to be told to fall back — skip straight to it.
++          if (!(PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE === "default")) {
 +          try {
 +            const controller = new AbortController();
 +            const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -1491,6 +1556,7 @@ index 4b5a702..deaf673 100644
 +            // to the browser's own voice below rather than surface this.
 +            console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
            }
++          } // end participant-chose-default-voice skip
  
 -          const ok = J3PSpeech.play(stripMarkdown(replyText), {
 +          const ok = J3PSpeech.play(cleanText, {
@@ -1527,14 +1593,13 @@ index 4b5a702..deaf673 100644
        }
  
        // === COPY button ===
-@@ -4728,15 +5386,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4728,15 +5431,83 @@ INDEX_HTML = r"""<!DOCTYPE html>
          }
        });
  
 -      // === SAVE / DOWNLOAD button ===
 -      const downloadBtn = wrap.querySelector(".download-btn");
 -      const downloadMenu = wrap.querySelector(".download-menu");
--      const downloadLabel = downloadBtn.querySelector(".download-label");
 +      // === CITE button — copies an APA or MLA citation for this exchange ===
 +      const citeBtn = wrap.querySelector(".cite-btn");
 +      const citeMenu = wrap.querySelector(".cite-menu");
@@ -1547,9 +1612,7 @@ index 4b5a702..deaf673 100644
 +          ? `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`
 +          : String(d.getFullYear());
 +      }
- 
--      downloadBtn.addEventListener("click", () => {
--        // Close the share menu if it's open, then toggle this one
++
 +      function buildCitation(style) {
 +        const now = new Date();
 +        const url = window.location.origin + window.location.pathname;
@@ -1569,9 +1632,9 @@ index 4b5a702..deaf673 100644
 +
 +      citeBtn.addEventListener("click", () => {
 +        // Close the other popovers if open, then toggle this one
-         const sm = wrap.querySelector(".share-wrap > .share-menu");
++        const sm = wrap.querySelector(".share-wrap > .share-menu");
 +        const dm = wrap.querySelector(".download-menu");
-         if (sm) sm.classList.remove("open");
++        if (sm) sm.classList.remove("open");
 +        if (dm) dm.classList.remove("open");
 +        citeMenu.classList.toggle("open");
 +        if (citeMenu.classList.contains("open")) positionMenu(citeMenu);
@@ -1607,17 +1670,18 @@ index 4b5a702..deaf673 100644
 +      // === SAVE / DOWNLOAD button ===
 +      const downloadBtn = wrap.querySelector(".download-btn");
 +      const downloadMenu = wrap.querySelector(".download-menu");
-+      const downloadLabel = downloadBtn.querySelector(".download-label");
-+
-+      downloadBtn.addEventListener("click", () => {
+       const downloadLabel = downloadBtn.querySelector(".download-label");
+ 
+       downloadBtn.addEventListener("click", () => {
+-        // Close the share menu if it's open, then toggle this one
 +        // Close the other popovers if open, then toggle this one
-+        const sm = wrap.querySelector(".share-wrap > .share-menu");
-+        if (sm) sm.classList.remove("open");
+         const sm = wrap.querySelector(".share-wrap > .share-menu");
+         if (sm) sm.classList.remove("open");
 +        citeMenu.classList.remove("open");
          downloadMenu.classList.toggle("open");
          if (downloadMenu.classList.contains("open")) positionMenu(downloadMenu);
        });
-@@ -4862,6 +5588,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -4862,6 +5633,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
              Copy link
            </button>
          `;
@@ -1626,7 +1690,7 @@ index 4b5a702..deaf673 100644
          shareMenu.classList.add("open");
          positionMenu(shareMenu);
  
-@@ -5028,6 +5756,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5028,6 +5801,172 @@ INDEX_HTML = r"""<!DOCTYPE html>
        refreshAttachmentChip();
      });
  
@@ -1799,7 +1863,7 @@ index 4b5a702..deaf673 100644
      folderInput.addEventListener("change", () => {
        const all = Array.from(folderInput.files || []);
        // Filter to documents only (images not supported in folder-attach mode)
-@@ -5115,6 +6009,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5115,6 +6054,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review these attached documents.");
            fd.append("folder_name", folderNameForRequest);
@@ -1807,7 +1871,7 @@ index 4b5a702..deaf673 100644
            folderFilesForRequest.forEach(f => fd.append("files", f, f.name));
            res = await fetch("/chat", { method: "POST", body: fd });
          } else if (paperclipFilesForRequest.length === 1) {
-@@ -5122,6 +6017,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5122,6 +6062,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review this attached file.");
            fd.append("file", paperclipFilesForRequest[0]);
@@ -1815,7 +1879,7 @@ index 4b5a702..deaf673 100644
            res = await fetch("/chat", { method: "POST", body: fd });
          } else if (paperclipFilesForRequest.length > 1) {
            // Multi-file paperclip — use the same multi-file field as folder,
-@@ -5129,12 +6025,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5129,12 +6070,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
            const fd = new FormData();
            fd.append("message", text || "Please review these attached files.");
            fd.append("attachment_label", "Attachments");   // shown in chat/logs
@@ -1830,7 +1894,7 @@ index 4b5a702..deaf673 100644
            });
          }
          // Railway's proxy returns plain text like "upstream error" on a 502,
-@@ -5157,7 +6054,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5157,7 +6099,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
          setAvatarThinking(false);
          if (data.reply) {
            const msgDiv = addMessage(data.reply, "assistant", true,
@@ -1839,7 +1903,7 @@ index 4b5a702..deaf673 100644
            // Nothing downloads on its own. When the reply looks like a
            // deliverable, offer a download and let the user decide.
            setAvatarResponding(msgDiv);
-@@ -5208,7 +6105,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5208,7 +6150,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        resetArmed = false;
        // Stop any in-progress speech before wiping the chat
        J3PSpeech.stop();
@@ -1848,7 +1912,7 @@ index 4b5a702..deaf673 100644
        await fetch("/reset", { method: "POST" });
        chat.innerHTML = "";
        const div = document.createElement("div");
-@@ -5219,36 +6116,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5219,36 +6161,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
      });
  
      // -------------------------------------------------------------
@@ -1898,7 +1962,7 @@ index 4b5a702..deaf673 100644
  
        function setHint(msg, danger) {
          if (!voiceHintText) return;
-@@ -5269,24 +6169,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5269,24 +6214,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
          voiceTimer.textContent = `${m}:${ss}`;
        }
  
@@ -1929,7 +1993,7 @@ index 4b5a702..deaf673 100644
          showHint(true);
          tickTimer();
          timerId = setInterval(tickTimer, 250);
-@@ -5295,52 +6193,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5295,52 +6238,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
          catch (err) { /* already started — harmless */ }
        }
  
@@ -2000,7 +2064,7 @@ index 4b5a702..deaf673 100644
  
        recognition.addEventListener("result", (event) => {
          interimText = "";
-@@ -5355,15 +6231,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5355,15 +6276,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
  
        recognition.addEventListener("end", () => {
@@ -2024,7 +2088,7 @@ index 4b5a702..deaf673 100644
            setTimeout(() => showHint(false), 1400);
            return;
          }
-@@ -5376,13 +6255,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
+@@ -5376,13 +6300,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
        });
  
        recognition.addEventListener("error", (event) => {
@@ -2044,7 +2108,7 @@ index 4b5a702..deaf673 100644
            setHint("Didn\u2019t catch that \u2014 try again", true);
            setTimeout(() => showHint(false), 1600);
          } else {
-@@ -5417,6 +6299,8 @@ CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
+@@ -5417,6 +6344,8 @@ CHAT_HISTORY_BUDGET = int(os.environ.get("CHAT_HISTORY_CHARS", "60000"))
  
  
  def _history_ensure_table(conn):
@@ -2053,7 +2117,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS chat_history (
-@@ -5437,8 +6321,11 @@ def _history_ensure_table(conn):
+@@ -5437,8 +6366,11 @@ def _history_ensure_table(conn):
  def _history_token() -> str:
      """Identifies whose transcript this is.
  
@@ -2067,7 +2131,7 @@ index 4b5a702..deaf673 100644
      """
      email = session.get("user_email", "")
      if email:
-@@ -5446,6 +6333,12 @@ def _history_token() -> str:
+@@ -5446,6 +6378,12 @@ def _history_token() -> str:
          digest = hashlib.sha256(
              (app.secret_key + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
          return "u_" + digest
@@ -2080,7 +2144,7 @@ index 4b5a702..deaf673 100644
      token = session.get("chat_token")
      if not token:
          token = os.urandom(16).hex()
-@@ -5823,12 +6716,14 @@ def _did_request(text: str):
+@@ -5823,12 +6761,14 @@ def _did_request(text: str):
  # Stored in Postgres, not on disk: Railway rebuilds the filesystem on every
  # deploy, so an uploaded file would silently revert to the bundled one.
  
@@ -2096,7 +2160,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS advisor_avatar (
-@@ -5930,13 +6825,36 @@ def prepare_avatar(raw: bytes):
+@@ -5930,13 +6870,36 @@ def prepare_avatar(raw: bytes):
  # name and its own photo, and gets its own pair of links — with and without the
  # scheduling button. Stored in Postgres so photos survive redeploys.
  
@@ -2138,7 +2202,7 @@ index 4b5a702..deaf673 100644
  
  
  def placeholder_avatar_svg(name: str) -> str:
-@@ -5948,7 +6866,7 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5948,7 +6911,7 @@ def placeholder_avatar_svg(name: str) -> str:
      """
      text = initials_for(name)
      size = 320
@@ -2147,7 +2211,7 @@ index 4b5a702..deaf673 100644
      return (
          f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
          f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-@@ -5961,6 +6879,8 @@ def placeholder_avatar_svg(name: str) -> str:
+@@ -5961,6 +6924,8 @@ def placeholder_avatar_svg(name: str) -> str:
  
  
  def _advisors_ensure_table(conn):
@@ -2156,7 +2220,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS advisors (
-@@ -5979,6 +6899,50 @@ def _advisors_ensure_table(conn):
+@@ -5979,6 +6944,50 @@ def _advisors_ensure_table(conn):
                          "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
          except Exception:
              pass
@@ -2207,7 +2271,7 @@ index 4b5a702..deaf673 100644
      conn.commit()
  
  
-@@ -5987,14 +6951,32 @@ def slugify_advisor(name: str) -> str:
+@@ -5987,14 +6996,32 @@ def slugify_advisor(name: str) -> str:
      return base[:40] or "advisor"
  
  
@@ -2245,7 +2309,7 @@ index 4b5a702..deaf673 100644
          out.append(adv)
      return out
  
-@@ -6009,13 +6991,28 @@ def list_advisors():
+@@ -6009,13 +7036,28 @@ def list_advisors():
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
              cur.execute("""
@@ -2277,7 +2341,7 @@ index 4b5a702..deaf673 100644
      except Exception as e:
          app.logger.error(f"[advisors] list failed: {e}")
      finally:
-@@ -6032,11 +7029,23 @@ def get_advisor(slug: str):
+@@ -6032,11 +7074,23 @@ def get_advisor(slug: str):
      try:
          _advisors_ensure_table(conn)
          with conn.cursor() as cur:
@@ -2304,7 +2368,7 @@ index 4b5a702..deaf673 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,258 +7053,2143 @@ def get_advisor(slug: str):
+@@ -6044,258 +7098,2208 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -2637,8 +2701,6 @@ index 4b5a702..deaf673 100644
          with conn.cursor() as cur:
 -            cur.execute("DELETE FROM participant_documents WHERE id = %s AND token = %s",
 -                        (doc_id, token))
--        conn.commit()
--        return True
 +            cur.execute("""
 +                SELECT id, email, name, role, enabled, created_at, last_login_at
 +                FROM admin_users ORDER BY created_at ASC
@@ -4052,8 +4114,14 @@ index 4b5a702..deaf673 100644
 +                consent_note      TEXT,
 +                provider          TEXT,
 +                provider_voice_id TEXT,
++                voice_mode        TEXT NOT NULL DEFAULT 'auto',
 +                uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 +            )
++        """)
++        # Existing rows from before this setting existed
++        cur.execute("""
++            ALTER TABLE advisor_voice_samples
++            ADD COLUMN IF NOT EXISTS voice_mode TEXT NOT NULL DEFAULT 'auto'
 +        """)
 +    conn.commit()
 +
@@ -4063,7 +4131,12 @@ index 4b5a702..deaf673 100644
 +    """One voice sample per advisor — a fresh recording/upload replaces
 +    whatever was there before, same pattern as the photo and 360 uploads.
 +    Replacing it also clears any provider_voice_id from a prior cloning
-+    run, since that voice was built from the old sample, not this one."""
++    run, since that voice was built from the old sample, not this one.
++
++    voice_mode is deliberately carried over from whatever was there
++    before (defaulting to 'auto' only when there's nothing to carry) —
++    it's a separate admin choice from the recording itself, and
++    re-recording a sample shouldn't silently reset it back to auto."""
 +    if not slug or not content:
 +        return False
 +    conn = _settings_db_conn()
@@ -4072,14 +4145,17 @@ index 4b5a702..deaf673 100644
 +    try:
 +        _advisor_voice_ensure_table(conn)
 +        with conn.cursor() as cur:
++            cur.execute("SELECT voice_mode FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
++            existing = cur.fetchone()
++            prior_mode = existing[0] if existing else "auto"
 +            cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
 +            cur.execute("""
 +                INSERT INTO advisor_voice_samples
 +                    (advisor_slug, filename, mime, content, size_bytes,
-+                     consent_given, consent_note)
-+                VALUES (%s, %s, %s, %s, %s, %s, %s)
++                     consent_given, consent_note, voice_mode)
++                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
 +            """, (slug, filename[:200], mime, content, len(content),
-+                  bool(consent_given), (consent_note or "")[:500]))
++                  bool(consent_given), (consent_note or "")[:500], prior_mode))
 +        conn.commit()
 +        return True
 +    except Exception as e:
@@ -4102,7 +4178,7 @@ index 4b5a702..deaf673 100644
 +        with conn.cursor() as cur:
 +            cur.execute("""
 +                SELECT filename, size_bytes, consent_given, consent_note,
-+                       provider, provider_voice_id, uploaded_at
++                       provider, provider_voice_id, voice_mode, uploaded_at
 +                FROM advisor_voice_samples WHERE advisor_slug = %s
 +            """, (slug,))
 +            row = cur.fetchone()
@@ -4111,7 +4187,7 @@ index 4b5a702..deaf673 100644
 +        return {"filename": row[0], "size_bytes": row[1] or 0,
 +                "consent_given": bool(row[2]), "consent_note": row[3] or "",
 +                "provider": row[4] or "", "provider_voice_id": row[5] or "",
-+                "uploaded_at": row[6]}
++                "voice_mode": row[6] or "auto", "uploaded_at": row[7]}
 +    except Exception as e:
 +        app.logger.error(f"[advisor-voice] meta read failed: {e}")
 +        return None
@@ -4139,8 +4215,7 @@ index 4b5a702..deaf673 100644
 +        data = row[0]
 +        return (bytes(data) if not isinstance(data, bytes) else data,
 +                row[1] or "audio/webm", row[2])
-     except Exception as e:
--        app.logger.error(f"[materials] delete failed: {e}")
++    except Exception as e:
 +        app.logger.error(f"[advisor-voice] content read failed: {e}")
 +        return None
 +    finally:
@@ -4157,9 +4232,10 @@ index 4b5a702..deaf673 100644
 +        _advisor_voice_ensure_table(conn)
 +        with conn.cursor() as cur:
 +            cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
-+        conn.commit()
-+        return True
-+    except Exception as e:
+         conn.commit()
+         return True
+     except Exception as e:
+-        app.logger.error(f"[materials] delete failed: {e}")
 +        app.logger.error(f"[advisor-voice] delete failed: {e}")
          return False
      finally:
@@ -4248,6 +4324,48 @@ index 4b5a702..deaf673 100644
  
 -    if not parts:
 +
++VOICE_MODES = ("auto", "browser_only", "participant_choice")
++
++
++def set_advisor_voice_mode(slug: str, mode: str) -> bool:
++    """Controls how synthesize_advisor_voice() (and /advisor/speak)
++    decide between this advisor's cloned voice and the browser's own
++    text-to-speech — a direct admin control, rather than leaving it to
++    automatic fallback logic alone:
++      - auto (default): try the cloned voice, fall back to the browser's
++        voice silently whenever it isn't available.
++      - browser_only: skip the cloned voice entirely, every time — for
++        temporarily turning this off without touching the sample or
++        consent record underneath it.
++      - participant_choice: expose a control in the chat page itself so
++        each participant picks which voice they hear, per session.
++    Only meaningful once a sample exists (nothing to choose between
++    otherwise), so this updates an existing row rather than creating
++    one — returns False if no sample has been uploaded for this advisor
++    yet."""
++    if not slug or mode not in VOICE_MODES:
++        return False
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisor_voice_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                UPDATE advisor_voice_samples
++                SET voice_mode = %s
++                WHERE advisor_slug = %s
++            """, (mode, slug))
++            updated = cur.rowcount
++        conn.commit()
++        return updated > 0
++    except Exception as e:
++        app.logger.error(f"[advisor-voice] mode update failed: {e}")
++        return False
++    finally:
++        conn.close()
++
++
 +def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
 +    """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
 +    Returns the new voice_id, or raises on any failure — caller decides
@@ -4334,7 +4452,7 @@ index 4b5a702..deaf673 100644
 +    return audio_bytes, "audio/mpeg"
 +
 +
-+def synthesize_advisor_voice(slug: str, text: str):
++def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
 +    """Returns (audio_bytes, mime, reason). audio_bytes/mime are None
 +    whenever a cloned voice isn't available for any reason — every
 +    caller treats that as "fall back to the browser's own
@@ -4345,6 +4463,11 @@ index 4b5a702..deaf673 100644
 +    consent? key not set? a real synthesis error?), so guessing further
 +    without that visibility isn't worth doing again — checking the
 +    browser console after this ships will show the real reason directly.
++
++    force_browser skips the cloned-voice attempt outright — used when
++    the participant themselves picked the default voice under
++    "participant_choice" mode; it's their call for that one request,
++    separate from the advisor's own voice_mode setting.
 +
 +    Wired to ElevenLabs (voice cloning is its core product, and it
 +    verifies consent for exactly this reason). To activate: sign up at
@@ -4365,6 +4488,10 @@ index 4b5a702..deaf673 100644
 +    meta = get_advisor_voice_meta(slug)
 +    if not meta:
 +        return None, None, "no-sample-uploaded"
++    if force_browser:
++        return None, None, "participant-chose-default-voice"
++    if meta.get("voice_mode") == "browser_only":
++        return None, None, "advisor-set-to-browser-only"
 +    if not meta.get("consent_given"):
 +        return None, None, "consent-not-given"
 +    api_key = os.environ.get("ELEVENLABS_API_KEY", "")
@@ -4601,7 +4728,7 @@ index 4b5a702..deaf673 100644
  # ---------------------------------------------------------------------------
  # Participant profile
  # ---------------------------------------------------------------------------
-@@ -6308,6 +9202,8 @@ PROFILE_FIELDS = ("first_name", "role", "specialty")
+@@ -6308,6 +9312,8 @@ PROFILE_FIELDS = ("first_name", "role", "specialty")
  
  
  def _profile_ensure_table(conn):
@@ -4610,7 +4737,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS participant_profile (
-@@ -6543,6 +9439,8 @@ PLAN_PROMPT = (
+@@ -6543,6 +9549,8 @@ PLAN_PROMPT = (
  
  
  def _plans_ensure_table(conn):
@@ -4619,7 +4746,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS participant_plans (
-@@ -6660,6 +9558,8 @@ BRIEFING_PROMPT = (
+@@ -6660,6 +9668,8 @@ BRIEFING_PROMPT = (
  
  
  def _briefings_ensure_table(conn):
@@ -4628,7 +4755,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS session_briefings (
-@@ -6762,10 +9662,35 @@ def build_briefing() -> str:
+@@ -6762,10 +9772,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -4665,7 +4792,7 @@ index 4b5a702..deaf673 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,14 +9714,22 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,14 +9824,22 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -4691,7 +4818,7 @@ index 4b5a702..deaf673 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS document_owner (
-@@ -6852,19 +9785,115 @@ def document_owners() -> dict:
+@@ -6852,19 +9895,115 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -4814,7 +4941,7 @@ index 4b5a702..deaf673 100644
              keep.append(r)
      return keep
  
-@@ -7050,6 +10079,34 @@ def _fit_history(messages: list) -> list:
+@@ -7050,6 +10189,34 @@ def _fit_history(messages: list) -> list:
      return trimmed
  
  
@@ -4849,7 +4976,7 @@ index 4b5a702..deaf673 100644
  def retrieve_context_and_lessons(query: str) -> tuple:
      """Search knowledge base AND approved lessons for material relevant to the query.
  
-@@ -7101,20 +10158,66 @@ def retrieve_context(query: str) -> str:
+@@ -7101,20 +10268,66 @@ def retrieve_context(query: str) -> str:
      return context
  
  
@@ -4922,7 +5049,7 @@ index 4b5a702..deaf673 100644
      else:
          show = bool(force_scheduling)
          # Remember the choice so a reset or refresh keeps the same experience
-@@ -7123,11 +10226,6 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7123,11 +10336,6 @@ def _render_chat(force_scheduling=None, advisor=None):
      if force_scheduling is None and "force_scheduling" in session:
          show = bool(session["force_scheduling"])
  
@@ -4934,7 +5061,7 @@ index 4b5a702..deaf673 100644
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
      # Friedman" rather than the app's own name.
-@@ -7145,7 +10243,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +10353,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -4943,13 +5070,15 @@ index 4b5a702..deaf673 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +10251,34 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +10361,44 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
 +        page_cfg["client_bio"] = active.get("client_bio", "")
 +        page_cfg["expertise"] = active.get("expertise", "")
          name_the_advisor(page_cfg, active["name"])
+-
+-    return render_template_string(
 +        if active.get("scheduling_url"):
 +            page_cfg["footer_cta_url"] = active["scheduling_url"]
 +    elif (settings.get("default_scheduling_url") or "").strip():
@@ -4958,8 +5087,16 @@ index 4b5a702..deaf673 100644
 +    if participant_first_name:
 +        page_cfg["opening"] = _personalize_greeting(
 +            page_cfg.get("opening") or "", participant_first_name)
- 
--    return render_template_string(
++
++    # Only "participant_choice" mode needs to reach the frontend — auto
++    # and browser_only are both decided entirely server-side, so there's
++    # nothing for the page itself to act on for those.
++    page_voice_mode = "auto"
++    if active and active.get("slug"):
++        _voice_meta = get_advisor_voice_meta(active["slug"])
++        if _voice_meta:
++            page_voice_mode = _voice_meta.get("voice_mode") or "auto"
++
 +    return _cached_render(
          INDEX_HTML,
          cfg=page_cfg,
@@ -4978,10 +5115,11 @@ index 4b5a702..deaf673 100644
 +                                        "personality_assessment_enabled", True),
 +        avatar_version=int(datetime.now().timestamp()),
 +        page_advisor_slug=(active["slug"] if active else ""),
++        page_voice_mode=page_voice_mode,
      )
  
  
-@@ -7173,6 +10287,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +10407,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -4994,7 +5132,7 @@ index 4b5a702..deaf673 100644
      return _render_chat()
  
  
-@@ -7182,6 +10302,7 @@ def index():
+@@ -7182,6 +10422,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -5002,7 +5140,7 @@ index 4b5a702..deaf673 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7269,12 +10390,56 @@ def _advisor_not_found(slug):
+@@ -7269,12 +10510,56 @@ def _advisor_not_found(slug):
              f"</div>"), 404
  
  
@@ -5059,7 +5197,7 @@ index 4b5a702..deaf673 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7306,13 +10471,44 @@ def chat():
+@@ -7306,13 +10591,44 @@ def chat():
  
      if uploaded_file or folder_files:
          user_input = (request.form.get("message") or "").strip()
@@ -5104,7 +5242,7 @@ index 4b5a702..deaf673 100644
      # Extension-based routing between document vs image
      DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
                  '.csv', '.tsv', '.txt', '.md', '.rtf')
-@@ -7506,7 +10702,7 @@ def chat():
+@@ -7506,7 +10822,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -5113,7 +5251,7 @@ index 4b5a702..deaf673 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7537,6 +10733,16 @@ def chat():
+@@ -7537,6 +10853,16 @@ def chat():
  
      messages = load_history()
  
@@ -5130,7 +5268,7 @@ index 4b5a702..deaf673 100644
      # A long transcript plus a large attachment can push the request big enough
      # to time out or exhaust the worker — which surfaces to the user as an
      # "upstream error". Trim history when an attachment carries most of the
-@@ -7588,7 +10794,8 @@ def chat():
+@@ -7588,7 +10914,8 @@ def chat():
  
      # Build system prompt — base prompt + retrieved context if available
      base_prompt = CONFIG["system_prompt"]
@@ -5140,7 +5278,7 @@ index 4b5a702..deaf673 100644
  
      # Build lessons block: things we got wrong before and shouldn't repeat
      lessons_block = ""
-@@ -7731,7 +10938,16 @@ def chat():
+@@ -7731,7 +11058,16 @@ def chat():
          "13. SAY THE HARD THING. Generic assistants hedge toward the "
          "agreeable. When the person's plan has a real problem, name it plainly "
          "in the first paragraph rather than burying it after praise. It is "
@@ -5158,7 +5296,7 @@ index 4b5a702..deaf673 100644
      )
  
      scope_guard = (
-@@ -7903,6 +11119,10 @@ def chat():
+@@ -7903,6 +11239,10 @@ def chat():
          f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
      )
  
@@ -5169,7 +5307,7 @@ index 4b5a702..deaf673 100644
      if context:
          composed_prompt = (
              base_prompt
-@@ -7918,12 +11138,16 @@ def chat():
+@@ -7918,12 +11258,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -5186,7 +5324,7 @@ index 4b5a702..deaf673 100644
          )
  
      try:
-@@ -8207,12 +11431,13 @@ def chat():
+@@ -8207,12 +11551,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -5201,7 +5339,7 @@ index 4b5a702..deaf673 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +11502,28 @@ def acknowledge_release():
+@@ -8277,6 +11622,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -5230,7 +5368,7 @@ index 4b5a702..deaf673 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +11602,12 @@ def feedback():
+@@ -8355,12 +11722,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -5245,7 +5383,7 @@ index 4b5a702..deaf673 100644
      )
      return jsonify({"ok": True})
  
-@@ -8420,7 +11667,7 @@ def _paywall_base_url():
+@@ -8420,7 +11787,7 @@ def _paywall_base_url():
  
  @app.route("/auth/login", methods=["GET"])
  def auth_login():
@@ -5254,7 +5392,7 @@ index 4b5a702..deaf673 100644
          paywall.LOGIN_HTML,
          brand=CONFIG["persona_name"],
          notice=request.args.get("notice"),
-@@ -8433,7 +11680,7 @@ def auth_login():
+@@ -8433,7 +11800,7 @@ def auth_login():
  def auth_send_link():
      email = (request.form.get("email") or "").strip().lower()
      if not email or "@" not in email:
@@ -5263,7 +5401,7 @@ index 4b5a702..deaf673 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="Please enter a valid email address.",
-@@ -8441,7 +11688,7 @@ def auth_send_link():
+@@ -8441,7 +11808,7 @@ def auth_send_link():
              sent=False,
          )
      if not paywall.is_configured():
@@ -5272,7 +5410,7 @@ index 4b5a702..deaf673 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="Paywall is not fully configured. Contact the administrator.",
-@@ -8451,14 +11698,14 @@ def auth_send_link():
+@@ -8451,14 +11818,14 @@ def auth_send_link():
      magic_url = paywall.make_magic_link(email, _paywall_base_url())
      ok = paywall.send_magic_link_email(email, magic_url)
      if not ok:
@@ -5289,7 +5427,7 @@ index 4b5a702..deaf673 100644
          paywall.LOGIN_HTML,
          brand=CONFIG["persona_name"],
          notice=f"Sign-in link sent to {email}. Check your inbox (and spam folder).",
-@@ -8472,7 +11719,7 @@ def auth_verify():
+@@ -8472,7 +11839,7 @@ def auth_verify():
      token = request.args.get("token", "")
      email = paywall.verify_magic_link(token)
      if not email:
@@ -5298,7 +5436,7 @@ index 4b5a702..deaf673 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="That sign-in link is invalid or has expired. Please request a new one.",
-@@ -8509,7 +11756,7 @@ def billing_checkout():
+@@ -8509,7 +11876,7 @@ def billing_checkout():
              return "Stripe checkout is not configured. Contact the administrator.", 500
          return redirect(checkout_url)
      # GET — show landing page with a "Continue" button
@@ -5307,7 +5445,7 @@ index 4b5a702..deaf673 100644
          paywall.CHECKOUT_LANDING_HTML,
          brand=CONFIG["persona_name"],
          email=email,
-@@ -8568,6 +11815,45 @@ def serve_jpg(filename):
+@@ -8568,6 +11935,52 @@ def serve_jpg(filename):
      return send_from_directory(".", f"{filename}.jpg")
  
  
@@ -5328,7 +5466,13 @@ index 4b5a702..deaf673 100644
 +    assigned advisor is authoritative and never overridden by the
 +    client, since that link exists specifically to fix who someone
 +    reaches. Outside a participant link, the page's own advisor_slug
-+    (sent by the client, same as /chat) is trusted, same as elsewhere."""
++    (sent by the client, same as /chat) is trusted, same as elsewhere.
++
++    voice_preference (optional, only meaningful when the advisor is set
++    to "participant_choice" mode): "default" skips the cloned voice for
++    this one request, regardless of whether it's actually available —
++    the participant's own choice for that request, not the advisor's
++    voice_mode setting."""
 +    data = request.get_json(silent=True) or {}
 +    text = (data.get("text") or "").strip()
 +    if not text:
@@ -5344,7 +5488,8 @@ index 4b5a702..deaf673 100644
 +    if not slug:
 +        return Response(status=204, headers={"X-Voice-Status": "no-advisor-slug"})
 +
-+    audio_bytes, mime, reason = synthesize_advisor_voice(slug, text)
++    force_browser = (data.get("voice_preference") == "default")
++    audio_bytes, mime, reason = synthesize_advisor_voice(slug, text, force_browser=force_browser)
 +    if not audio_bytes:
 +        return Response(status=204, headers={"X-Voice-Status": reason})
 +    return Response(audio_bytes, mimetype=mime, headers={"X-Voice-Status": reason})
@@ -5353,7 +5498,7 @@ index 4b5a702..deaf673 100644
  @app.route("/avatar/speak", methods=["POST"])
  @paywall.paywall_required
  def avatar_speak():
-@@ -8614,7 +11900,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +12027,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -5364,7 +5509,7 @@ index 4b5a702..deaf673 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +12108,23 @@ def advisor_avatar():
+@@ -8820,8 +12235,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -5389,7 +5534,7 @@ index 4b5a702..deaf673 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8836,54 +12139,577 @@ def advisor_avatar():
+@@ -8836,54 +12266,577 @@ def advisor_avatar():
      return send_from_directory(".", "advisor_avatar.jpg")
  
  
@@ -5815,12 +5960,7 @@ index 4b5a702..deaf673 100644
 +        {% if behavioral %}Retake assessment{% else %}Take assessment{% endif %}
 +      </a>
 +    </div>
- 
--    raw = file.read()
--    if len(raw) > AVATAR_MAX_BYTES:
--        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
--              f"{AVATAR_MAX_BYTES // 1048576} MB.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Your 360 feedback</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
@@ -5850,9 +5990,10 @@ index 4b5a702..deaf673 100644
 +      {% endif %}
 +    </div>
  
--    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
--    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
--        flash("Use a JPG, PNG, WEBP or GIF image.")
+-    raw = file.read()
+-    if len(raw) > AVATAR_MAX_BYTES:
+-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
 -        return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Add a document</h2>
@@ -5865,12 +6006,10 @@ index 4b5a702..deaf673 100644
 +      </form>
 +    </div>
  
--    data, mime = prepare_avatar(raw)
--    if store_avatar(data, mime):
--        flash("✓ Advisor photo updated. Participants will see it immediately.")
--    else:
--        flash("Could not save the photo — check the database connection.")
--    return redirect(url_for("admin_dashboard"))
+-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+-        flash("Use a JPG, PNG, WEBP or GIF image.")
+-        return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Add a folder</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -5888,7 +6027,13 @@ index 4b5a702..deaf673 100644
 +      </form>
 +      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
 +    </div>
-+
+ 
+-    data, mime = prepare_avatar(raw)
+-    if store_avatar(data, mime):
+-        flash("✓ Advisor photo updated. Participants will see it immediately.")
+-    else:
+-        flash("Could not save the photo — check the database connection.")
+-    return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Add from a URL</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -6004,7 +6149,7 @@ index 4b5a702..deaf673 100644
  <link rel="icon" href="{{ cfg.favicon_url }}" />
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8896,74 +12722,253 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8896,74 +12849,253 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
    *, *::before, *::after { box-sizing: border-box; }
    body {
      margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -6220,14 +6365,14 @@ index 4b5a702..deaf673 100644
 +  }
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-+  }
+   }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
 +    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
 +    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
-   }
++  }
 +  .btn:hover { background: var(--gold); color: var(--navy); }
 +  .btn-secondary {
 +    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
@@ -6313,7 +6458,7 @@ index 4b5a702..deaf673 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9036,17 +13041,28 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
+@@ -9036,17 +13168,28 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
  ADMIN_HTML = """<!DOCTYPE html><html><head>
  <title>Admin — {{ cfg.persona_name }}</title>
  <link rel="icon" href="{{ cfg.favicon_url }}" />
@@ -6348,7 +6493,7 @@ index 4b5a702..deaf673 100644
  /* A wide log scrolls inside its own card rather than the whole page */
  .section { overflow-x: auto; }
  @media (max-width: 900px) { .container { width: 100%; padding: 1.25rem 1rem; } }
-@@ -9089,15 +13105,86 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +13232,86 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -6437,7 +6582,7 @@ index 4b5a702..deaf673 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +13206,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +13333,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -6461,7 +6606,7 @@ index 4b5a702..deaf673 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +13231,13 @@ form.upload {
+@@ -9133,8 +13358,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -6477,7 +6622,7 @@ index 4b5a702..deaf673 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9170,6 +13273,41 @@ input[type="file"], input[type="text"] {
+@@ -9170,6 +13400,41 @@ input[type="file"], input[type="text"] {
  }
  .advisor-link-row { margin-bottom: 0.6rem; }
  .advisor-link-row:last-child { margin-bottom: 0; }
@@ -6519,7 +6664,7 @@ index 4b5a702..deaf673 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9209,13 +13347,50 @@ input[type="file"], input[type="text"] {
+@@ -9209,13 +13474,50 @@ input[type="file"], input[type="text"] {
  .share-menu button:hover { background: var(--paper); }
  
  /* Knowledge Base table — keeps long source URLs from stretching the row */
@@ -6571,7 +6716,7 @@ index 4b5a702..deaf673 100644
  .kb-title { font-weight: 500; word-break: break-word; }
  .kb-source {
    font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
-@@ -9226,6 +13401,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +13528,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -6595,7 +6740,7 @@ index 4b5a702..deaf673 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9279,17 +13471,62 @@ input[type="file"], input[type="text"] {
+@@ -9279,17 +13598,62 @@ input[type="file"], input[type="text"] {
        font-style: italic;
      }
  </style></head><body>
@@ -6667,7 +6812,7 @@ index 4b5a702..deaf673 100644
    {% with messages = get_flashed_messages() %}
      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
    {% endwith %}
-@@ -9324,52 +13561,184 @@ input[type="file"], input[type="text"] {
+@@ -9324,52 +13688,184 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -6893,7 +7038,7 @@ index 4b5a702..deaf673 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +13749,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +13876,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -6928,7 +7073,7 @@ index 4b5a702..deaf673 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +13786,48 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +13913,48 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -6988,7 +7133,7 @@ index 4b5a702..deaf673 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,14 +13836,17 @@ input[type="file"], input[type="text"] {
+@@ -9419,14 +13963,17 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -7008,7 +7153,7 @@ index 4b5a702..deaf673 100644
          <div class="advisor-link-row">
            <div class="muted advisor-link-label">{{ label }}</div>
            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-@@ -9460,18 +13880,22 @@ input[type="file"], input[type="text"] {
+@@ -9460,18 +14007,22 @@ input[type="file"], input[type="text"] {
          </form>
        </div>
  
@@ -7035,7 +7180,7 @@ index 4b5a702..deaf673 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,19 +13904,157 @@ input[type="file"], input[type="text"] {
+@@ -9480,19 +14031,188 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -7130,6 +7275,37 @@ index 4b5a702..deaf673 100644
 +            ⚠ No consent on record for this sample
 +          {% endif %}
 +        </p>
++        <form method="POST" action="{{ url_for('admin_set_advisor_voice_mode', slug=adv.slug) }}"
++              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
++                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
++          <label style="display: block; margin-bottom: 0.5rem; font-size: 0.64rem; letter-spacing: 0.1em;
++                        text-transform: uppercase; color: var(--muted);">
++            When someone clicks "Speak"
++          </label>
++          {% set _mode = adv.voice_sample.voice_mode or "auto" %}
++          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
++                        cursor: pointer; margin-bottom: 0.5rem;">
++            <input type="radio" name="voice_mode" value="auto" {% if _mode == "auto" %}checked{% endif %}
++                   style="margin-top: 0.2rem;" />
++            <span>Use {{ adv.name }}'s own voice automatically, falling back to the
++              plain browser voice whenever it isn't available (default)</span>
++          </label>
++          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
++                        cursor: pointer; margin-bottom: 0.5rem;">
++            <input type="radio" name="voice_mode" value="browser_only" {% if _mode == "browser_only" %}checked{% endif %}
++                   style="margin-top: 0.2rem;" />
++            <span>Always use the plain browser voice — turns their cloned voice off
++              without touching this recording or its consent record</span>
++          </label>
++          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
++            <input type="radio" name="voice_mode" value="participant_choice" {% if _mode == "participant_choice" %}checked{% endif %}
++                   style="margin-top: 0.2rem;" />
++            <span>Let each participant choose, from a control in their own Voice menu</span>
++          </label>
++          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.6rem;">
++            Save
++          </button>
++        </form>
 +        {% if not adv.voice_sample.consent_given %}
 +        <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
 +              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
@@ -7198,7 +7374,7 @@ index 4b5a702..deaf673 100644
          <div class="advisor-link-row">
            <div class="muted advisor-link-label">{{ label }}</div>
            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-@@ -9506,17 +14068,170 @@ input[type="file"], input[type="text"] {
+@@ -9506,17 +14226,170 @@ input[type="file"], input[type="text"] {
            </div>
          </div>
          {% endfor %}
@@ -7377,7 +7553,7 @@ index 4b5a702..deaf673 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9525,10 +14240,10 @@ input[type="file"], input[type="text"] {
+@@ -9525,10 +14398,10 @@ input[type="file"], input[type="text"] {
            &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
          </p>
          {% endif %}
@@ -7391,7 +7567,7 @@ index 4b5a702..deaf673 100644
          {% if adv.briefings %}
          <table style="font-size: 0.8rem;">
            <tr><th style="width: 22%;">When</th><th>Participant</th>
-@@ -9557,33 +14272,20 @@ input[type="file"], input[type="text"] {
+@@ -9557,33 +14430,20 @@ input[type="file"], input[type="text"] {
            {{ adv.name }}'s links.
          </p>
          {% endif %}
@@ -7430,13 +7606,11 @@ index 4b5a702..deaf673 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9615,12 +14317,255 @@ input[type="file"], input[type="text"] {
-         </span>
+@@ -9617,10 +14477,253 @@ input[type="file"], input[type="text"] {
+ 
        </label>
  
--      </label>
-+      </label>
-+
+-      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
 +      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
 +    </form>
 +  </div>
@@ -7571,8 +7745,7 @@ index 4b5a702..deaf673 100644
 +
 +  <div class="tab-pane" data-tab="participant-links">
 +  <h2 class="group-heading">Participant Links</h2>
- 
--      <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
++
 +  <div class="section">
 +    <h2>Add a participant link</h2>
 +    <p class="muted" style="margin: 0 0 1rem 0;">
@@ -7688,7 +7861,7 @@ index 4b5a702..deaf673 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +14728,15 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +14886,15 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7704,7 +7877,7 @@ index 4b5a702..deaf673 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9794,7 +14748,12 @@ input[type="file"], input[type="text"] {
+@@ -9794,7 +14906,12 @@ input[type="file"], input[type="text"] {
      </div>
      <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
        Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
@@ -7718,7 +7891,7 @@ index 4b5a702..deaf673 100644
        Tick rows to export or delete just those; with nothing ticked, export includes every record.
      </p>
      {% if feedback_rows %}
-@@ -9817,7 +14776,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +14934,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7727,7 +7900,7 @@ index 4b5a702..deaf673 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9840,21 +14799,35 @@ input[type="file"], input[type="text"] {
+@@ -9840,21 +14957,35 @@ input[type="file"], input[type="text"] {
              </span>
              {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
            </td>
@@ -7768,7 +7941,7 @@ index 4b5a702..deaf673 100644
              {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
            </td>
            <td>
-@@ -9864,7 +14837,7 @@ input[type="file"], input[type="text"] {
+@@ -9864,7 +14995,7 @@ input[type="file"], input[type="text"] {
            </td>
          </tr>
          <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
@@ -7777,7 +7950,7 @@ index 4b5a702..deaf673 100644
              <div class="feedback-detail-meta">
                Log ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
                · Rating: <strong>
-@@ -9897,6 +14870,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +15028,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7805,7 +7978,7 @@ index 4b5a702..deaf673 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +15078,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +15236,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7815,7 +7988,7 @@ index 4b5a702..deaf673 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +15099,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +15257,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7838,7 +8011,7 @@ index 4b5a702..deaf673 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,8 +15232,12 @@ input[type="file"], input[type="text"] {
+@@ -10250,8 +15390,12 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7851,7 +8024,7 @@ index 4b5a702..deaf673 100644
  </div>
  
      <script>
-@@ -10458,57 +15444,786 @@ input[type="file"], input[type="text"] {
+@@ -10458,57 +15602,786 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -8682,7 +8855,7 @@ index 4b5a702..deaf673 100644
  
  
  @app.route("/admin")
-@@ -10523,19 +16238,59 @@ def admin_dashboard():
+@@ -10523,19 +16396,59 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8746,7 +8919,7 @@ index 4b5a702..deaf673 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,14 +16300,32 @@ def admin_dashboard():
+@@ -10545,14 +16458,32 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8780,7 +8953,7 @@ index 4b5a702..deaf673 100644
  def admin_set_rating(feedback_id):
      """Set or clear a rating from the conversation log."""
      value = (request.form.get("rating") or "").strip().lower()
-@@ -10563,7 +16336,7 @@ def admin_set_rating(feedback_id):
+@@ -10563,7 +16494,7 @@ def admin_set_rating(feedback_id):
  
  
  @app.route("/admin/learning/run", methods=["POST"])
@@ -8789,7 +8962,7 @@ index 4b5a702..deaf673 100644
  def admin_run_learning():
      """Process pending feedback into lessons now."""
      dry = bool(request.form.get("preview"))
-@@ -10587,7 +16360,7 @@ def admin_run_learning():
+@@ -10587,7 +16518,7 @@ def admin_run_learning():
  
  
  @app.route("/admin/learning/archive", methods=["POST"])
@@ -8798,7 +8971,7 @@ index 4b5a702..deaf673 100644
  def admin_archive_learning():
      """Move the visible run history into the archive. Nothing is deleted."""
      if archive_all_learning_runs():
-@@ -10598,15 +16371,15 @@ def admin_archive_learning():
+@@ -10598,15 +16529,15 @@ def admin_archive_learning():
  
  
  @app.route("/admin/learning/archive", methods=["GET"])
@@ -8817,7 +8990,7 @@ index 4b5a702..deaf673 100644
  def admin_save_advisor():
      """Create or update an advisor profile."""
      name = (request.form.get("name") or "").strip()[:80]
-@@ -10631,23 +16404,50 @@ def admin_save_advisor():
+@@ -10631,23 +16562,50 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8875,7 +9048,7 @@ index 4b5a702..deaf673 100644
  def admin_delete_advisor(slug):
      """Remove an advisor profile and its photo."""
      if delete_advisor(slug):
-@@ -10657,8 +16457,387 @@ def admin_delete_advisor(slug):
+@@ -10657,8 +16615,410 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8981,6 +9154,29 @@ index 4b5a702..deaf673 100644
 +        flash(f"✓ Consent confirmed for {advisor['name']}'s existing voice sample.")
 +    else:
 +        flash("Could not save that — check the server logs.")
++    return redirect(url_for("admin_dashboard") + "#advisors")
++
++
++@app.route("/admin/advisors/voice/mode/<slug>", methods=["POST"])
++@require_permission("edit_voice")
++def admin_set_advisor_voice_mode(slug):
++    """Sets how /advisor/speak decides between this advisor's cloned
++    voice and the browser's own — a direct admin choice, requested
++    specifically instead of leaving it to automatic fallback logic
++    alone. See set_advisor_voice_mode for what each option actually
++    does."""
++    advisor = get_advisor(slug)
++    if not advisor:
++        flash("That advisor no longer exists.")
++        return redirect(url_for("admin_dashboard") + "#advisors")
++    mode = request.form.get("voice_mode", "")
++    if mode not in VOICE_MODES:
++        flash("That's not a valid voice option — nothing was changed.")
++        return redirect(url_for("admin_dashboard") + "#advisors")
++    if set_advisor_voice_mode(slug, mode):
++        flash(f"✓ Voice setting saved for {advisor['name']}.")
++    else:
++        flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
 +    return redirect(url_for("admin_dashboard") + "#advisors")
 +
 +
@@ -9264,7 +9460,7 @@ index 4b5a702..deaf673 100644
  def admin_settings():
      """Persist the display toggles from the admin panel."""
      # Settings now live in more than one form, so each form declares which
-@@ -10672,21 +16851,14 @@ def admin_settings():
+@@ -10672,21 +17032,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -9288,7 +9484,7 @@ index 4b5a702..deaf673 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10710,7 +16882,7 @@ def admin_settings():
+@@ -10710,7 +17063,7 @@ def admin_settings():
  
  
  @app.route("/admin/upload", methods=["POST"])
@@ -9297,7 +9493,7 @@ index 4b5a702..deaf673 100644
  def admin_upload():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot upload: RAG not fully configured.")
-@@ -10762,7 +16934,7 @@ def admin_upload():
+@@ -10762,7 +17115,7 @@ def admin_upload():
  
  
  @app.route("/admin/upload-folder", methods=["POST"])
@@ -9306,7 +9502,7 @@ index 4b5a702..deaf673 100644
  def admin_upload_folder():
      """Bulk-upload all supported files from a folder in one request.
  
-@@ -10781,22 +16953,34 @@ def admin_upload_folder():
+@@ -10781,22 +17134,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -9347,7 +9543,7 @@ index 4b5a702..deaf673 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +16993,6 @@ def admin_upload_folder():
+@@ -10809,7 +17174,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -9355,7 +9551,7 @@ index 4b5a702..deaf673 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +17021,10 @@ def admin_upload_folder():
+@@ -10838,7 +17202,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -9367,7 +9563,7 @@ index 4b5a702..deaf673 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +17032,12 @@ def admin_upload_folder():
+@@ -10846,14 +17213,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -9382,7 +9578,7 @@ index 4b5a702..deaf673 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,12 +17045,15 @@ def admin_upload_folder():
+@@ -10861,12 +17226,15 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -9401,7 +9597,7 @@ index 4b5a702..deaf673 100644
  def admin_upload_text():
      """Paste content straight in — transcripts, show notes, anything a
      JavaScript page won't hand over."""
-@@ -11035,7 +17222,7 @@ def fetch_url_metadata(url: str):
+@@ -11035,7 +17403,7 @@ def fetch_url_metadata(url: str):
  
  
  @app.route("/admin/upload-url", methods=["POST"])
@@ -9410,7 +9606,7 @@ index 4b5a702..deaf673 100644
  def admin_upload_url():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot ingest URL: RAG not fully configured.")
-@@ -11043,25 +17230,34 @@ def admin_upload_url():
+@@ -11043,25 +17411,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -9452,7 +9648,7 @@ index 4b5a702..deaf673 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +17278,10 @@ def admin_upload_url():
+@@ -11082,7 +17459,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -9464,7 +9660,7 @@ index 4b5a702..deaf673 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +17289,7 @@ def admin_upload_url():
+@@ -11090,8 +17470,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9474,7 +9670,7 @@ index 4b5a702..deaf673 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +17299,14 @@ def admin_upload_url():
+@@ -11101,14 +17480,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9492,7 +9688,7 @@ index 4b5a702..deaf673 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,36 +17319,36 @@ def admin_upload_url():
+@@ -11121,36 +17500,36 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9546,7 +9742,7 @@ index 4b5a702..deaf673 100644
  def admin_delete(doc_id):
      try:
          db.delete_document(doc_id)
-@@ -11160,6 +17358,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +17539,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -9631,7 +9827,7 @@ index 4b5a702..deaf673 100644
  def _fmt_ts(value) -> str:
      """Format a timestamp defensively — drivers don't always return datetimes."""
      if not value:
-@@ -11228,7 +17504,7 @@ def _export_error(kind: str, err: Exception):
+@@ -11228,7 +17685,7 @@ def _export_error(kind: str, err: Exception):
  
  
  @app.route("/admin/export/feedback.csv")
@@ -9640,7 +9836,7 @@ index 4b5a702..deaf673 100644
  def admin_export_feedback():
      """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
      import csv
-@@ -11281,7 +17557,7 @@ def admin_export_feedback():
+@@ -11281,7 +17738,7 @@ def admin_export_feedback():
  
  
  @app.route("/admin/export/feedback.xlsx")
@@ -9649,7 +9845,7 @@ index 4b5a702..deaf673 100644
  def admin_export_feedback_xlsx():
      """Stream all feedback as an Excel (.xlsx) download with formatting."""
      from flask import Response
-@@ -11392,7 +17668,7 @@ def admin_export_feedback_xlsx():
+@@ -11392,7 +17849,7 @@ def admin_export_feedback_xlsx():
  
  
  @app.route("/admin/feedback/delete-selected", methods=["POST"])
@@ -9658,7 +9854,7 @@ index 4b5a702..deaf673 100644
  def admin_delete_selected_feedback():
      """Delete one or more feedback rows by ID (checkboxes from the table)."""
      ids = request.form.getlist("feedback_ids")
-@@ -11409,7 +17685,7 @@ def admin_delete_selected_feedback():
+@@ -11409,7 +17866,7 @@ def admin_delete_selected_feedback():
  
  
  @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -9667,7 +9863,7 @@ index 4b5a702..deaf673 100644
  def admin_delete_all_feedback():
      """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
      confirm = (request.form.get("confirm") or "").strip()
-@@ -11426,7 +17702,7 @@ def admin_delete_all_feedback():
+@@ -11426,7 +17883,7 @@ def admin_delete_all_feedback():
  
  
  @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -9676,7 +9872,7 @@ index 4b5a702..deaf673 100644
  def admin_approve_lesson(feedback_id):
      """Approve a thumbs-down feedback row as a learning example.
  
-@@ -11463,7 +17739,7 @@ def admin_approve_lesson(feedback_id):
+@@ -11463,7 +17920,7 @@ def admin_approve_lesson(feedback_id):
  
  
  @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -9685,7 +9881,7 @@ index 4b5a702..deaf673 100644
  def admin_revoke_lesson(feedback_id):
      """Stop using this feedback as a lesson going forward."""
      try:
-@@ -11477,6 +17753,105 @@ def admin_revoke_lesson(feedback_id):
+@@ -11477,6 +17934,105 @@ def admin_revoke_lesson(feedback_id):
      return redirect(url_for("admin_dashboard"))
  
  

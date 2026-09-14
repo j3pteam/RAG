@@ -1815,6 +1815,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       font-size: 0.64rem; letter-spacing: 0.14em;
       text-transform: uppercase; color: var(--muted);
     }
+    .voice-source-options { display: flex; flex-direction: column; gap: 0.4rem; }
+    .voice-row .voice-source-option {
+      display: flex; align-items: center; gap: 0.5rem;
+      font-size: 0.82rem; letter-spacing: 0; text-transform: none;
+      color: var(--text); cursor: pointer; margin: 0;
+    }
+    .voice-source-option input[type="radio"] { accent-color: var(--navy); cursor: pointer; margin: 0; }
     .voice-menu select {
       width: 100%; padding: 0.5rem 0.6rem;
       border: 1px solid var(--line); border-radius: 2px;
@@ -3068,6 +3075,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
         <span class="voice-label">Voice</span>
       </button>
       <div class="voice-menu" id="voice-menu" role="menu">
+        {% if page_voice_mode == "participant_choice" %}
+        <div class="voice-row voice-source-row">
+          <label>Reply voice</label>
+          <div class="voice-source-options">
+            <label class="voice-source-option">
+              <input type="radio" name="voice-source" value="advisor" checked />
+              {{ cfg.persona_name }}'s own voice
+            </label>
+            <label class="voice-source-option">
+              <input type="radio" name="voice-source" value="default" />
+              Default reading voice
+            </label>
+          </div>
+        </div>
+        {% endif %}
         <div class="voice-row">
           <label for="voice-select">Reading voice</label>
           <select id="voice-select"></select>
@@ -3414,6 +3436,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // happens to currently hold (visiting a different advisor's link in one
     // tab shouldn't silently change what an already-open tab responds as).
     const PAGE_ADVISOR_SLUG = {{ page_advisor_slug|tojson }};
+
+    // Only meaningful value is "participant_choice" — that's the one
+    // case where the chat page itself needs to show a voice-selection
+    // control at all; "auto" and "browser_only" are both decided
+    // entirely server-side with nothing for the page to act on.
+    const PAGE_VOICE_MODE = {{ page_voice_mode|tojson }};
+    let PARTICIPANT_VOICE_PREFERENCE = "advisor"; // "advisor" or "default"
 
     // -------------------------------------------------------------
     // Cross-platform speech engine (macOS, Windows, iOS, Android, Linux)
@@ -3823,6 +3852,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (wrap) wrap.style.display = "none";
         return;
       }
+
+      // "participant_choice" mode only — lets them pick between the
+      // advisor's own cloned voice and the plain reading voice, per
+      // request from earlier: a direct choice rather than relying on
+      // automatic fallback logic alone.
+      document.querySelectorAll('input[name="voice-source"]').forEach(function (radio) {
+        radio.addEventListener("change", function () {
+          PARTICIPANT_VOICE_PREFERENCE = radio.checked && radio.value === "default" ? "default" : "advisor";
+        });
+      });
 
       // Map a language tag to a readable name, so the menu reads
       // "English — Samantha" rather than "Samantha (en-US)".
@@ -5298,6 +5337,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // text-to-speech below exactly as before. A short timeout keeps
           // a slow or unresponsive provider from leaving the Speak button
           // stuck instead of just falling back promptly.
+          //
+          // Under "participant_choice" mode, if they've picked the
+          // default voice there's no reason to round-trip to the server
+          // just to be told to fall back — skip straight to it.
+          if (!(PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE === "default")) {
           try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(), 6000);
@@ -5341,6 +5385,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             // to the browser's own voice below rather than surface this.
             console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
           }
+          } // end participant-chose-default-voice skip
 
           const ok = J3PSpeech.play(cleanText, {
             onStart: () => {
@@ -8679,8 +8724,14 @@ def _advisor_voice_ensure_table(conn):
                 consent_note      TEXT,
                 provider          TEXT,
                 provider_voice_id TEXT,
+                voice_mode        TEXT NOT NULL DEFAULT 'auto',
                 uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
+        """)
+        # Existing rows from before this setting existed
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_mode TEXT NOT NULL DEFAULT 'auto'
         """)
     conn.commit()
 
@@ -8690,7 +8741,12 @@ def save_advisor_voice_sample(slug: str, filename: str, mime: str, content: byte
     """One voice sample per advisor — a fresh recording/upload replaces
     whatever was there before, same pattern as the photo and 360 uploads.
     Replacing it also clears any provider_voice_id from a prior cloning
-    run, since that voice was built from the old sample, not this one."""
+    run, since that voice was built from the old sample, not this one.
+
+    voice_mode is deliberately carried over from whatever was there
+    before (defaulting to 'auto' only when there's nothing to carry) —
+    it's a separate admin choice from the recording itself, and
+    re-recording a sample shouldn't silently reset it back to auto."""
     if not slug or not content:
         return False
     conn = _settings_db_conn()
@@ -8699,14 +8755,17 @@ def save_advisor_voice_sample(slug: str, filename: str, mime: str, content: byte
     try:
         _advisor_voice_ensure_table(conn)
         with conn.cursor() as cur:
+            cur.execute("SELECT voice_mode FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
+            existing = cur.fetchone()
+            prior_mode = existing[0] if existing else "auto"
             cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
             cur.execute("""
                 INSERT INTO advisor_voice_samples
                     (advisor_slug, filename, mime, content, size_bytes,
-                     consent_given, consent_note)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                     consent_given, consent_note, voice_mode)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (slug, filename[:200], mime, content, len(content),
-                  bool(consent_given), (consent_note or "")[:500]))
+                  bool(consent_given), (consent_note or "")[:500], prior_mode))
         conn.commit()
         return True
     except Exception as e:
@@ -8729,7 +8788,7 @@ def get_advisor_voice_meta(slug: str):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT filename, size_bytes, consent_given, consent_note,
-                       provider, provider_voice_id, uploaded_at
+                       provider, provider_voice_id, voice_mode, uploaded_at
                 FROM advisor_voice_samples WHERE advisor_slug = %s
             """, (slug,))
             row = cur.fetchone()
@@ -8738,7 +8797,7 @@ def get_advisor_voice_meta(slug: str):
         return {"filename": row[0], "size_bytes": row[1] or 0,
                 "consent_given": bool(row[2]), "consent_note": row[3] or "",
                 "provider": row[4] or "", "provider_voice_id": row[5] or "",
-                "uploaded_at": row[6]}
+                "voice_mode": row[6] or "auto", "uploaded_at": row[7]}
     except Exception as e:
         app.logger.error(f"[advisor-voice] meta read failed: {e}")
         return None
@@ -8847,6 +8906,48 @@ def set_advisor_voice_consent(slug: str, consent_given: bool, consent_note: str 
         conn.close()
 
 
+VOICE_MODES = ("auto", "browser_only", "participant_choice")
+
+
+def set_advisor_voice_mode(slug: str, mode: str) -> bool:
+    """Controls how synthesize_advisor_voice() (and /advisor/speak)
+    decide between this advisor's cloned voice and the browser's own
+    text-to-speech — a direct admin control, rather than leaving it to
+    automatic fallback logic alone:
+      - auto (default): try the cloned voice, fall back to the browser's
+        voice silently whenever it isn't available.
+      - browser_only: skip the cloned voice entirely, every time — for
+        temporarily turning this off without touching the sample or
+        consent record underneath it.
+      - participant_choice: expose a control in the chat page itself so
+        each participant picks which voice they hear, per session.
+    Only meaningful once a sample exists (nothing to choose between
+    otherwise), so this updates an existing row rather than creating
+    one — returns False if no sample has been uploaded for this advisor
+    yet."""
+    if not slug or mode not in VOICE_MODES:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE advisor_voice_samples
+                SET voice_mode = %s
+                WHERE advisor_slug = %s
+            """, (mode, slug))
+            updated = cur.rowcount
+        conn.commit()
+        return updated > 0
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] mode update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
     """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
     Returns the new voice_id, or raises on any failure — caller decides
@@ -8933,7 +9034,7 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
     return audio_bytes, "audio/mpeg"
 
 
-def synthesize_advisor_voice(slug: str, text: str):
+def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
     """Returns (audio_bytes, mime, reason). audio_bytes/mime are None
     whenever a cloned voice isn't available for any reason — every
     caller treats that as "fall back to the browser's own
@@ -8944,6 +9045,11 @@ def synthesize_advisor_voice(slug: str, text: str):
     consent? key not set? a real synthesis error?), so guessing further
     without that visibility isn't worth doing again — checking the
     browser console after this ships will show the real reason directly.
+
+    force_browser skips the cloned-voice attempt outright — used when
+    the participant themselves picked the default voice under
+    "participant_choice" mode; it's their call for that one request,
+    separate from the advisor's own voice_mode setting.
 
     Wired to ElevenLabs (voice cloning is its core product, and it
     verifies consent for exactly this reason). To activate: sign up at
@@ -8964,6 +9070,10 @@ def synthesize_advisor_voice(slug: str, text: str):
     meta = get_advisor_voice_meta(slug)
     if not meta:
         return None, None, "no-sample-uploaded"
+    if force_browser:
+        return None, None, "participant-chose-default-voice"
+    if meta.get("voice_mode") == "browser_only":
+        return None, None, "advisor-set-to-browser-only"
     if not meta.get("consent_given"):
         return None, None, "consent-not-given"
     api_key = os.environ.get("ELEVENLABS_API_KEY", "")
@@ -10263,6 +10373,15 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         page_cfg["opening"] = _personalize_greeting(
             page_cfg.get("opening") or "", participant_first_name)
 
+    # Only "participant_choice" mode needs to reach the frontend — auto
+    # and browser_only are both decided entirely server-side, so there's
+    # nothing for the page itself to act on for those.
+    page_voice_mode = "auto"
+    if active and active.get("slug"):
+        _voice_meta = get_advisor_voice_meta(active["slug"])
+        if _voice_meta:
+            page_voice_mode = _voice_meta.get("voice_mode") or "auto"
+
     return _cached_render(
         INDEX_HTML,
         cfg=page_cfg,
@@ -10279,6 +10398,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
                                         "personality_assessment_enabled", True),
         avatar_version=int(datetime.now().timestamp()),
         page_advisor_slug=(active["slug"] if active else ""),
+        page_voice_mode=page_voice_mode,
     )
 
 
@@ -11832,7 +11952,13 @@ def advisor_speak():
     assigned advisor is authoritative and never overridden by the
     client, since that link exists specifically to fix who someone
     reaches. Outside a participant link, the page's own advisor_slug
-    (sent by the client, same as /chat) is trusted, same as elsewhere."""
+    (sent by the client, same as /chat) is trusted, same as elsewhere.
+
+    voice_preference (optional, only meaningful when the advisor is set
+    to "participant_choice" mode): "default" skips the cloned voice for
+    this one request, regardless of whether it's actually available —
+    the participant's own choice for that request, not the advisor's
+    voice_mode setting."""
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
@@ -11848,7 +11974,8 @@ def advisor_speak():
     if not slug:
         return Response(status=204, headers={"X-Voice-Status": "no-advisor-slug"})
 
-    audio_bytes, mime, reason = synthesize_advisor_voice(slug, text)
+    force_browser = (data.get("voice_preference") == "default")
+    audio_bytes, mime, reason = synthesize_advisor_voice(slug, text, force_browser=force_browser)
     if not audio_bytes:
         return Response(status=204, headers={"X-Voice-Status": reason})
     return Response(audio_bytes, mimetype=mime, headers={"X-Voice-Status": reason})
@@ -13992,6 +14119,37 @@ input[type="file"], input[type="text"] {
             ⚠ No consent on record for this sample
           {% endif %}
         </p>
+        <form method="POST" action="{{ url_for('admin_set_advisor_voice_mode', slug=adv.slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: block; margin-bottom: 0.5rem; font-size: 0.64rem; letter-spacing: 0.1em;
+                        text-transform: uppercase; color: var(--muted);">
+            When someone clicks "Speak"
+          </label>
+          {% set _mode = adv.voice_sample.voice_mode or "auto" %}
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.5rem;">
+            <input type="radio" name="voice_mode" value="auto" {% if _mode == "auto" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Use {{ adv.name }}'s own voice automatically, falling back to the
+              plain browser voice whenever it isn't available (default)</span>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.5rem;">
+            <input type="radio" name="voice_mode" value="browser_only" {% if _mode == "browser_only" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Always use the plain browser voice — turns their cloned voice off
+              without touching this recording or its consent record</span>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+            <input type="radio" name="voice_mode" value="participant_choice" {% if _mode == "participant_choice" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Let each participant choose, from a control in their own Voice menu</span>
+          </label>
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.6rem;">
+            Save
+          </button>
+        </form>
         {% if not adv.voice_sample.consent_given %}
         <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
               style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
@@ -16559,6 +16717,29 @@ def admin_confirm_advisor_voice_consent(slug):
         flash(f"✓ Consent confirmed for {advisor['name']}'s existing voice sample.")
     else:
         flash("Could not save that — check the server logs.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/voice/mode/<slug>", methods=["POST"])
+@require_permission("edit_voice")
+def admin_set_advisor_voice_mode(slug):
+    """Sets how /advisor/speak decides between this advisor's cloned
+    voice and the browser's own — a direct admin choice, requested
+    specifically instead of leaving it to automatic fallback logic
+    alone. See set_advisor_voice_mode for what each option actually
+    does."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    mode = request.form.get("voice_mode", "")
+    if mode not in VOICE_MODES:
+        flash("That's not a valid voice option — nothing was changed.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    if set_advisor_voice_mode(slug, mode):
+        flash(f"✓ Voice setting saved for {advisor['name']}.")
+    else:
+        flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
