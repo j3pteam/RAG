@@ -165,6 +165,36 @@ app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
 app.config["MAX_CONTENT_LENGTH"] = int(MAX_UPLOAD_BYTES * 3.5)
 client = anthropic.Anthropic()
 
+# Flask's render_template_string() does NOT cache across calls — Flask's own
+# implementation is literally `app.jinja_env.from_string(source)` followed
+# by `.render(context)`, every single time, even when the exact same
+# string constant is passed on every call. For a template the size of
+# ADMIN_HTML (~140KB) that's roughly 90ms of pure re-parsing/re-compiling
+# spent before a single row of data even renders — on EVERY admin page
+# load, and the same pattern is used for the actual participant-facing
+# chat page too, which is hit far more often. Every call site in this
+# file passes a module-level constant (ADMIN_HTML, INDEX_HTML, LOGIN_HTML,
+# etc.) that's built once and never regenerated, so id() is a safe,
+# stable cache key for the lifetime of the process — this compiles each
+# one exactly once and reuses the compiled Template object after that,
+# while still replicating the one functionally-relevant thing Flask's own
+# _render() does beyond the render call itself (injecting request/
+# session/g into the context via update_template_context). The signal
+# sends Flask's version also does are for extensions that hook into
+# template-render events (e.g. a debug toolbar) — this app doesn't use
+# any, so skipping them is safe.
+_template_cache = {}
+
+
+def _cached_render(template_str, **context):
+    key = id(template_str)
+    tmpl = _template_cache.get(key)
+    if tmpl is None:
+        tmpl = app.jinja_env.from_string(template_str)
+        _template_cache[key] = tmpl
+    app.update_template_context(context)
+    return tmpl.render(context)
+
 # Schema initialisation is idempotent, but it used to run here at import —
 # which imported psycopg and opened a connection before the app could serve
 # anything. On a cold container that pushed the first response past Railway's
@@ -1231,7 +1261,7 @@ button:hover { background:var(--gold); color:var(--navy); }
 
 @app.route("/login", methods=["GET"])
 def login_page():
-    return render_template_string(
+    return _cached_render(
         LOGIN_HTML, cfg=CONFIG, notice=request.args.get("notice"),
         notice_ok=request.args.get("ok") == "1", sent=False,
         next_path=request.args.get("next", "/"),
@@ -1243,13 +1273,13 @@ def login_send():
     email = (request.form.get("email") or "").strip().lower()
     next_path = request.form.get("next") or "/"
     if not email or "@" not in email:
-        return render_template_string(
+        return _cached_render(
             LOGIN_HTML, cfg=CONFIG, notice="Please enter a valid email address.",
             notice_ok=False, sent=False, next_path=next_path,
             ttl_minutes=LOGIN_LINK_TTL // 60)
     if not email_allowed(email):
         # Deliberately identical to the success message — don't reveal the list
-        return render_template_string(
+        return _cached_render(
             LOGIN_HTML, cfg=CONFIG,
             notice=f"If {email} is registered, a sign-in link is on its way.",
             notice_ok=True, sent=True, next_path=next_path,
@@ -1266,7 +1296,7 @@ def login_send():
     sent_ok = send_email(email, f"Your {CONFIG['persona_name']} sign-in link", body)
     if not sent_ok:
         app.logger.error("[login] could not send sign-in link")
-    return render_template_string(
+    return _cached_render(
         LOGIN_HTML, cfg=CONFIG,
         notice=f"Sign-in link sent to {email}. Check your inbox and spam folder.",
         notice_ok=True, sent=True, next_path=next_path,
@@ -10133,7 +10163,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         page_cfg["opening"] = _personalize_greeting(
             page_cfg.get("opening") or "", participant_first_name)
 
-    return render_template_string(
+    return _cached_render(
         INDEX_HTML,
         cfg=page_cfg,
         show_avatar=_effective("show_avatar_override", "show_avatar"),
@@ -11526,7 +11556,7 @@ def _paywall_base_url():
 
 @app.route("/auth/login", methods=["GET"])
 def auth_login():
-    return render_template_string(
+    return _cached_render(
         paywall.LOGIN_HTML,
         brand=CONFIG["persona_name"],
         notice=request.args.get("notice"),
@@ -11539,7 +11569,7 @@ def auth_login():
 def auth_send_link():
     email = (request.form.get("email") or "").strip().lower()
     if not email or "@" not in email:
-        return render_template_string(
+        return _cached_render(
             paywall.LOGIN_HTML,
             brand=CONFIG["persona_name"],
             notice="Please enter a valid email address.",
@@ -11547,7 +11577,7 @@ def auth_send_link():
             sent=False,
         )
     if not paywall.is_configured():
-        return render_template_string(
+        return _cached_render(
             paywall.LOGIN_HTML,
             brand=CONFIG["persona_name"],
             notice="Paywall is not fully configured. Contact the administrator.",
@@ -11557,14 +11587,14 @@ def auth_send_link():
     magic_url = paywall.make_magic_link(email, _paywall_base_url())
     ok = paywall.send_magic_link_email(email, magic_url)
     if not ok:
-        return render_template_string(
+        return _cached_render(
             paywall.LOGIN_HTML,
             brand=CONFIG["persona_name"],
             notice="We couldn't send the email. Please try again in a moment.",
             notice_type="error",
             sent=False,
         )
-    return render_template_string(
+    return _cached_render(
         paywall.LOGIN_HTML,
         brand=CONFIG["persona_name"],
         notice=f"Sign-in link sent to {email}. Check your inbox (and spam folder).",
@@ -11578,7 +11608,7 @@ def auth_verify():
     token = request.args.get("token", "")
     email = paywall.verify_magic_link(token)
     if not email:
-        return render_template_string(
+        return _cached_render(
             paywall.LOGIN_HTML,
             brand=CONFIG["persona_name"],
             notice="That sign-in link is invalid or has expired. Please request a new one.",
@@ -11615,7 +11645,7 @@ def billing_checkout():
             return "Stripe checkout is not configured. Contact the administrator.", 500
         return redirect(checkout_url)
     # GET — show landing page with a "Continue" button
-    return render_template_string(
+    return _cached_render(
         paywall.CHECKOUT_LANDING_HTML,
         brand=CONFIG["persona_name"],
         email=email,
@@ -15743,11 +15773,11 @@ def admin_login():
                 session.pop("admin_master", None)
                 touch_admin_user_login(user["id"])
                 return redirect(url_for("admin_dashboard"))
-        return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG,
+        return _cached_render(ADMIN_LOGIN_HTML, cfg=CONFIG,
                                        error="Incorrect email or password")
     if current_admin_role():
         return redirect(url_for("admin_dashboard"))
-    return render_template_string(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
+    return _cached_render(ADMIN_LOGIN_HTML, cfg=CONFIG, error=None)
 
 
 @app.route("/admin/logout")
@@ -15772,7 +15802,7 @@ def advisor_portal_enter(slug, token):
     the secret token doesn't linger in browser history past the first visit."""
     match = get_advisor_by_portal_token(token)
     if not match or match["slug"] != slug:
-        return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG), 404
+        return _cached_render(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG), 404
     session["advisor_owner_slug"] = slug
     session.permanent = True
     return redirect(url_for("advisor_portal_view"))
@@ -15783,7 +15813,7 @@ def advisor_portal_login_info():
     """Shown when /advisor-portal (or any of its sub-routes) is reached
     without a valid session — no password form, since access only ever
     comes through the dedicated link itself."""
-    return render_template_string(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG)
+    return _cached_render(ADVISOR_PORTAL_LOGIN_HTML, cfg=CONFIG)
 
 
 @app.route("/advisor-portal")
@@ -15812,7 +15842,7 @@ def advisor_portal_view():
         ("Upload your 360 feedback", bool(feedback_360)),
         ("Add at least one knowledge-base document", bool(mine)),
     ]
-    return render_template_string(
+    return _cached_render(
         ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine,
         personality=personality, behavioral=behavioral, feedback_360=feedback_360,
         onboarding_steps=onboarding_steps,
@@ -15931,7 +15961,7 @@ def advisor_portal_personality():
         flash("✓ Thanks — your personality assessment is saved.")
         return redirect(url_for("advisor_portal_view"))
     existing = get_advisor_personality(slug)
-    return render_template_string(
+    return _cached_render(
         ADVISOR_PORTAL_PERSONALITY_HTML, cfg=CONFIG, advisor=advisor,
         tipi_items=TIPI_ITEMS, existing=existing,
     )
@@ -15961,7 +15991,7 @@ def advisor_portal_behavioral():
         flash("✓ Thanks — your self behavioral assessment is saved.")
         return redirect(url_for("advisor_portal_view"))
     existing = get_advisor_behavioral(slug)
-    return render_template_string(
+    return _cached_render(
         ADVISOR_PORTAL_BEHAVIORAL_HTML, cfg=CONFIG, advisor=advisor,
         behavioral_items=BEHAVIORAL_ITEMS, behavioral_scale=BEHAVIORAL_SCALE,
         domain_labels=BEHAVIORAL_DOMAIN_LABELS, existing=existing,
@@ -16080,7 +16110,7 @@ def admin_dashboard():
     for d in docs:
         for slug in _advisor_map.get(d["title"], []):
             _advisor_docs.setdefault(slug, []).append(d)
-    return render_template_string(
+    return _cached_render(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
@@ -16180,7 +16210,7 @@ def admin_archive_learning():
 def admin_view_learning_archive():
     """Every archived run, newest first."""
     runs = recent_learning_runs(limit=500, archived=True)
-    return render_template_string(LEARNING_ARCHIVE_HTML, cfg=CONFIG, runs=runs)
+    return _cached_render(LEARNING_ARCHIVE_HTML, cfg=CONFIG, runs=runs)
 
 
 @app.route("/admin/advisors", methods=["POST"])
