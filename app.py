@@ -13841,11 +13841,28 @@ input[type="file"], input[type="text"] {
       <details class="advisor-section">
         <summary>Voice Sample</summary>
         <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
-          A recording of {{ adv.name }}'s own voice — the source material for
-          a future custom text-to-speech voice. This doesn't do anything on
-          its own yet: "Speak" still uses the browser's built-in voices until
-          a voice-synthesis provider is configured.
+          A recording of {{ adv.name }}'s own voice, used to clone a custom
+          voice via ElevenLabs so "Speak" sounds like {{ adv.name }} instead
+          of a generic browser voice.
         </p>
+        <div style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                    padding: 0.6rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.78rem; line-height: 1.7;">
+          <div>{{ "✓" if adv.voice_sample else "✗" }} Voice sample uploaded</div>
+          <div>{{ "✓" if adv.voice_sample and adv.voice_sample.consent_given else "✗" }} Consent given for this sample</div>
+          <div>{{ "✓" if elevenlabs_configured else "✗" }} ElevenLabs API key configured on this server</div>
+          <div>{{ "✓" if adv.voice_sample and adv.voice_sample.provider_voice_id else "✗" }} Voice successfully cloned (happens automatically on first use, once everything above is ✓)</div>
+          {% if adv.voice_sample and adv.voice_sample.consent_given and elevenlabs_configured %}
+          <div style="margin-top: 0.4rem; color: #2D7D5F;">
+            <strong>Everything needed is in place</strong> — "Speak" on {{ adv.name }}'s
+            sessions will use their own cloned voice.
+          </div>
+          {% else %}
+          <div style="margin-top: 0.4rem; color: var(--rust);">
+            <strong>Not ready yet</strong> — any ✗ above means "Speak" will keep
+            using the plain browser voice for {{ adv.name }} until it's resolved.
+          </div>
+          {% endif %}
+        </div>
         {% if adv.voice_sample %}
         <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
           <strong>{{ adv.voice_sample.filename }}</strong>
@@ -16130,6 +16147,7 @@ def admin_dashboard():
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
+        elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
         advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
         owners=document_owners(),
         advisor_map=_advisor_map,
