@@ -8847,6 +8847,7 @@ def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: s
     what to do with that (synthesize_advisor_voice treats it as
     fall-back-to-browser-TTS, same as every other failure mode here)."""
     import urllib.request as _url
+    import urllib.error as _url_error
     import json as _j
     import uuid as _uuid
 
@@ -8869,8 +8870,23 @@ def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: s
         },
         method="POST",
     )
-    with _url.urlopen(req, timeout=30) as resp:
-        data = _j.loads(resp.read().decode("utf-8"))
+    try:
+        with _url.urlopen(req, timeout=30) as resp:
+            data = _j.loads(resp.read().decode("utf-8"))
+    except _url_error.HTTPError as e:
+        # The actual, specific reason (invalid key, unsupported audio
+        # format, voice-limit reached, etc.) is in the response body —
+        # e itself just stringifies to "HTTP Error 400: Bad Request" with
+        # none of that, which is exactly the kind of unhelpful message
+        # that's made "why isn't this working" impossible to answer
+        # without direct server access, across several rounds of this
+        # exact question. Reading the body here is what actually fixes
+        # that, not another guess at what might be wrong.
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"ElevenLabs voice-add HTTP {e.code}: {detail or e.reason}")
     voice_id = data.get("voice_id")
     if not voice_id:
         raise RuntimeError(f"ElevenLabs voice-add returned no voice_id: {data}")
@@ -8881,6 +8897,7 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
     """POST text to ElevenLabs' text-to-speech endpoint for one voice_id.
     Returns (audio_bytes, mime), or raises on failure."""
     import urllib.request as _url
+    import urllib.error as _url_error
     import json as _j
 
     body = _j.dumps({
@@ -8898,8 +8915,15 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
         },
         method="POST",
     )
-    with _url.urlopen(req, timeout=30) as resp:
-        audio_bytes = resp.read()
+    try:
+        with _url.urlopen(req, timeout=30) as resp:
+            audio_bytes = resp.read()
+    except _url_error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")[:300]
+        except Exception:
+            detail = ""
+        raise RuntimeError(f"ElevenLabs text-to-speech HTTP {e.code}: {detail or e.reason}")
     return audio_bytes, "audio/mpeg"
 
 
