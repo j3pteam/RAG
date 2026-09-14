@@ -5238,17 +5238,72 @@ INDEX_HTML = r"""<!DOCTYPE html>
           if (window.__activeSpeakMsg === msgDiv) window.__activeSpeakMsg = null;
         }
 
-        msgDiv.__speakReply = function() {
+        msgDiv.__speakReply = async function() {
+          const activeMsg = window.__activeSpeakMsg;
           // This message is the one currently playing — toggle it off
-          if (window.__activeSpeakMsg === msgDiv) {
+          if (activeMsg === msgDiv) {
             J3PSpeech.stop();
+            if (msgDiv.__serverAudio) msgDiv.__serverAudio.pause();
             resetSpeakUI();
             return;
           }
           // A different message was playing — stop it before starting this one
-          if (window.__activeSpeakMsg) J3PSpeech.stop();
+          if (activeMsg) {
+            J3PSpeech.stop();
+            if (activeMsg.__serverAudio) activeMsg.__serverAudio.pause();
+          }
 
-          const ok = J3PSpeech.play(stripMarkdown(replyText), {
+          const cleanText = stripMarkdown(replyText);
+
+          // Try this advisor's own cloned voice first (ElevenLabs, when
+          // configured for this advisor with a consented sample) — every
+          // "not available" case (no key set, no sample, no consent, a
+          // provider error) falls through to the browser's own
+          // text-to-speech below exactly as before. A short timeout keeps
+          // a slow or unresponsive provider from leaving the Speak button
+          // stuck instead of just falling back promptly.
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const resp = await fetch("/advisor/speak", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: cleanText, advisor_slug: PAGE_ADVISOR_SLUG }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (resp.ok && resp.status === 200) {
+              const blob = await resp.blob();
+              if (blob.size > 0) {
+                const url = URL.createObjectURL(blob);
+                const audio = new Audio(url);
+                msgDiv.__serverAudio = audio;
+                audio.addEventListener("play", () => {
+                  window.__activeSpeakMsg = msgDiv;
+                  clearAllAvatarStates();
+                  setAvatarSpeaking(msgDiv, true);
+                  Presence.set("speaking");
+                });
+                audio.addEventListener("ended", () => {
+                  URL.revokeObjectURL(url);
+                  msgDiv.__serverAudio = null;
+                  resetSpeakUI();
+                });
+                audio.addEventListener("error", () => {
+                  URL.revokeObjectURL(url);
+                  msgDiv.__serverAudio = null;
+                  resetSpeakUI();
+                });
+                await audio.play();
+                return;
+              }
+            }
+          } catch (e) {
+            // Network error, timeout, or a rejected play() — fall through
+            // to the browser's own voice below rather than surface this.
+          }
+
+          const ok = J3PSpeech.play(cleanText, {
             onStart: () => {
               window.__activeSpeakMsg = msgDiv;
               clearAllAvatarStates();
@@ -11506,6 +11561,43 @@ def serve_png(filename):
 @app.route("/<path:filename>.jpg")
 def serve_jpg(filename):
     return send_from_directory(".", f"{filename}.jpg")
+
+
+@app.route("/advisor/speak", methods=["POST"])
+@paywall.paywall_required
+def advisor_speak():
+    """Returns synthesized audio in this advisor's own cloned voice, when
+    one is available — the browser falls back to its own text-to-speech
+    (via the existing J3PSpeech module) whenever this doesn't return a
+    200 with an audio body, which covers every "not available yet" case
+    (no ElevenLabs key configured, no consented sample, or a synthesis
+    failure) without the frontend needing to know why.
+
+    Advisor resolution matches /chat's own rule: a participant link's own
+    assigned advisor is authoritative and never overridden by the
+    client, since that link exists specifically to fix who someone
+    reaches. Outside a participant link, the page's own advisor_slug
+    (sent by the client, same as /chat) is trusted, same as elsewhere."""
+    data = request.get_json(silent=True) or {}
+    text = (data.get("text") or "").strip()
+    if not text:
+        return Response(status=204)
+
+    participant_link_token = session.get("participant_link_token", "")
+    if participant_link_token:
+        link = get_participant_link(participant_link_token)
+        slug = (link["advisor_slug"] if link else "") or ""
+    else:
+        slug = (data.get("advisor_slug") or session.get("advisor_slug") or "")
+
+    if not slug:
+        return Response(status=204)
+
+    result = synthesize_advisor_voice(slug, text)
+    if not result:
+        return Response(status=204)
+    audio_bytes, mime = result
+    return Response(audio_bytes, mimetype=mime)
 
 
 @app.route("/avatar/speak", methods=["POST"])
