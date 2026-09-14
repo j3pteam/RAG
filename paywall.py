@@ -223,18 +223,24 @@ def verify_magic_link(token: str) -> Optional[str]:
 def paywall_required(f):
     """Route decorator: requires authenticated + subscribed user.
     If paywall is disabled or misconfigured, is a no-op."""
+    # Routes called via fetch/AJAX rather than a normal page navigation —
+    # these need a JSON error so the caller's own JS can detect the
+    # failure and react (e.g. fall back to something else), rather than
+    # a redirect. fetch() follows redirects automatically by default, so
+    # a redirect here would silently hand the caller a login page's HTML
+    # with a 200 status instead of the error it actually needs to see.
+    AJAX_PATHS = {"/chat", "/advisor/speak", "/avatar/speak"}
     @wraps(f)
     def wrapper(*args, **kwargs):
         if not is_active():
             return f(*args, **kwargs)
         email = session.get("authenticated_email")
         if not email:
-            # AJAX request needs JSON; page request needs redirect
-            if request.path == "/chat":
+            if request.path in AJAX_PATHS:
                 return jsonify({"error": "not_authenticated", "redirect": "/auth/login"}), 401
             return redirect(url_for("auth_login"))
         if not is_user_subscribed(email):
-            if request.path == "/chat":
+            if request.path in AJAX_PATHS:
                 return jsonify({"error": "not_subscribed", "redirect": "/billing/checkout"}), 402
             return redirect(url_for("billing_checkout"))
         return f(*args, **kwargs)
