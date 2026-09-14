@@ -4784,10 +4784,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
         speaking: "Speaking",
       };
 
-      function set(state) {
+      function set(state, detail) {
         root.classList.remove("thinking", "responding", "speaking");
         if (state && state !== "idle") root.classList.add(state);
-        if (status) status.textContent = LABELS[state] || LABELS.idle;
+        if (status) {
+          // detail (only meaningful for "speaking") makes which voice is
+          // actually playing visible right here, in the one place this
+          // has repeatedly been impossible to tell from the outside —
+          // "his voice" vs "default voice" instead of a silent guess.
+          status.textContent = (LABELS[state] || LABELS.idle) + (detail ? ` (${detail})` : "");
+        }
         if (frame) {
           frame.setAttribute("aria-label", state === "speaking"
             ? "Stop reading aloud" : "Read the latest reply aloud");
@@ -5314,7 +5320,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                   window.__activeSpeakMsg = msgDiv;
                   clearAllAvatarStates();
                   setAvatarSpeaking(msgDiv, true);
-                  Presence.set("speaking");
+                  Presence.set("speaking", "their own voice");
                 });
                 audio.addEventListener("ended", () => {
                   URL.revokeObjectURL(url);
@@ -5341,7 +5347,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
               window.__activeSpeakMsg = msgDiv;
               clearAllAvatarStates();
               setAvatarSpeaking(msgDiv, true);
-              Presence.set("speaking");
+              Presence.set("speaking", "default voice");
             },
             onEnd: () => resetSpeakUI(),
             onError: (reason) => {
