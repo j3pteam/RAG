@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..8e327e5 100644
+index 4b5a702..83a5e9b 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -2287,7 +2287,7 @@ index 4b5a702..8e327e5 100644
      except Exception as e:
          app.logger.error(f"[advisors] get failed: {e}")
          return None
-@@ -6044,258 +7047,2090 @@ def get_advisor(slug: str):
+@@ -6044,258 +7047,2119 @@ def get_advisor(slug: str):
          conn.close()
  
  
@@ -4200,6 +4200,36 @@ index 4b5a702..8e327e5 100644
 -        excerpt = text[:room]
 -        used += len(excerpt)
 -        parts.append(f"--- {title} ---\n{excerpt}")
++def set_advisor_voice_consent(slug: str, consent_given: bool, consent_note: str = "") -> bool:
++    """Updates just the consent flag/note for a sample that already
++    exists — a sample recorded before consent was required to save one
++    at all (or one where the box just wasn't checked) otherwise has no
++    way to become usable short of deleting the recording and starting
++    over. This lets an admin go back and confirm consent for the
++    existing recording directly, without re-recording anything."""
++    if not slug:
++        return False
++    conn = _settings_db_conn()
++    if not conn:
++        return False
++    try:
++        _advisor_voice_ensure_table(conn)
++        with conn.cursor() as cur:
++            cur.execute("""
++                UPDATE advisor_voice_samples
++                SET consent_given = %s, consent_note = %s
++                WHERE advisor_slug = %s
++            """, (bool(consent_given), (consent_note or "")[:500], slug))
++        conn.commit()
++        return True
++    except Exception as e:
++        app.logger.error(f"[advisor-voice] consent update failed: {e}")
++        return False
++    finally:
++        conn.close()
+ 
+-    if not parts:
++
 +def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
 +    """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
 +    Returns the new voice_id, or raises on any failure — caller decides
@@ -4234,8 +4264,7 @@ index 4b5a702..8e327e5 100644
 +    if not voice_id:
 +        raise RuntimeError(f"ElevenLabs voice-add returned no voice_id: {data}")
 +    return voice_id
- 
--    if not parts:
++
 +
 +def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
 +    """POST text to ElevenLabs' text-to-speech endpoint for one voice_id.
@@ -4530,7 +4559,7 @@ index 4b5a702..8e327e5 100644
  # ---------------------------------------------------------------------------
  # Participant profile
  # ---------------------------------------------------------------------------
-@@ -6308,6 +9143,8 @@ PROFILE_FIELDS = ("first_name", "role", "specialty")
+@@ -6308,6 +9172,8 @@ PROFILE_FIELDS = ("first_name", "role", "specialty")
  
  
  def _profile_ensure_table(conn):
@@ -4539,7 +4568,7 @@ index 4b5a702..8e327e5 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS participant_profile (
-@@ -6543,6 +9380,8 @@ PLAN_PROMPT = (
+@@ -6543,6 +9409,8 @@ PLAN_PROMPT = (
  
  
  def _plans_ensure_table(conn):
@@ -4548,7 +4577,7 @@ index 4b5a702..8e327e5 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS participant_plans (
-@@ -6660,6 +9499,8 @@ BRIEFING_PROMPT = (
+@@ -6660,6 +9528,8 @@ BRIEFING_PROMPT = (
  
  
  def _briefings_ensure_table(conn):
@@ -4557,7 +4586,7 @@ index 4b5a702..8e327e5 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS session_briefings (
-@@ -6762,10 +9603,35 @@ def build_briefing() -> str:
+@@ -6762,10 +9632,35 @@ def build_briefing() -> str:
                         "content": "Conversation:\n\n" + "\n\n".join(lines)}],
          )
          parts = [b.text for b in resp.content if getattr(b, "type", "") == "text"]
@@ -4594,7 +4623,7 @@ index 4b5a702..8e327e5 100644
  
  
  def email_briefing(advisor_name, participant, summary) -> bool:
-@@ -6789,14 +9655,22 @@ def email_briefing(advisor_name, participant, summary) -> bool:
+@@ -6789,14 +9684,22 @@ def email_briefing(advisor_name, participant, summary) -> bool:
  # Per-advisor knowledge
  # ---------------------------------------------------------------------------
  # Two tiers. The shared J3P base is the framework every advisor draws on. On
@@ -4620,7 +4649,7 @@ index 4b5a702..8e327e5 100644
      with conn.cursor() as cur:
          cur.execute("""
              CREATE TABLE IF NOT EXISTS document_owner (
-@@ -6852,19 +9726,115 @@ def document_owners() -> dict:
+@@ -6852,19 +9755,115 @@ def document_owners() -> dict:
          conn.close()
  
  
@@ -4743,7 +4772,7 @@ index 4b5a702..8e327e5 100644
              keep.append(r)
      return keep
  
-@@ -7101,33 +10071,74 @@ def retrieve_context(query: str) -> str:
+@@ -7101,32 +10100,73 @@ def retrieve_context(query: str) -> str:
      return context
  
  
@@ -4795,21 +4824,12 @@ index 4b5a702..8e327e5 100644
          clear_history()
      else:
          session["messages"] = []
--    if force_scheduling is None:
--        show = load_settings()["show_scheduling_button"]
--    else:
--        show = bool(force_scheduling)
--        # Remember the choice so a reset or refresh keeps the same experience
--        session["force_scheduling"] = show
--    # A visitor who arrived on a fixed link keeps that variant for the session
--    if force_scheduling is None and "force_scheduling" in session:
--        show = bool(session["force_scheduling"])
- 
-     # Remember which advisor this visitor is with, so a reset keeps the photo
-     if advisor:
-         session["advisor_slug"] = advisor["slug"]
-     active = advisor or get_advisor(session.get("advisor_slug"))
- 
++
++    # Remember which advisor this visitor is with, so a reset keeps the photo
++    if advisor:
++        session["advisor_slug"] = advisor["slug"]
++    active = advisor or get_advisor(session.get("advisor_slug"))
++
 +    def _effective(override_key, settings_key, default=False):
 +        """This advisor's own override if they have one, else the global
 +        Display Settings toggle. None means "no override — inherit"."""
@@ -4819,20 +4839,26 @@ index 4b5a702..8e327e5 100644
 +                return bool(override)
 +        return bool(settings.get(settings_key, default))
 +
-+    if force_scheduling is None:
+     if force_scheduling is None:
+-        show = load_settings()["show_scheduling_button"]
 +        show = _effective("show_scheduling_override", "show_scheduling_button")
-+    else:
-+        show = bool(force_scheduling)
-+        # Remember the choice so a reset or refresh keeps the same experience
-+        session["force_scheduling"] = show
-+    # A visitor who arrived on a fixed link keeps that variant for the session
-+    if force_scheduling is None and "force_scheduling" in session:
+     else:
+         show = bool(force_scheduling)
+         # Remember the choice so a reset or refresh keeps the same experience
+         session["force_scheduling"] = show
+     # A visitor who arrived on a fixed link keeps that variant for the session
+     if force_scheduling is None and "force_scheduling" in session:
+-        show = bool(session["force_scheduling"])
+-
+-    # Remember which advisor this visitor is with, so a reset keeps the photo
+-    if advisor:
+-        session["advisor_slug"] = advisor["slug"]
+-    active = advisor or get_advisor(session.get("advisor_slug"))
 +        show = bool(session["force_scheduling"])
-+
+ 
      page_cfg = dict(CONFIG)
      # A name for the default photo, so the general link can read "Alan
-     # Friedman" rather than the app's own name.
-@@ -7145,7 +10156,7 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7145,7 +10185,7 @@ def _render_chat(force_scheduling=None, advisor=None):
                  person_name, opening).replace(
                  CONFIG["persona_name"], person_name)
  
@@ -4841,7 +4867,7 @@ index 4b5a702..8e327e5 100644
      if default_name and not active:
          name_the_advisor(page_cfg, default_name)
      photo_override = False
-@@ -7153,18 +10164,34 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7153,18 +10193,34 @@ def _render_chat(force_scheduling=None, advisor=None):
          photo_override = True      # their own photo or monogram, not the loop
          page_cfg["avatar_url"] = f"/a/{active['slug']}/photo.jpg"
          page_cfg["persona_name"] = active["name"]
@@ -4852,12 +4878,12 @@ index 4b5a702..8e327e5 100644
 +            page_cfg["footer_cta_url"] = active["scheduling_url"]
 +    elif (settings.get("default_scheduling_url") or "").strip():
 +        page_cfg["footer_cta_url"] = settings["default_scheduling_url"].strip()
- 
--    return render_template_string(
++
 +    if participant_first_name:
 +        page_cfg["opening"] = _personalize_greeting(
 +            page_cfg.get("opening") or "", participant_first_name)
-+
+ 
+-    return render_template_string(
 +    return _cached_render(
          INDEX_HTML,
          cfg=page_cfg,
@@ -4879,7 +4905,7 @@ index 4b5a702..8e327e5 100644
      )
  
  
-@@ -7173,6 +10200,12 @@ def _render_chat(force_scheduling=None, advisor=None):
+@@ -7173,6 +10229,12 @@ def _render_chat(force_scheduling=None, advisor=None):
  @login_required
  def index():
      """Default entry point — follows the admin panel's Display Settings."""
@@ -4892,7 +4918,7 @@ index 4b5a702..8e327e5 100644
      return _render_chat()
  
  
-@@ -7182,6 +10215,7 @@ def index():
+@@ -7182,6 +10244,7 @@ def index():
  def index_with_scheduling():
      """Share this link when you want the booking button shown."""
      session.pop("force_scheduling", None)
@@ -4900,7 +4926,7 @@ index 4b5a702..8e327e5 100644
      return _render_chat(force_scheduling=True)
  
  
-@@ -7269,12 +10303,56 @@ def _advisor_not_found(slug):
+@@ -7269,12 +10332,56 @@ def _advisor_not_found(slug):
              f"</div>"), 404
  
  
@@ -4957,7 +4983,7 @@ index 4b5a702..8e327e5 100644
      return _render_chat(force_scheduling=False)
  
  
-@@ -7306,13 +10384,44 @@ def chat():
+@@ -7306,13 +10413,44 @@ def chat():
  
      if uploaded_file or folder_files:
          user_input = (request.form.get("message") or "").strip()
@@ -5002,7 +5028,7 @@ index 4b5a702..8e327e5 100644
      # Extension-based routing between document vs image
      DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
                  '.csv', '.tsv', '.txt', '.md', '.rtf')
-@@ -7506,7 +10615,7 @@ def chat():
+@@ -7506,7 +10644,7 @@ def chat():
              safety_id = db.log_interaction(
                  user_message=user_input,
                  bot_reply=SAFETY_RESPONSE,
@@ -5011,7 +5037,7 @@ index 4b5a702..8e327e5 100644
                  attachment_info="SAFETY ALERT",
              )
          except Exception as e:
-@@ -7731,7 +10840,16 @@ def chat():
+@@ -7731,7 +10869,16 @@ def chat():
          "13. SAY THE HARD THING. Generic assistants hedge toward the "
          "agreeable. When the person's plan has a real problem, name it plainly "
          "in the first paragraph rather than burying it after praise. It is "
@@ -5029,7 +5055,7 @@ index 4b5a702..8e327e5 100644
      )
  
      scope_guard = (
-@@ -7903,6 +11021,10 @@ def chat():
+@@ -7903,6 +11050,10 @@ def chat():
          f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
      )
  
@@ -5040,7 +5066,7 @@ index 4b5a702..8e327e5 100644
      if context:
          composed_prompt = (
              base_prompt
-@@ -7918,12 +11040,16 @@ def chat():
+@@ -7918,12 +11069,16 @@ def chat():
              + profile_guidance()
              + open_commitments_block()
              + participant_materials_block()
@@ -5057,7 +5083,7 @@ index 4b5a702..8e327e5 100644
          )
  
      try:
-@@ -8207,12 +11333,13 @@ def chat():
+@@ -8207,12 +11362,13 @@ def chat():
          interaction_id = db.log_interaction(
              user_message=user_input,   # raw question, without the inlined document text
              bot_reply=assistant_text,
@@ -5072,7 +5098,7 @@ index 4b5a702..8e327e5 100644
      except Exception as e:
          app.logger.error(f"log_interaction failed: {e}")
  
-@@ -8277,6 +11404,28 @@ def acknowledge_release():
+@@ -8277,6 +11433,28 @@ def acknowledge_release():
      return jsonify({"ok": True, "acknowledged_at": session["release_ack_at"]})
  
  
@@ -5101,7 +5127,7 @@ index 4b5a702..8e327e5 100644
  @app.route("/reset", methods=["POST"])
  @paywall.paywall_required
  def reset():
-@@ -8355,12 +11504,12 @@ def feedback():
+@@ -8355,12 +11533,12 @@ def feedback():
          if interaction_id:
              updated = db.update_feedback_rating(int(interaction_id), rating, comment)
          if not updated:
@@ -5116,7 +5142,7 @@ index 4b5a702..8e327e5 100644
      )
      return jsonify({"ok": True})
  
-@@ -8420,7 +11569,7 @@ def _paywall_base_url():
+@@ -8420,7 +11598,7 @@ def _paywall_base_url():
  
  @app.route("/auth/login", methods=["GET"])
  def auth_login():
@@ -5125,7 +5151,7 @@ index 4b5a702..8e327e5 100644
          paywall.LOGIN_HTML,
          brand=CONFIG["persona_name"],
          notice=request.args.get("notice"),
-@@ -8433,7 +11582,7 @@ def auth_login():
+@@ -8433,7 +11611,7 @@ def auth_login():
  def auth_send_link():
      email = (request.form.get("email") or "").strip().lower()
      if not email or "@" not in email:
@@ -5134,7 +5160,7 @@ index 4b5a702..8e327e5 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="Please enter a valid email address.",
-@@ -8441,7 +11590,7 @@ def auth_send_link():
+@@ -8441,7 +11619,7 @@ def auth_send_link():
              sent=False,
          )
      if not paywall.is_configured():
@@ -5143,7 +5169,7 @@ index 4b5a702..8e327e5 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="Paywall is not fully configured. Contact the administrator.",
-@@ -8451,14 +11600,14 @@ def auth_send_link():
+@@ -8451,14 +11629,14 @@ def auth_send_link():
      magic_url = paywall.make_magic_link(email, _paywall_base_url())
      ok = paywall.send_magic_link_email(email, magic_url)
      if not ok:
@@ -5160,7 +5186,7 @@ index 4b5a702..8e327e5 100644
          paywall.LOGIN_HTML,
          brand=CONFIG["persona_name"],
          notice=f"Sign-in link sent to {email}. Check your inbox (and spam folder).",
-@@ -8472,7 +11621,7 @@ def auth_verify():
+@@ -8472,7 +11650,7 @@ def auth_verify():
      token = request.args.get("token", "")
      email = paywall.verify_magic_link(token)
      if not email:
@@ -5169,7 +5195,7 @@ index 4b5a702..8e327e5 100644
              paywall.LOGIN_HTML,
              brand=CONFIG["persona_name"],
              notice="That sign-in link is invalid or has expired. Please request a new one.",
-@@ -8509,7 +11658,7 @@ def billing_checkout():
+@@ -8509,7 +11687,7 @@ def billing_checkout():
              return "Stripe checkout is not configured. Contact the administrator.", 500
          return redirect(checkout_url)
      # GET — show landing page with a "Continue" button
@@ -5178,7 +5204,7 @@ index 4b5a702..8e327e5 100644
          paywall.CHECKOUT_LANDING_HTML,
          brand=CONFIG["persona_name"],
          email=email,
-@@ -8568,6 +11717,45 @@ def serve_jpg(filename):
+@@ -8568,6 +11746,45 @@ def serve_jpg(filename):
      return send_from_directory(".", f"{filename}.jpg")
  
  
@@ -5224,7 +5250,7 @@ index 4b5a702..8e327e5 100644
  @app.route("/avatar/speak", methods=["POST"])
  @paywall.paywall_required
  def avatar_speak():
-@@ -8614,7 +11802,9 @@ def advisor_placeholder_webm():
+@@ -8614,7 +11831,9 @@ def advisor_placeholder_webm():
  
  
  def materials_enabled() -> bool:
@@ -5235,7 +5261,7 @@ index 4b5a702..8e327e5 100644
  
  
  def scrub_internal_emails(text: str) -> str:
-@@ -8820,8 +12010,23 @@ def advisor_avatar():
+@@ -8820,8 +12039,23 @@ def advisor_avatar():
      """The photo shown beside advisor replies.
  
      An uploaded photo lives in Postgres so it survives redeploys; the bundled
@@ -5260,7 +5286,7 @@ index 4b5a702..8e327e5 100644
      stored = load_avatar()
      if stored:
          data, mime, updated = stored
-@@ -8836,54 +12041,577 @@ def advisor_avatar():
+@@ -8836,54 +12070,577 @@ def advisor_avatar():
      return send_from_directory(".", "advisor_avatar.jpg")
  
  
@@ -5664,12 +5690,7 @@ index 4b5a702..8e327e5 100644
 +        {% if personality %}Retake assessment{% else %}Take assessment{% endif %}
 +      </a>
 +    </div>
- 
--    raw = file.read()
--    if len(raw) > AVATAR_MAX_BYTES:
--        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
--              f"{AVATAR_MAX_BYTES // 1048576} MB.")
--        return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Your self behavioral assessment</h2>
 +      {% if behavioral %}
@@ -5692,9 +5713,10 @@ index 4b5a702..8e327e5 100644
 +      </a>
 +    </div>
  
--    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
--    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
--        flash("Use a JPG, PNG, WEBP or GIF image.")
+-    raw = file.read()
+-    if len(raw) > AVATAR_MAX_BYTES:
+-        flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
+-              f"{AVATAR_MAX_BYTES // 1048576} MB.")
 -        return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Your 360 feedback</h2>
@@ -5725,12 +5747,10 @@ index 4b5a702..8e327e5 100644
 +      {% endif %}
 +    </div>
  
--    data, mime = prepare_avatar(raw)
--    if store_avatar(data, mime):
--        flash("✓ Advisor photo updated. Participants will see it immediately.")
--    else:
--        flash("Could not save the photo — check the database connection.")
--    return redirect(url_for("admin_dashboard"))
+-    ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
+-    if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
+-        flash("Use a JPG, PNG, WEBP or GIF image.")
+-        return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Add a document</h2>
 +      <form method="POST" action="{{ url_for('advisor_portal_upload') }}" enctype="multipart/form-data">
@@ -5742,6 +5762,12 @@ index 4b5a702..8e327e5 100644
 +      </form>
 +    </div>
  
+-    data, mime = prepare_avatar(raw)
+-    if store_avatar(data, mime):
+-        flash("✓ Advisor photo updated. Participants will see it immediately.")
+-    else:
+-        flash("Could not save the photo — check the database connection.")
+-    return redirect(url_for("admin_dashboard"))
 +    <div class="card">
 +      <h2>Add a folder</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -5759,16 +5785,7 @@ index 4b5a702..8e327e5 100644
 +      </form>
 +      <p id="portal-folder-preview" class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; display: none;"></p>
 +    </div>
- 
--@app.route("/admin/avatar/delete", methods=["POST"])
--@admin_required
--def admin_delete_avatar():
--    """Revert to the photo bundled with the app."""
--    if clear_avatar():
--        flash("Reverted to the bundled advisor photo.")
--    else:
--        flash("Could not revert the photo.")
--    return redirect(url_for("admin_dashboard"))
++
 +    <div class="card">
 +      <h2>Add from a URL</h2>
 +      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
@@ -5795,9 +5812,15 @@ index 4b5a702..8e327e5 100644
 +        const SUPPORTED = /\\.(pdf|docx|txt|md)$/i;
 +        if (!folderInput) return;
  
--# ---------------------------------------------------------------------------
--# Admin panel
--# ---------------------------------------------------------------------------
+-@app.route("/admin/avatar/delete", methods=["POST"])
+-@admin_required
+-def admin_delete_avatar():
+-    """Revert to the photo bundled with the app."""
+-    if clear_avatar():
+-        flash("Reverted to the bundled advisor photo.")
+-    else:
+-        flash("Could not revert the photo.")
+-    return redirect(url_for("admin_dashboard"))
 +        folderInput.addEventListener("change", () => {
 +          const all = Array.from(folderInput.files || []);
 +          const supported = all.filter(f => SUPPORTED.test(f.name));
@@ -5816,7 +5839,6 @@ index 4b5a702..8e327e5 100644
 +          preview.style.display = "block";
 +        });
  
--ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 +        form.addEventListener("submit", (e) => {
 +          const supported = Array.from(folderInput.files || []).filter(f => SUPPORTED.test(f.name));
 +          if (supported.length === 0) {
@@ -5829,7 +5851,10 @@ index 4b5a702..8e327e5 100644
 +        });
 +      })();
 +    </script>
-+
+ 
+-# ---------------------------------------------------------------------------
+-# Admin panel
+-# ---------------------------------------------------------------------------
 +    <div class="card">
 +      <h2>Your documents</h2>
 +      {% if documents %}
@@ -5865,7 +5890,8 @@ index 4b5a702..8e327e5 100644
 +    </div>
 +  </div>
 +</body></html>"""
-+
+ 
+-ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 +ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
  <html lang="en"><head>
  <meta charset="UTF-8" />
@@ -5875,7 +5901,7 @@ index 4b5a702..8e327e5 100644
  <link rel="icon" href="{{ cfg.favicon_url }}" />
  <link rel="preconnect" href="https://fonts.googleapis.com">
  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-@@ -8896,74 +12624,253 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
+@@ -8896,74 +12653,253 @@ ADMIN_LOGIN_HTML = """<!DOCTYPE html>
    *, *::before, *::after { box-sizing: border-box; }
    body {
      margin: 0; font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -6091,14 +6117,14 @@ index 4b5a702..8e327e5 100644
 +  }
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-+  }
+   }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
 +    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
 +    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
-   }
++  }
 +  .btn:hover { background: var(--gold); color: var(--navy); }
 +  .btn-secondary {
 +    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
@@ -6184,7 +6210,7 @@ index 4b5a702..8e327e5 100644
  </body></html>"""
  
  LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
-@@ -9036,17 +12943,28 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
+@@ -9036,17 +12972,28 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
  ADMIN_HTML = """<!DOCTYPE html><html><head>
  <title>Admin — {{ cfg.persona_name }}</title>
  <link rel="icon" href="{{ cfg.favicon_url }}" />
@@ -6219,7 +6245,7 @@ index 4b5a702..8e327e5 100644
  /* A wide log scrolls inside its own card rather than the whole page */
  .section { overflow-x: auto; }
  @media (max-width: 900px) { .container { width: 100%; padding: 1.25rem 1rem; } }
-@@ -9089,15 +13007,86 @@ header a:hover { color: var(--gold); }
+@@ -9089,15 +13036,86 @@ header a:hover { color: var(--gold); }
  }
  .confirm-cancel { background: transparent; color: var(--navy); }
  #confirm-go:disabled { opacity: 0.45; cursor: not-allowed; }
@@ -6308,7 +6334,7 @@ index 4b5a702..8e327e5 100644
  .stat-value { font-size: 1.8rem; font-weight: 500; color: var(--navy); }
  .stat-label { font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: #6B7280; }
  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
-@@ -9119,11 +13108,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
+@@ -9119,11 +13137,22 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
  .tag-lesson { background: #2D7D5F; color: #fff; padding: 2px 8px; border-radius: 2px; font-size: 0.65rem;
                margin-left: 0.3rem; letter-spacing: 0.05em; }
  .btn { padding: 0.6rem 1.1rem; background: var(--navy); color: var(--gold); border: 1px solid var(--navy); border-radius: 2px; cursor: pointer; font-size: 0.75rem; letter-spacing: 0.14em; text-transform: uppercase; text-decoration: none; display: inline-block; }
@@ -6332,7 +6358,7 @@ index 4b5a702..8e327e5 100644
  form.upload {
    display: grid;
    /* Columns collapse on their own when there isn't room, so this holds on a
-@@ -9133,8 +13133,13 @@ form.upload {
+@@ -9133,8 +13162,13 @@ form.upload {
    gap: 0.6rem; align-items: center;
  }
  @media (min-width: 860px) {
@@ -6348,14 +6374,10 @@ index 4b5a702..8e327e5 100644
  }
  form.upload > * { min-width: 0; }
  form.upload .btn { width: 100%; justify-content: center; text-align: center; }
-@@ -9168,8 +13173,43 @@ input[type="file"], input[type="text"] {
-   margin: 0 0 0.7rem; font-size: 0.68rem; font-weight: 500;
-   letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
+@@ -9170,6 +13204,41 @@ input[type="file"], input[type="text"] {
  }
--.advisor-link-row { margin-bottom: 0.6rem; }
--.advisor-link-row:last-child { margin-bottom: 0; }
-+.advisor-link-row { margin-bottom: 0.6rem; }
-+.advisor-link-row:last-child { margin-bottom: 0; }
+ .advisor-link-row { margin-bottom: 0.6rem; }
+ .advisor-link-row:last-child { margin-bottom: 0; }
 +
 +/* Collapsible per-advisor sections — same look as .advisor-links, but only
 +   the summary line shows until clicked open, so a profile with several
@@ -6394,7 +6416,7 @@ index 4b5a702..8e327e5 100644
  .advisor-link-label {
    font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
    margin-bottom: 0.15rem;
-@@ -9216,6 +13256,29 @@ input[type="file"], input[type="text"] {
+@@ -9216,6 +13285,29 @@ input[type="file"], input[type="text"] {
  .kb-table th:nth-child(4), .kb-table td:nth-child(4) { width: 8%; }
  .kb-table th:nth-child(5), .kb-table td:nth-child(5) { width: 14%; }
  .kb-table th:nth-child(6), .kb-table td:nth-child(6) { width: 10%; }
@@ -6424,7 +6446,7 @@ index 4b5a702..8e327e5 100644
  .kb-title { font-weight: 500; word-break: break-word; }
  .kb-source {
    font-size: 0.78rem; overflow: hidden; text-overflow: ellipsis;
-@@ -9226,6 +13289,23 @@ input[type="file"], input[type="text"] {
+@@ -9226,6 +13318,23 @@ input[type="file"], input[type="text"] {
    .kb-table { table-layout: auto; }
    .kb-source { white-space: normal; max-width: none; word-break: break-all; }
  }
@@ -6448,7 +6470,7 @@ index 4b5a702..8e327e5 100644
  .truncate { max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
      .expand-btn {
        background: transparent;
-@@ -9279,17 +13359,62 @@ input[type="file"], input[type="text"] {
+@@ -9279,17 +13388,62 @@ input[type="file"], input[type="text"] {
        font-style: italic;
      }
  </style></head><body>
@@ -6520,7 +6542,7 @@ index 4b5a702..8e327e5 100644
    {% with messages = get_flashed_messages() %}
      {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
    {% endwith %}
-@@ -9324,52 +13449,184 @@ input[type="file"], input[type="text"] {
+@@ -9324,52 +13478,184 @@ input[type="file"], input[type="text"] {
      </div>
    </div>
  
@@ -6746,7 +6768,7 @@ index 4b5a702..8e327e5 100644
    <h2 class="group-heading">Advisors</h2>
  
    <div class="section">
-@@ -9380,6 +13637,34 @@ input[type="file"], input[type="text"] {
+@@ -9380,6 +13666,34 @@ input[type="file"], input[type="text"] {
        across all of them.
      </p>
  
@@ -6781,7 +6803,7 @@ index 4b5a702..8e327e5 100644
      <div class="advisor-block">
        <div class="advisor-head">
          <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-@@ -9389,28 +13674,48 @@ input[type="file"], input[type="text"] {
+@@ -9389,28 +13703,48 @@ input[type="file"], input[type="text"] {
          <div style="flex: 1 1 auto; min-width: 0;">
            <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
            <span class="muted" style="font-size: 0.76rem;">
@@ -6841,7 +6863,7 @@ index 4b5a702..8e327e5 100644
          </form>
          {% if avatar_custom %}
          <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-@@ -9419,14 +13724,17 @@ input[type="file"], input[type="text"] {
+@@ -9419,14 +13753,17 @@ input[type="file"], input[type="text"] {
                           border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
          </form>
          {% endif %}
@@ -6861,7 +6883,7 @@ index 4b5a702..8e327e5 100644
          <div class="advisor-link-row">
            <div class="muted advisor-link-label">{{ label }}</div>
            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-@@ -9460,18 +13768,22 @@ input[type="file"], input[type="text"] {
+@@ -9460,18 +13797,22 @@ input[type="file"], input[type="text"] {
          </form>
        </div>
  
@@ -6888,7 +6910,7 @@ index 4b5a702..8e327e5 100644
            <label style="display: flex; align-items: center; gap: 0.4rem;
                          font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
                          margin-top: 0.2rem;">
-@@ -9480,19 +13792,140 @@ input[type="file"], input[type="text"] {
+@@ -9480,19 +13821,157 @@ input[type="file"], input[type="text"] {
                     style="width: 15px; height: 15px; accent-color: var(--navy);" />
              <span class="muted">No photo — show their initials instead</span>
            </label>
@@ -6983,6 +7005,23 @@ index 4b5a702..8e327e5 100644
 +            ⚠ No consent on record for this sample
 +          {% endif %}
 +        </p>
++        {% if not adv.voice_sample.consent_given %}
++        <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
++              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
++                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
++          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.78rem; cursor: pointer;">
++            <input type="checkbox" name="consent" value="1" required style="margin-top: 0.15rem;" />
++            <span>{{ adv.name }} has confirmed I can use this exact recording to
++              create a cloned voice for their sessions.</span>
++          </label>
++          <input type="text" name="consent_note" placeholder="Optional note (e.g. how/when confirmed)"
++                 style="width: 100%; margin-top: 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
++                        border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
++          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">
++            Confirm consent for this recording
++          </button>
++        </form>
++        {% endif %}
 +        <form method="POST" action="{{ url_for('admin_delete_advisor_voice', slug=adv.slug) }}"
 +              onsubmit="return confirm('Remove this voice sample for {{ adv.name }}?');">
 +          <button type="submit" class="btn-danger">Remove sample</button>
@@ -7034,7 +7073,7 @@ index 4b5a702..8e327e5 100644
          <div class="advisor-link-row">
            <div class="muted advisor-link-label">{{ label }}</div>
            <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-@@ -9506,17 +13939,170 @@ input[type="file"], input[type="text"] {
+@@ -9506,17 +13985,170 @@ input[type="file"], input[type="text"] {
            </div>
          </div>
          {% endfor %}
@@ -7213,7 +7252,7 @@ index 4b5a702..8e327e5 100644
          </p>
          {% else %}
          <p class="muted" style="margin: 0; font-size: 0.8rem;">
-@@ -9525,10 +14111,10 @@ input[type="file"], input[type="text"] {
+@@ -9525,10 +14157,10 @@ input[type="file"], input[type="text"] {
            &ldquo;Only {{ adv.name }}&rdquo; when uploading under Knowledge Upload.
          </p>
          {% endif %}
@@ -7227,7 +7266,7 @@ index 4b5a702..8e327e5 100644
          {% if adv.briefings %}
          <table style="font-size: 0.8rem;">
            <tr><th style="width: 22%;">When</th><th>Participant</th>
-@@ -9557,33 +14143,20 @@ input[type="file"], input[type="text"] {
+@@ -9557,33 +14189,20 @@ input[type="file"], input[type="text"] {
            {{ adv.name }}'s links.
          </p>
          {% endif %}
@@ -7266,7 +7305,7 @@ index 4b5a702..8e327e5 100644
    <h2 class="group-heading">Access</h2>
  
    <div class="section">
-@@ -9615,12 +14188,255 @@ input[type="file"], input[type="text"] {
+@@ -9615,12 +14234,255 @@ input[type="file"], input[type="text"] {
          </span>
        </label>
  
@@ -7524,7 +7563,7 @@ index 4b5a702..8e327e5 100644
    <h2 class="group-heading">Feedback</h2>
  
    <div class="section">
-@@ -9783,6 +14599,15 @@ input[type="file"], input[type="text"] {
+@@ -9783,6 +14645,15 @@ input[type="file"], input[type="text"] {
              <option value="up"      {% if log_filter == 'up'      %}selected{% endif %}>Thumbs up only</option>
              <option value="down"    {% if log_filter == 'down'    %}selected{% endif %}>Thumbs down only</option>
            </select>
@@ -7540,7 +7579,7 @@ index 4b5a702..8e327e5 100644
          </form>
          {% if stats.total > 0 %}
          <button type="button" id="export-csv" class="btn"
-@@ -9794,7 +14619,12 @@ input[type="file"], input[type="text"] {
+@@ -9794,7 +14665,12 @@ input[type="file"], input[type="text"] {
      </div>
      <p class="muted" style="font-size: 0.82rem; margin: -0.3rem 0 1rem 0;">
        Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
@@ -7554,7 +7593,7 @@ index 4b5a702..8e327e5 100644
        Tick rows to export or delete just those; with nothing ticked, export includes every record.
      </p>
      {% if feedback_rows %}
-@@ -9817,7 +14647,7 @@ input[type="file"], input[type="text"] {
+@@ -9817,7 +14693,7 @@ input[type="file"], input[type="text"] {
        <table>
          <tr>
            <th style="width: 28px;"></th>
@@ -7563,7 +7602,7 @@ index 4b5a702..8e327e5 100644
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +14676,17 @@ input[type="file"], input[type="text"] {
+@@ -9846,6 +14722,17 @@ input[type="file"], input[type="text"] {
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
@@ -7581,7 +7620,7 @@ index 4b5a702..8e327e5 100644
            <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +14738,27 @@ input[type="file"], input[type="text"] {
+@@ -9897,6 +14784,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7609,7 +7648,7 @@ index 4b5a702..8e327e5 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +14946,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +14992,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7619,7 +7658,7 @@ index 4b5a702..8e327e5 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +14967,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +15013,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7642,7 +7681,7 @@ index 4b5a702..8e327e5 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,8 +15100,12 @@ input[type="file"], input[type="text"] {
+@@ -10250,8 +15146,12 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7655,7 +7694,7 @@ index 4b5a702..8e327e5 100644
  </div>
  
      <script>
-@@ -10458,57 +15312,786 @@ input[type="file"], input[type="text"] {
+@@ -10458,57 +15358,786 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -8319,7 +8358,7 @@ index 4b5a702..8e327e5 100644
 -      })();
 -    </script>
 -</body></html>"""
- 
++
 +@app.route("/advisor-portal/upload-url", methods=["POST"])
 +@advisor_portal_onboarded_required
 +def advisor_portal_upload_url():
@@ -8333,11 +8372,11 @@ index 4b5a702..8e327e5 100644
 +    flash(result["message"])
 +    return redirect(url_for("advisor_portal_view"))
  
+ 
 -@app.route("/admin/login", methods=["GET", "POST"])
 -def admin_login():
 -    if not CONFIG["admin_password"]:
 -        return ("Admin disabled. Set ADMIN_PASSWORD environment variable.", 503)
-+
 +@app.route("/advisor-portal/personality", methods=["GET", "POST"])
 +@advisor_portal_required
 +def advisor_portal_personality():
@@ -8486,7 +8525,7 @@ index 4b5a702..8e327e5 100644
  
  
  @app.route("/admin")
-@@ -10523,19 +16106,59 @@ def admin_dashboard():
+@@ -10523,19 +16152,59 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8550,7 +8589,7 @@ index 4b5a702..8e327e5 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,14 +16168,32 @@ def admin_dashboard():
+@@ -10545,14 +16214,32 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8584,7 +8623,7 @@ index 4b5a702..8e327e5 100644
  def admin_set_rating(feedback_id):
      """Set or clear a rating from the conversation log."""
      value = (request.form.get("rating") or "").strip().lower()
-@@ -10563,7 +16204,7 @@ def admin_set_rating(feedback_id):
+@@ -10563,7 +16250,7 @@ def admin_set_rating(feedback_id):
  
  
  @app.route("/admin/learning/run", methods=["POST"])
@@ -8593,7 +8632,7 @@ index 4b5a702..8e327e5 100644
  def admin_run_learning():
      """Process pending feedback into lessons now."""
      dry = bool(request.form.get("preview"))
-@@ -10587,7 +16228,7 @@ def admin_run_learning():
+@@ -10587,7 +16274,7 @@ def admin_run_learning():
  
  
  @app.route("/admin/learning/archive", methods=["POST"])
@@ -8602,7 +8641,7 @@ index 4b5a702..8e327e5 100644
  def admin_archive_learning():
      """Move the visible run history into the archive. Nothing is deleted."""
      if archive_all_learning_runs():
-@@ -10598,15 +16239,15 @@ def admin_archive_learning():
+@@ -10598,15 +16285,15 @@ def admin_archive_learning():
  
  
  @app.route("/admin/learning/archive", methods=["GET"])
@@ -8621,7 +8660,7 @@ index 4b5a702..8e327e5 100644
  def admin_save_advisor():
      """Create or update an advisor profile."""
      name = (request.form.get("name") or "").strip()[:80]
-@@ -10631,23 +16272,50 @@ def admin_save_advisor():
+@@ -10631,23 +16318,50 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8679,7 +8718,7 @@ index 4b5a702..8e327e5 100644
  def admin_delete_advisor(slug):
      """Remove an advisor profile and its photo."""
      if delete_advisor(slug):
-@@ -10657,8 +16325,361 @@ def admin_delete_advisor(slug):
+@@ -10657,8 +16371,387 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -8755,10 +8794,36 @@ index 4b5a702..8e327e5 100644
 +    mime = file.mimetype or "audio/webm"
 +    filename = file.filename if "." in file.filename else f"{file.filename}.webm"
 +    if save_advisor_voice_sample(slug, filename, mime, raw, consent_given, consent_note):
-+        flash(f"✓ Saved a voice sample for {advisor['name']}. It won't be used for "
-+              f"anything until a voice-synthesis provider is configured.")
++        flash(f"✓ Saved a voice sample for {advisor['name']}. \"Speak\" will use "
++              f"their own cloned voice once ElevenLabs finishes cloning it — "
++              f"check the Voice Sample status here to confirm everything's in place.")
 +    else:
 +        flash("Could not save that voice sample — check the server logs.")
++    return redirect(url_for("admin_dashboard") + "#advisors")
++
++
++@app.route("/admin/advisors/voice/consent/<slug>", methods=["POST"])
++@require_permission("edit_voice")
++def admin_confirm_advisor_voice_consent(slug):
++    """Confirms consent for a sample that already exists — the recording
++    itself is untouched, only the consent flag/note change. Needed
++    because a sample can end up on record without consent (recorded
++    before that was required to save one at all), and the only other way
++    to fix that would be deleting a perfectly good recording and starting
++    over just to check a box."""
++    advisor = get_advisor(slug)
++    if not advisor:
++        flash("That advisor no longer exists.")
++        return redirect(url_for("admin_dashboard") + "#advisors")
++    consent_given = request.form.get("consent") == "1"
++    consent_note = (request.form.get("consent_note") or "").strip()
++    if not consent_given:
++        flash("Check the consent box to confirm — nothing was changed.")
++        return redirect(url_for("admin_dashboard") + "#advisors")
++    if set_advisor_voice_consent(slug, consent_given, consent_note):
++        flash(f"✓ Consent confirmed for {advisor['name']}'s existing voice sample.")
++    else:
++        flash("Could not save that — check the server logs.")
 +    return redirect(url_for("admin_dashboard") + "#advisors")
 +
 +
@@ -9042,7 +9107,7 @@ index 4b5a702..8e327e5 100644
  def admin_settings():
      """Persist the display toggles from the admin panel."""
      # Settings now live in more than one form, so each form declares which
-@@ -10672,21 +16693,14 @@ def admin_settings():
+@@ -10672,21 +16765,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -9066,7 +9131,7 @@ index 4b5a702..8e327e5 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10710,7 +16724,7 @@ def admin_settings():
+@@ -10710,7 +16796,7 @@ def admin_settings():
  
  
  @app.route("/admin/upload", methods=["POST"])
@@ -9075,7 +9140,7 @@ index 4b5a702..8e327e5 100644
  def admin_upload():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot upload: RAG not fully configured.")
-@@ -10762,7 +16776,7 @@ def admin_upload():
+@@ -10762,7 +16848,7 @@ def admin_upload():
  
  
  @app.route("/admin/upload-folder", methods=["POST"])
@@ -9084,7 +9149,7 @@ index 4b5a702..8e327e5 100644
  def admin_upload_folder():
      """Bulk-upload all supported files from a folder in one request.
  
-@@ -10781,22 +16795,34 @@ def admin_upload_folder():
+@@ -10781,22 +16867,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -9125,7 +9190,7 @@ index 4b5a702..8e327e5 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +16835,6 @@ def admin_upload_folder():
+@@ -10809,7 +16907,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -9133,7 +9198,7 @@ index 4b5a702..8e327e5 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +16863,10 @@ def admin_upload_folder():
+@@ -10838,7 +16935,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -9145,7 +9210,7 @@ index 4b5a702..8e327e5 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +16874,12 @@ def admin_upload_folder():
+@@ -10846,14 +16946,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -9160,7 +9225,7 @@ index 4b5a702..8e327e5 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,12 +16887,15 @@ def admin_upload_folder():
+@@ -10861,12 +16959,15 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -9179,7 +9244,7 @@ index 4b5a702..8e327e5 100644
  def admin_upload_text():
      """Paste content straight in — transcripts, show notes, anything a
      JavaScript page won't hand over."""
-@@ -11035,7 +17064,7 @@ def fetch_url_metadata(url: str):
+@@ -11035,7 +17136,7 @@ def fetch_url_metadata(url: str):
  
  
  @app.route("/admin/upload-url", methods=["POST"])
@@ -9188,7 +9253,7 @@ index 4b5a702..8e327e5 100644
  def admin_upload_url():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot ingest URL: RAG not fully configured.")
-@@ -11043,25 +17072,34 @@ def admin_upload_url():
+@@ -11043,25 +17144,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -9230,7 +9295,7 @@ index 4b5a702..8e327e5 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +17120,10 @@ def admin_upload_url():
+@@ -11082,7 +17192,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -9242,7 +9307,7 @@ index 4b5a702..8e327e5 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +17131,7 @@ def admin_upload_url():
+@@ -11090,8 +17203,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9252,7 +9317,7 @@ index 4b5a702..8e327e5 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +17141,14 @@ def admin_upload_url():
+@@ -11101,14 +17213,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9270,7 +9335,7 @@ index 4b5a702..8e327e5 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,36 +17161,36 @@ def admin_upload_url():
+@@ -11121,36 +17233,36 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9324,7 +9389,7 @@ index 4b5a702..8e327e5 100644
  def admin_delete(doc_id):
      try:
          db.delete_document(doc_id)
-@@ -11160,6 +17200,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +17272,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -9409,7 +9474,7 @@ index 4b5a702..8e327e5 100644
  def _fmt_ts(value) -> str:
      """Format a timestamp defensively — drivers don't always return datetimes."""
      if not value:
-@@ -11228,7 +17346,7 @@ def _export_error(kind: str, err: Exception):
+@@ -11228,7 +17418,7 @@ def _export_error(kind: str, err: Exception):
  
  
  @app.route("/admin/export/feedback.csv")
@@ -9418,7 +9483,7 @@ index 4b5a702..8e327e5 100644
  def admin_export_feedback():
      """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
      import csv
-@@ -11281,7 +17399,7 @@ def admin_export_feedback():
+@@ -11281,7 +17471,7 @@ def admin_export_feedback():
  
  
  @app.route("/admin/export/feedback.xlsx")
@@ -9427,7 +9492,7 @@ index 4b5a702..8e327e5 100644
  def admin_export_feedback_xlsx():
      """Stream all feedback as an Excel (.xlsx) download with formatting."""
      from flask import Response
-@@ -11392,7 +17510,7 @@ def admin_export_feedback_xlsx():
+@@ -11392,7 +17582,7 @@ def admin_export_feedback_xlsx():
  
  
  @app.route("/admin/feedback/delete-selected", methods=["POST"])
@@ -9436,7 +9501,7 @@ index 4b5a702..8e327e5 100644
  def admin_delete_selected_feedback():
      """Delete one or more feedback rows by ID (checkboxes from the table)."""
      ids = request.form.getlist("feedback_ids")
-@@ -11409,7 +17527,7 @@ def admin_delete_selected_feedback():
+@@ -11409,7 +17599,7 @@ def admin_delete_selected_feedback():
  
  
  @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -9445,7 +9510,7 @@ index 4b5a702..8e327e5 100644
  def admin_delete_all_feedback():
      """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
      confirm = (request.form.get("confirm") or "").strip()
-@@ -11426,7 +17544,7 @@ def admin_delete_all_feedback():
+@@ -11426,7 +17616,7 @@ def admin_delete_all_feedback():
  
  
  @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -9454,7 +9519,7 @@ index 4b5a702..8e327e5 100644
  def admin_approve_lesson(feedback_id):
      """Approve a thumbs-down feedback row as a learning example.
  
-@@ -11463,7 +17581,7 @@ def admin_approve_lesson(feedback_id):
+@@ -11463,7 +17653,7 @@ def admin_approve_lesson(feedback_id):
  
  
  @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -9463,7 +9528,7 @@ index 4b5a702..8e327e5 100644
  def admin_revoke_lesson(feedback_id):
      """Stop using this feedback as a lesson going forward."""
      try:
-@@ -11477,6 +17595,105 @@ def admin_revoke_lesson(feedback_id):
+@@ -11477,6 +17667,105 @@ def admin_revoke_lesson(feedback_id):
      return redirect(url_for("admin_dashboard"))
  
  

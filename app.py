@@ -8812,6 +8812,35 @@ def set_advisor_voice_provider(slug: str, provider: str, provider_voice_id: str)
         conn.close()
 
 
+def set_advisor_voice_consent(slug: str, consent_given: bool, consent_note: str = "") -> bool:
+    """Updates just the consent flag/note for a sample that already
+    exists — a sample recorded before consent was required to save one
+    at all (or one where the box just wasn't checked) otherwise has no
+    way to become usable short of deleting the recording and starting
+    over. This lets an admin go back and confirm consent for the
+    existing recording directly, without re-recording anything."""
+    if not slug:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE advisor_voice_samples
+                SET consent_given = %s, consent_note = %s
+                WHERE advisor_slug = %s
+            """, (bool(consent_given), (consent_note or "")[:500], slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] consent update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
     """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
     Returns the new voice_id, or raises on any failure — caller decides
@@ -13880,6 +13909,23 @@ input[type="file"], input[type="text"] {
             ⚠ No consent on record for this sample
           {% endif %}
         </p>
+        {% if not adv.voice_sample.consent_given %}
+        <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.78rem; cursor: pointer;">
+            <input type="checkbox" name="consent" value="1" required style="margin-top: 0.15rem;" />
+            <span>{{ adv.name }} has confirmed I can use this exact recording to
+              create a cloned voice for their sessions.</span>
+          </label>
+          <input type="text" name="consent_note" placeholder="Optional note (e.g. how/when confirmed)"
+                 style="width: 100%; margin-top: 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">
+            Confirm consent for this recording
+          </button>
+        </form>
+        {% endif %}
         <form method="POST" action="{{ url_for('admin_delete_advisor_voice', slug=adv.slug) }}"
               onsubmit="return confirm('Remove this voice sample for {{ adv.name }}?');">
           <button type="submit" class="btn-danger">Remove sample</button>
@@ -16397,10 +16443,36 @@ def admin_upload_advisor_voice(slug):
     mime = file.mimetype or "audio/webm"
     filename = file.filename if "." in file.filename else f"{file.filename}.webm"
     if save_advisor_voice_sample(slug, filename, mime, raw, consent_given, consent_note):
-        flash(f"✓ Saved a voice sample for {advisor['name']}. It won't be used for "
-              f"anything until a voice-synthesis provider is configured.")
+        flash(f"✓ Saved a voice sample for {advisor['name']}. \"Speak\" will use "
+              f"their own cloned voice once ElevenLabs finishes cloning it — "
+              f"check the Voice Sample status here to confirm everything's in place.")
     else:
         flash("Could not save that voice sample — check the server logs.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/voice/consent/<slug>", methods=["POST"])
+@require_permission("edit_voice")
+def admin_confirm_advisor_voice_consent(slug):
+    """Confirms consent for a sample that already exists — the recording
+    itself is untouched, only the consent flag/note change. Needed
+    because a sample can end up on record without consent (recorded
+    before that was required to save one at all), and the only other way
+    to fix that would be deleting a perfectly good recording and starting
+    over just to check a box."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    consent_given = request.form.get("consent") == "1"
+    consent_note = (request.form.get("consent_note") or "").strip()
+    if not consent_given:
+        flash("Check the consent box to confirm — nothing was changed.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    if set_advisor_voice_consent(slug, consent_given, consent_note):
+        flash(f"✓ Consent confirmed for {advisor['name']}'s existing voice sample.")
+    else:
+        flash("Could not save that — check the server logs.")
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
