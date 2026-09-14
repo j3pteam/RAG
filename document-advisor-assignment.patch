@@ -1,5 +1,5 @@
 diff --git a/app.py b/app.py
-index 4b5a702..d8e582c 100644
+index 4b5a702..3a4915d 100644
 --- a/app.py
 +++ b/app.py
 @@ -16,6 +16,7 @@ NEW environment variables:
@@ -4912,12 +4912,12 @@ index 4b5a702..d8e582c 100644
 +            page_cfg["footer_cta_url"] = active["scheduling_url"]
 +    elif (settings.get("default_scheduling_url") or "").strip():
 +        page_cfg["footer_cta_url"] = settings["default_scheduling_url"].strip()
- 
--    return render_template_string(
++
 +    if participant_first_name:
 +        page_cfg["opening"] = _personalize_greeting(
 +            page_cfg.get("opening") or "", participant_first_name)
-+
+ 
+-    return render_template_string(
 +    return _cached_render(
          INDEX_HTML,
          cfg=page_cfg,
@@ -6178,14 +6178,14 @@ index 4b5a702..d8e582c 100644
 +  }
 +  .pq-scale input[type="radio"]:checked + span {
 +    background: var(--navy); color: var(--gold); border-color: var(--navy);
-   }
++  }
 +  .pq-scale label:hover span { border-color: var(--gold); }
 +  .actions { display: flex; gap: 0.7rem; margin-top: 1.4rem; flex-wrap: wrap; }
 +  .btn {
 +    padding: 0.7rem 1.3rem; background: var(--navy); color: var(--gold);
 +    border: 1px solid var(--navy); border-radius: 2px; cursor: pointer;
 +    font-size: 0.76rem; letter-spacing: 0.14em; text-transform: uppercase;
-+  }
+   }
 +  .btn:hover { background: var(--gold); color: var(--navy); }
 +  .btn-secondary {
 +    padding: 0.7rem 1.3rem; background: transparent; color: var(--navy);
@@ -7681,29 +7681,61 @@ index 4b5a702..d8e582c 100644
          <tr>
            <th style="width: 28px;"></th>
 -          <th>When</th><th>Rating</th><th>Release</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
-+          <th>When</th><th>Rating</th><th>Release</th><th>Personality</th><th>How to interact</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
++          <th>When</th><th>Rating</th><th>Advisor</th><th>Release</th><th>Personality</th><th>How to interact</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
            <th style="width: 60px;"></th>
          </tr>
          {% for f in feedback_rows %}
-@@ -9846,6 +14775,17 @@ input[type="file"], input[type="text"] {
+@@ -9840,21 +14769,35 @@ input[type="file"], input[type="text"] {
+             </span>
+             {% if f.approved_for_learning %}<br /><span class="tag-lesson">LESSON</span>{% endif %}
+           </td>
++          <td class="muted" style="font-size: 0.78rem; white-space: nowrap;">
++            {{ advisor_names.get(f.persona, "Default") if f.persona else "Default" }}
++          </td>
+           <td style="font-size: 0.78rem; white-space: nowrap;">
+             {% if acks.get(f.id) %}
+               <span class="tag-ack" title="Release accepted {{ acks[f.id] }}">&#10003;</span>
                <span class="muted" style="font-size: 0.7rem;">{{ acks[f.id] }}</span>
              {% else %}<span class="muted" style="font-size: 0.7rem;">—</span>{% endif %}
            </td>
+-          <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
 +          {% set _p_notes = personality_notes.get(f.id) %}
 +          {% set _p_tips = personality_tips.get(f.id) %}
-+          <td class="muted" style="font-size: 0.78rem; max-width: 150px;"
++          <td class="muted" style="font-size: 0.78rem; max-width: 130px;"
 +              title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% endif %}">
 +            {{ personality_summary.get(f.id, '—') }}
 +          </td>
-+          <td class="muted" style="font-size: 0.76rem; max-width: 240px;">
++          <td class="muted" style="font-size: 0.76rem; max-width: 170px;">
 +            {% if _p_tips %}
 +              {% for tip in _p_tips %}{{ tip }}<br />{% endfor %}
 +            {% else %}—{% endif %}
 +          </td>
-           <td class="muted" style="font-size: 0.78rem; max-width: 150px;">
++          <td class="muted" style="font-size: 0.78rem; max-width: 130px;">
              {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
            </td>
-@@ -9897,6 +14837,27 @@ input[type="file"], input[type="text"] {
+-          <td class="truncate" title="{{ f.user_message }}">{{ f.user_message }}</td>
+-          <td class="truncate" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
+-          <td class="truncate" title="{{ f.attachment_info or '' }}" style="max-width: 160px; font-size: 0.78rem;">
++          <td class="truncate" style="max-width: 280px;" title="{{ f.user_message }}">{{ f.user_message }}</td>
++          <td class="truncate" style="max-width: 280px;" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
++          <td class="truncate" title="{{ f.attachment_info or '' }}" style="max-width: 120px; font-size: 0.78rem;">
+             {% if f.attachment_info %}📎 {{ f.attachment_info }}{% else %}<span class="muted">—</span>{% endif %}
+           </td>
+-          <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 240px;">
++          <td class="truncate" title="{{ f.comment or '' }}" style="max-width: 200px;">
+             {% if f.comment %}<strong>{{ f.comment }}</strong>{% else %}<span class="muted">—</span>{% endif %}
+           </td>
+           <td>
+@@ -9864,7 +14807,7 @@ input[type="file"], input[type="text"] {
+           </td>
+         </tr>
+         <tr id="detail-{{ f.id }}" class="feedback-detail" style="display: none;">
+-          <td colspan="10">
++          <td colspan="13">
+             <div class="feedback-detail-meta">
+               Log ID #{{ f.id }} · {{ f.created_at.strftime('%A, %B %d %Y at %I:%M %p') }}
+               · Rating: <strong>
+@@ -9897,6 +14840,27 @@ input[type="file"], input[type="text"] {
                {% endif %}
              </div>
  
@@ -7731,7 +7763,7 @@ index 4b5a702..d8e582c 100644
              {% if f.rating == 'down' and f.comment %}
              <div class="feedback-detail-block" style="margin-top: 1.2rem; padding-top: 1rem; border-top: 1px dashed var(--line);">
                <div class="feedback-detail-label">Learning loop</div>
-@@ -10084,7 +15045,9 @@ input[type="file"], input[type="text"] {
+@@ -10084,7 +15048,9 @@ input[type="file"], input[type="text"] {
      <p class="muted">No feedback yet.</p>
      {% endif %}
    </div>
@@ -7741,7 +7773,7 @@ index 4b5a702..d8e582c 100644
    {% if rag_ready %}
    <h2 class="group-heading">Knowledge Base</h2>
  
-@@ -10103,21 +15066,7 @@ input[type="file"], input[type="text"] {
+@@ -10103,21 +15069,7 @@ input[type="file"], input[type="text"] {
          <th>Uploaded</th><th></th>
        </tr>
        {% for d in docs %}
@@ -7764,7 +7796,7 @@ index 4b5a702..d8e582c 100644
        {% endfor %}
      </table>
      {% else %}
-@@ -10250,8 +15199,12 @@ input[type="file"], input[type="text"] {
+@@ -10250,8 +15202,12 @@ input[type="file"], input[type="text"] {
        <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
      </form>
    </div>
@@ -7777,7 +7809,7 @@ index 4b5a702..d8e582c 100644
  </div>
  
      <script>
-@@ -10458,57 +15411,786 @@ input[type="file"], input[type="text"] {
+@@ -10458,57 +15414,786 @@ input[type="file"], input[type="text"] {
              return;
            }
  
@@ -8608,7 +8640,7 @@ index 4b5a702..d8e582c 100644
  
  
  @app.route("/admin")
-@@ -10523,19 +16205,59 @@ def admin_dashboard():
+@@ -10523,19 +16208,59 @@ def admin_dashboard():
      log_filter = (request.args.get("filter") or "all").lower()
      if log_filter not in ("all", "rated", "up", "down", "unrated"):
          log_filter = "all"
@@ -8672,7 +8704,7 @@ index 4b5a702..d8e582c 100644
          avatar_version=int(datetime.now().timestamp()),
          avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
          learning_runs=recent_learning_runs(),
-@@ -10545,14 +16267,32 @@ def admin_dashboard():
+@@ -10545,14 +16270,32 @@ def admin_dashboard():
          app_version=APP_VERSION,
          locations=locations_for([r.get("id") for r in feedback_rows]),
          acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
@@ -8706,7 +8738,7 @@ index 4b5a702..d8e582c 100644
  def admin_set_rating(feedback_id):
      """Set or clear a rating from the conversation log."""
      value = (request.form.get("rating") or "").strip().lower()
-@@ -10563,7 +16303,7 @@ def admin_set_rating(feedback_id):
+@@ -10563,7 +16306,7 @@ def admin_set_rating(feedback_id):
  
  
  @app.route("/admin/learning/run", methods=["POST"])
@@ -8715,7 +8747,7 @@ index 4b5a702..d8e582c 100644
  def admin_run_learning():
      """Process pending feedback into lessons now."""
      dry = bool(request.form.get("preview"))
-@@ -10587,7 +16327,7 @@ def admin_run_learning():
+@@ -10587,7 +16330,7 @@ def admin_run_learning():
  
  
  @app.route("/admin/learning/archive", methods=["POST"])
@@ -8724,7 +8756,7 @@ index 4b5a702..d8e582c 100644
  def admin_archive_learning():
      """Move the visible run history into the archive. Nothing is deleted."""
      if archive_all_learning_runs():
-@@ -10598,15 +16338,15 @@ def admin_archive_learning():
+@@ -10598,15 +16341,15 @@ def admin_archive_learning():
  
  
  @app.route("/admin/learning/archive", methods=["GET"])
@@ -8743,7 +8775,7 @@ index 4b5a702..d8e582c 100644
  def admin_save_advisor():
      """Create or update an advisor profile."""
      name = (request.form.get("name") or "").strip()[:80]
-@@ -10631,23 +16371,50 @@ def admin_save_advisor():
+@@ -10631,23 +16374,50 @@ def admin_save_advisor():
              return redirect(url_for("admin_dashboard"))
          photo, mime = prepare_avatar(raw)
  
@@ -8801,7 +8833,7 @@ index 4b5a702..d8e582c 100644
  def admin_delete_advisor(slug):
      """Remove an advisor profile and its photo."""
      if delete_advisor(slug):
-@@ -10657,8 +16424,387 @@ def admin_delete_advisor(slug):
+@@ -10657,8 +16427,387 @@ def admin_delete_advisor(slug):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -9190,7 +9222,7 @@ index 4b5a702..d8e582c 100644
  def admin_settings():
      """Persist the display toggles from the admin panel."""
      # Settings now live in more than one form, so each form declares which
-@@ -10672,21 +16818,14 @@ def admin_settings():
+@@ -10672,21 +16821,14 @@ def admin_settings():
      labels = {
          "show_scheduling_button": ("Scheduling button", "shown", "hidden"),
          "show_avatar": ("Advisor avatar", "shown", "hidden"),
@@ -9214,7 +9246,7 @@ index 4b5a702..d8e582c 100644
      for key in managed:
          if key not in _SETTINGS_DEFAULTS:
              continue
-@@ -10710,7 +16849,7 @@ def admin_settings():
+@@ -10710,7 +16852,7 @@ def admin_settings():
  
  
  @app.route("/admin/upload", methods=["POST"])
@@ -9223,7 +9255,7 @@ index 4b5a702..d8e582c 100644
  def admin_upload():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot upload: RAG not fully configured.")
-@@ -10762,7 +16901,7 @@ def admin_upload():
+@@ -10762,7 +16904,7 @@ def admin_upload():
  
  
  @app.route("/admin/upload-folder", methods=["POST"])
@@ -9232,7 +9264,7 @@ index 4b5a702..d8e582c 100644
  def admin_upload_folder():
      """Bulk-upload all supported files from a folder in one request.
  
-@@ -10781,22 +16920,34 @@ def admin_upload_folder():
+@@ -10781,22 +16923,34 @@ def admin_upload_folder():
          flash("No files were selected.")
          return redirect(url_for("admin_dashboard"))
  
@@ -9273,7 +9305,7 @@ index 4b5a702..d8e582c 100644
      uploaded = []       # list of (title, chunk_count, doc_id)
      duplicates = []     # list of (filename, existing_title)
      failed = []         # list of (filename, error)
-@@ -10809,7 +16960,6 @@ def admin_upload_folder():
+@@ -10809,7 +16963,6 @@ def admin_upload_folder():
          display_title = f"{folder_title} — {basename}" if folder_title else basename
  
          try:
@@ -9281,7 +9313,7 @@ index 4b5a702..d8e582c 100644
              dup = db.find_duplicate_document(title=basename, source=basename)
              if dup:
                  duplicates.append((basename, dup["title"]))
-@@ -10838,7 +16988,10 @@ def admin_upload_folder():
+@@ -10838,7 +16991,10 @@ def admin_upload_folder():
              # Title carries the folder label when given; source stays the
              # filename so duplicate detection keeps working on re-upload.
              doc_id = db.insert_document(display_title, basename, pairs)
@@ -9293,7 +9325,7 @@ index 4b5a702..d8e582c 100644
              uploaded.append((display_title, len(chunks), doc_id))
              app.logger.info(f"Folder upload: {basename} → doc #{doc_id}, {len(chunks)} chunks")
  
-@@ -10846,14 +16999,12 @@ def admin_upload_folder():
+@@ -10846,14 +17002,12 @@ def admin_upload_folder():
              app.logger.error(f"Folder upload failed for {basename}: {e}")
              failed.append((basename, str(e)[:100]))
  
@@ -9308,7 +9340,7 @@ index 4b5a702..d8e582c 100644
          detail = "; ".join([f"{n} ({e})" for n, e in failed[:3]])
          parts.append(f"✗ {len(failed)} failed — {detail}" + (" …" if len(failed) > 3 else ""))
      if unsupported_count:
-@@ -10861,12 +17012,15 @@ def admin_upload_folder():
+@@ -10861,12 +17015,15 @@ def admin_upload_folder():
      if over_limit:
          parts.append(f"⚠ {over_limit} additional file(s) exceeded the 50-file batch limit and were not processed — run again to continue")
  
@@ -9327,7 +9359,7 @@ index 4b5a702..d8e582c 100644
  def admin_upload_text():
      """Paste content straight in — transcripts, show notes, anything a
      JavaScript page won't hand over."""
-@@ -11035,7 +17189,7 @@ def fetch_url_metadata(url: str):
+@@ -11035,7 +17192,7 @@ def fetch_url_metadata(url: str):
  
  
  @app.route("/admin/upload-url", methods=["POST"])
@@ -9336,7 +9368,7 @@ index 4b5a702..d8e582c 100644
  def admin_upload_url():
      if not (db.is_enabled() and emb.is_enabled()):
          flash("Cannot ingest URL: RAG not fully configured.")
-@@ -11043,25 +17197,34 @@ def admin_upload_url():
+@@ -11043,25 +17200,34 @@ def admin_upload_url():
  
      url = (request.form.get("url") or "").strip()
      custom_title = (request.form.get("url_title") or "").strip()
@@ -9378,7 +9410,7 @@ index 4b5a702..d8e582c 100644
      if looks_like_feed(url):
          try:
              show, episodes = fetch_podcast_feed(url)
-@@ -11082,7 +17245,10 @@ def admin_upload_url():
+@@ -11082,7 +17248,10 @@ def admin_upload_url():
                          continue
                      vectors = emb.embed_batch(chunks)
                      db.insert_document(ep_title, url, list(zip(chunks, vectors)))
@@ -9390,7 +9422,7 @@ index 4b5a702..d8e582c 100644
                      added += 1
                  except Exception as e:
                      app.logger.error(f"[feed] episode failed: {e}")
-@@ -11090,8 +17256,7 @@ def admin_upload_url():
+@@ -11090,8 +17259,7 @@ def admin_upload_url():
              note += f"“{show['title']}”"
              if skipped:
                  note += f"; {skipped} already in the knowledge base"
@@ -9400,7 +9432,7 @@ index 4b5a702..d8e582c 100644
  
      try:
          extracted_title, text = emb.fetch_url_content(url)
-@@ -11101,14 +17266,14 @@ def admin_upload_url():
+@@ -11101,14 +17269,14 @@ def admin_upload_url():
          # the article title is the same as something already in the KB).
          title_dup = db.find_duplicate_document(title=title)
          if title_dup:
@@ -9418,7 +9450,7 @@ index 4b5a702..d8e582c 100644
          if not text.strip():
              # The page is probably rendered in the browser rather than served
              # as HTML. Its metadata may still hold a usable description.
-@@ -11121,36 +17286,36 @@ def admin_upload_url():
+@@ -11121,36 +17289,36 @@ def admin_upload_url():
              if len(meta_desc) >= 120:
                  text = f"{meta_title}\n\n{meta_desc}" if meta_title else meta_desc
                  title = custom_title or meta_title or title
@@ -9472,7 +9504,7 @@ index 4b5a702..d8e582c 100644
  def admin_delete(doc_id):
      try:
          db.delete_document(doc_id)
-@@ -11160,6 +17325,84 @@ def admin_delete(doc_id):
+@@ -11160,6 +17328,84 @@ def admin_delete(doc_id):
      return redirect(url_for("admin_dashboard"))
  
  
@@ -9557,7 +9589,7 @@ index 4b5a702..d8e582c 100644
  def _fmt_ts(value) -> str:
      """Format a timestamp defensively — drivers don't always return datetimes."""
      if not value:
-@@ -11228,7 +17471,7 @@ def _export_error(kind: str, err: Exception):
+@@ -11228,7 +17474,7 @@ def _export_error(kind: str, err: Exception):
  
  
  @app.route("/admin/export/feedback.csv")
@@ -9566,7 +9598,7 @@ index 4b5a702..d8e582c 100644
  def admin_export_feedback():
      """Stream all feedback as a CSV download. UTF-8 with BOM so Excel renders cleanly."""
      import csv
-@@ -11281,7 +17524,7 @@ def admin_export_feedback():
+@@ -11281,7 +17527,7 @@ def admin_export_feedback():
  
  
  @app.route("/admin/export/feedback.xlsx")
@@ -9575,7 +9607,7 @@ index 4b5a702..d8e582c 100644
  def admin_export_feedback_xlsx():
      """Stream all feedback as an Excel (.xlsx) download with formatting."""
      from flask import Response
-@@ -11392,7 +17635,7 @@ def admin_export_feedback_xlsx():
+@@ -11392,7 +17638,7 @@ def admin_export_feedback_xlsx():
  
  
  @app.route("/admin/feedback/delete-selected", methods=["POST"])
@@ -9584,7 +9616,7 @@ index 4b5a702..d8e582c 100644
  def admin_delete_selected_feedback():
      """Delete one or more feedback rows by ID (checkboxes from the table)."""
      ids = request.form.getlist("feedback_ids")
-@@ -11409,7 +17652,7 @@ def admin_delete_selected_feedback():
+@@ -11409,7 +17655,7 @@ def admin_delete_selected_feedback():
  
  
  @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -9593,7 +9625,7 @@ index 4b5a702..d8e582c 100644
  def admin_delete_all_feedback():
      """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
      confirm = (request.form.get("confirm") or "").strip()
-@@ -11426,7 +17669,7 @@ def admin_delete_all_feedback():
+@@ -11426,7 +17672,7 @@ def admin_delete_all_feedback():
  
  
  @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -9602,7 +9634,7 @@ index 4b5a702..d8e582c 100644
  def admin_approve_lesson(feedback_id):
      """Approve a thumbs-down feedback row as a learning example.
  
-@@ -11463,7 +17706,7 @@ def admin_approve_lesson(feedback_id):
+@@ -11463,7 +17709,7 @@ def admin_approve_lesson(feedback_id):
  
  
  @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -9611,7 +9643,7 @@ index 4b5a702..d8e582c 100644
  def admin_revoke_lesson(feedback_id):
      """Stop using this feedback as a lesson going forward."""
      try:
-@@ -11477,6 +17720,105 @@ def admin_revoke_lesson(feedback_id):
+@@ -11477,6 +17723,105 @@ def admin_revoke_lesson(feedback_id):
      return redirect(url_for("admin_dashboard"))
  
  
