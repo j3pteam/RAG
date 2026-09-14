@@ -13278,7 +13278,7 @@ input[type="file"], input[type="text"] {
 .share-menu button:hover { background: var(--paper); }
 
 /* Knowledge Base table — keeps long source URLs from stretching the row */
-.kb-table { table-layout: fixed; width: 100%; }
+.kb-table { table-layout: fixed; width: 100%; min-width: 680px; }
 .kb-table th:nth-child(1), .kb-table td:nth-child(1) { width: 28%; }
 .kb-table th:nth-child(2), .kb-table td:nth-child(2) { width: 13%; }
 .kb-table th:nth-child(3), .kb-table td:nth-child(3) { width: 25%; }
@@ -13287,11 +13287,24 @@ input[type="file"], input[type="text"] {
 .kb-table th:nth-child(6), .kb-table td:nth-child(6) { width: 10%; }
 /* The base .kb-table column widths above assume exactly 6 columns (the
    documents tables). The users and participant-links tables have more
-   columns than that (7 and 8) and were incorrectly inheriting those same
+   columns than that (7 and 9) and were incorrectly inheriting those same
    percentages, which starved their final Actions column down to almost
    nothing — the stacked buttons there weren't wrapping, they were being
    rendered into a cell only a few percent wide. These two override with
-   widths sized for their own actual column count and content. */
+   widths sized for their own actual column count and content.
+
+   All three variants also carry a min-width now — width: 100% alone
+   means the table always shrinks to fit whatever space the sidebar
+   layout leaves it, with no floor, so on any container narrower than
+   these tables actually need, columns get squeezed below their header
+   text (adjacent header words visibly running together) instead of the
+   table ever ended up wider than its container. .section already has
+   overflow-x: auto for exactly this case — it just never triggered
+   before, since table-layout: fixed + width: 100% with no min-width
+   never lets a table become wider than its container in the first
+   place. min-width gives each table a real floor, so a narrow container
+   now scrolls horizontally instead of silently cramming words together. */
+.kb-table.users-table { min-width: 820px; }
 .kb-table.users-table th:nth-child(1), .kb-table.users-table td:nth-child(1) { width: 12%; }
 .kb-table.users-table th:nth-child(2), .kb-table.users-table td:nth-child(2) { width: 20%; }
 .kb-table.users-table th:nth-child(3), .kb-table.users-table td:nth-child(3) { width: 11%; }
@@ -13299,6 +13312,7 @@ input[type="file"], input[type="text"] {
 .kb-table.users-table th:nth-child(5), .kb-table.users-table td:nth-child(5) { width: 11%; }
 .kb-table.users-table th:nth-child(6), .kb-table.users-table td:nth-child(6) { width: 13%; }
 .kb-table.users-table th:nth-child(7), .kb-table.users-table td:nth-child(7) { width: 24%; }
+.kb-table.plinks-table { min-width: 980px; }
 .kb-table.plinks-table th:nth-child(1), .kb-table.plinks-table td:nth-child(1) { width: 11%; }
 .kb-table.plinks-table th:nth-child(2), .kb-table.plinks-table td:nth-child(2) { width: 7%; }
 .kb-table.plinks-table th:nth-child(3), .kb-table.plinks-table td:nth-child(3) { width: 12%; }
