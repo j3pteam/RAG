@@ -5302,6 +5302,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
               signal: controller.signal,
             });
             clearTimeout(timeoutId);
+            const voiceStatus = resp.headers.get("X-Voice-Status") || "unknown";
+            console.log("[voice] /advisor/speak status:", resp.status, "reason:", voiceStatus);
             if (resp.ok && resp.status === 200) {
               const blob = await resp.blob();
               if (blob.size > 0) {
@@ -5331,6 +5333,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           } catch (e) {
             // Network error, timeout, or a rejected play() — fall through
             // to the browser's own voice below rather than surface this.
+            console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
           }
 
           const ok = J3PSpeech.play(cleanText, {
@@ -8872,9 +8875,16 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
 
 
 def synthesize_advisor_voice(slug: str, text: str):
-    """Returns (audio_bytes, mime) if this advisor has a consented voice
-    sample AND ElevenLabs is configured, else None — every caller treats
-    None as "fall back to the browser's own text-to-speech."
+    """Returns (audio_bytes, mime, reason). audio_bytes/mime are None
+    whenever a cloned voice isn't available for any reason — every
+    caller treats that as "fall back to the browser's own
+    text-to-speech." reason is always a short string explaining why,
+    even on success, specifically so /advisor/speak can hand it back as
+    a response header: this has been reported as "not working" more than
+    once with nothing to actually confirm why (no sample uploaded? no
+    consent? key not set? a real synthesis error?), so guessing further
+    without that visibility isn't worth doing again — checking the
+    browser console after this ships will show the real reason directly.
 
     Wired to ElevenLabs (voice cloning is its core product, and it
     verifies consent for exactly this reason). To activate: sign up at
@@ -8893,25 +8903,28 @@ def synthesize_advisor_voice(slug: str, text: str):
     right.
     """
     meta = get_advisor_voice_meta(slug)
-    if not meta or not meta.get("consent_given"):
-        return None
+    if not meta:
+        return None, None, "no-sample-uploaded"
+    if not meta.get("consent_given"):
+        return None, None, "consent-not-given"
     api_key = os.environ.get("ELEVENLABS_API_KEY", "")
     if not api_key:
-        return None   # not configured yet — expected, safe no-op
+        return None, None, "no-api-key-configured"
     try:
         voice_id = meta.get("provider_voice_id")
         if not voice_id:
             content = get_advisor_voice_content(slug)
             if not content:
-                return None
+                return None, None, "sample-content-missing"
             audio_bytes, mime, filename = content
             voice_id = _elevenlabs_clone_voice(
                 api_key, f"J3P Advisor — {slug}", audio_bytes, mime, filename)
             set_advisor_voice_provider(slug, "elevenlabs", voice_id)
-        return _elevenlabs_text_to_speech(api_key, voice_id, text)
+        audio_bytes, mime = _elevenlabs_text_to_speech(api_key, voice_id, text)
+        return audio_bytes, mime, "ok"
     except Exception as e:
         app.logger.error(f"[advisor-voice] synthesis failed for {slug}: {e}")
-        return None
+        return None, None, f"synthesis-error: {str(e)[:120]}"
 
 
 def personality_style_block() -> str:
@@ -11710,9 +11723,12 @@ def advisor_speak():
     """Returns synthesized audio in this advisor's own cloned voice, when
     one is available — the browser falls back to its own text-to-speech
     (via the existing J3PSpeech module) whenever this doesn't return a
-    200 with an audio body, which covers every "not available yet" case
-    (no ElevenLabs key configured, no consented sample, or a synthesis
-    failure) without the frontend needing to know why.
+    200 with an audio body. An X-Voice-Status header always explains why
+    (no-sample-uploaded, consent-not-given, no-api-key-configured, a
+    synthesis-error detail, or ok) — this was reported as "not working"
+    with no way to tell whether that meant silence, a wrong voice, or a
+    real bug, so the actual reason is now visible in the browser's
+    Network tab on the /advisor/speak request instead of staying a guess.
 
     Advisor resolution matches /chat's own rule: a participant link's own
     assigned advisor is authoritative and never overridden by the
@@ -11722,7 +11738,7 @@ def advisor_speak():
     data = request.get_json(silent=True) or {}
     text = (data.get("text") or "").strip()
     if not text:
-        return Response(status=204)
+        return Response(status=204, headers={"X-Voice-Status": "no-text"})
 
     participant_link_token = session.get("participant_link_token", "")
     if participant_link_token:
@@ -11732,13 +11748,12 @@ def advisor_speak():
         slug = (data.get("advisor_slug") or session.get("advisor_slug") or "")
 
     if not slug:
-        return Response(status=204)
+        return Response(status=204, headers={"X-Voice-Status": "no-advisor-slug"})
 
-    result = synthesize_advisor_voice(slug, text)
-    if not result:
-        return Response(status=204)
-    audio_bytes, mime = result
-    return Response(audio_bytes, mimetype=mime)
+    audio_bytes, mime, reason = synthesize_advisor_voice(slug, text)
+    if not audio_bytes:
+        return Response(status=204, headers={"X-Voice-Status": reason})
+    return Response(audio_bytes, mimetype=mime, headers={"X-Voice-Status": reason})
 
 
 @app.route("/avatar/speak", methods=["POST"])
