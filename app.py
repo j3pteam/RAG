@@ -14105,128 +14105,6 @@ input[type="file"], input[type="text"] {
   </div>
   {% endif %}
 
-  <div class="tab-pane" data-tab="advisors">
-  <h2 class="group-heading">Advisors</h2>
-
-  <div class="section">
-    <h2>Advisor Profiles</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">
-      Each advisor gets their own photo and their own pair of links. Everything
-      else — the knowledge base, the guardrails, the conversation log — is shared
-      across all of them.
-    </p>
-
-    <div style="padding-bottom: 1.1rem; margin-bottom: 1.1rem; border-bottom: 1px dashed var(--line);">
-      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
-        <strong>Add or update an advisor</strong>
-      </p>
-      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
-        Re-using an existing name updates that profile. Leave the photo blank to
-        keep the current one.
-      </p>
-      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
-            style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
-               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)"
-               style="flex: 1 1 200px; min-width: 0; padding: 0.45rem; border: 1px solid var(--line);
-                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-        <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
-               style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
-                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-        <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
-                style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
-        <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
-        <div class="initials-preview-row">
-          <span id="initials-preview-new" class="initials-preview">?</span>
-          <span class="muted">Preview if no photo is used</span>
-        </div>
-        <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
-      </form>
-    </div>
-
-    <div class="advisor-block">
-      <div class="advisor-head">
-        <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
-             onerror="this.style.display='none'"
-             style="width: 48px; height: 48px; border-radius: 50%;
-                    object-fit: cover; border: 1.5px solid var(--gold);" />
-        <div style="flex: 1 1 auto; min-width: 0;">
-          <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
-          <span class="muted" style="font-size: 0.76rem;">
-            Default — used on the main link{% if settings.avatar_no_photo %} · initials, no photo{% elif avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
-          </span>
-        </div>
-      </div>
-
-      <div class="advisor-links">
-        <h3>Photo &amp; Name</h3>
-        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
-              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-          <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
-                 placeholder="{{ cfg.persona_name }}"
-                 oninput="document.getElementById('initials-preview-default').textContent = initialsForPreview(this.value)"
-                 style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-          <input type="file" name="avatar" id="avatar-file-default" accept=".jpg,.jpeg,.png,.webp,.gif"
-                 onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
-                 style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
-                  style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
-          <span class="camera-pending-indicator" id="camera-pending-default" hidden></span>
-          <label style="display: flex; align-items: center; gap: 0.4rem;
-                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
-                        margin-top: 0.2rem;">
-            <input type="checkbox" name="avatar_no_photo" value="1"
-                   {% if settings.avatar_no_photo %}checked{% endif %}
-                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
-            <span class="muted">No photo — show their initials instead</span>
-          </label>
-          <div class="initials-preview-row">
-            <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
-            <span class="muted">Preview if no photo is used</span>
-          </div>
-          <label class="muted" style="display: block; font-size: 0.72rem;
-                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
-                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
-          <input type="url" name="default_scheduling_url"
-                 value="{{ settings.default_scheduling_url or '' }}"
-                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
-                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
-          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
-        </form>
-        {% if avatar_custom %}
-        <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
-          <button type="submit" class="btn"
-                  style="background: transparent; color: var(--rust);
-                         border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
-        </form>
-        {% endif %}
-        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
-          The name appears beneath the photo in their sessions. Leave the
-          file blank to keep the current photo.
-        </p>
-      </div>
-
-      <div class="advisor-links">
-        <h3>Scheduling Links</h3>
-        {% for path, label in [
-            ('/scheduling', 'Booking button always shown'),
-            ('/no-scheduling', 'Booking button always hidden')] %}
-        <div class="advisor-link-row">
-          <div class="muted advisor-link-label">{{ label }}</div>
-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-            <a href="{{ path }}" target="_blank" class="adv-link">{{ base_url }}{{ path }}</a>
-            <button type="button" class="copy-link" data-url="{{ base_url }}{{ path }}">Copy</button>
-            <button type="button" class="share-link" data-url="{{ base_url }}{{ path }}"
-                    data-advisor="{{ settings.avatar_name or cfg.persona_name }}">Share</button>
-          </div>
-        </div>
-        {% endfor %}
-      </div>
-    </div>
-
     {% macro voice_sample_section(t_slug, t_name, t_voice_sample, can_edit_voice) %}
       {% if can_edit_voice %}
       <details class="advisor-section">
@@ -14452,21 +14330,131 @@ input[type="file"], input[type="text"] {
       {% endif %}
     {% endmacro %}
 
-    {% if admin_perms.edit_voice %}
+  <div class="tab-pane" data-tab="advisors">
+  <h2 class="group-heading">Advisors</h2>
+
+  <div class="section">
+    <h2>Advisor Profiles</h2>
+    <p class="muted" style="margin: 0 0 1rem 0;">
+      Each advisor gets their own photo and their own pair of links. Everything
+      else — the knowledge base, the guardrails, the conversation log — is shared
+      across all of them.
+    </p>
+
+    <div style="padding-bottom: 1.1rem; margin-bottom: 1.1rem; border-bottom: 1px dashed var(--line);">
+      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
+        <strong>Add or update an advisor</strong>
+      </p>
+      <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
+        Re-using an existing name updates that profile. Leave the photo blank to
+        keep the current one.
+      </p>
+      <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
+            style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <input type="text" name="name" placeholder="Advisor name (e.g. Jane Smith)" required
+               oninput="document.getElementById('initials-preview-new').textContent = initialsForPreview(this.value)"
+               style="flex: 1 1 200px; min-width: 0; padding: 0.45rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="file" name="photo" id="avatar-file-new" accept=".jpg,.jpeg,.png,.webp,.gif"
+               style="flex: 1 1 220px; min-width: 0; padding: 0.4rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+        <button type="button" class="btn camera-btn" data-target-input="avatar-file-new"
+                style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
+        <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
+        <div class="initials-preview-row">
+          <span id="initials-preview-new" class="initials-preview">?</span>
+          <span class="muted">Preview if no photo is used</span>
+        </div>
+        <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
+      </form>
+    </div>
+
     <div class="advisor-block">
       <div class="advisor-head">
-        <div>
-          <h3 style="margin: 0;">Default Persona</h3>
-          <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.78rem;">
-            Whoever a participant reaches when they aren't assigned to a
-            specific named advisor — this is that voice, separate from any
-            individual advisor's own.
-          </p>
+        <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
+             onerror="this.style.display='none'"
+             style="width: 48px; height: 48px; border-radius: 50%;
+                    object-fit: cover; border: 1.5px solid var(--gold);" />
+        <div style="flex: 1 1 auto; min-width: 0;">
+          <strong style="font-size: 0.98rem;">{{ settings.avatar_name or cfg.persona_name }}</strong><br />
+          <span class="muted" style="font-size: 0.76rem;">
+            Default — used on the main link{% if settings.avatar_no_photo %} · initials, no photo{% elif avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
+          </span>
         </div>
       </div>
-      {{ voice_sample_section(default_persona_slug, cfg.persona_name, default_persona_voice_sample, admin_perms.edit_voice) }}
+
+      <div class="advisor-links">
+        <h3>Photo &amp; Name</h3>
+        <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
+              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
+                 placeholder="{{ cfg.persona_name }}"
+                 oninput="document.getElementById('initials-preview-default').textContent = initialsForPreview(this.value)"
+                 style="flex: 1 1 200px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+          <input type="file" name="avatar" id="avatar-file-default" accept=".jpg,.jpeg,.png,.webp,.gif"
+                 onchange="if (this.files.length) this.form.querySelector('input[name=avatar_no_photo]').checked=false"
+                 style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          <button type="button" class="btn camera-btn" data-target-input="avatar-file-default"
+                  style="white-space: nowrap; flex-shrink: 0; width: auto;">Take Photo</button>
+          <span class="camera-pending-indicator" id="camera-pending-default" hidden></span>
+          <label style="display: flex; align-items: center; gap: 0.4rem;
+                        font-size: 0.78rem; cursor: pointer; flex: 1 1 100%;
+                        margin-top: 0.2rem;">
+            <input type="checkbox" name="avatar_no_photo" value="1"
+                   {% if settings.avatar_no_photo %}checked{% endif %}
+                   style="width: 15px; height: 15px; accent-color: var(--navy);" />
+            <span class="muted">No photo — show their initials instead</span>
+          </label>
+          <div class="initials-preview-row">
+            <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
+            <span class="muted">Preview if no photo is used</span>
+          </div>
+          <label class="muted" style="display: block; font-size: 0.72rem;
+                        flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
+                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
+          <input type="url" name="default_scheduling_url"
+                 value="{{ settings.default_scheduling_url or '' }}"
+                 placeholder="https://calendly.com/... — blank uses the shared J3P link"
+                 style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+          <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
+        </form>
+        {% if avatar_custom %}
+        <form method="POST" action="/admin/avatar/delete" style="margin-top: 0.5rem;">
+          <button type="submit" class="btn"
+                  style="background: transparent; color: var(--rust);
+                         border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
+        </form>
+        {% endif %}
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
+          The name appears beneath the photo in their sessions. Leave the
+          file blank to keep the current photo.
+        </p>
+      </div>
+
+      <div class="advisor-links">
+        <h3>Scheduling Links</h3>
+        {% for path, label in [
+            ('/scheduling', 'Booking button always shown'),
+            ('/no-scheduling', 'Booking button always hidden')] %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">{{ label }}</div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ path }}" target="_blank" class="adv-link">{{ base_url }}{{ path }}</a>
+            <button type="button" class="copy-link" data-url="{{ base_url }}{{ path }}">Copy</button>
+            <button type="button" class="share-link" data-url="{{ base_url }}{{ path }}"
+                    data-advisor="{{ settings.avatar_name or cfg.persona_name }}">Share</button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
+                               default_persona_voice_sample, admin_perms.edit_voice) }}
     </div>
-    {% endif %}
+
 
     {% if advisors %}
     {% for adv in advisors %}
