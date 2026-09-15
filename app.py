@@ -9008,6 +9008,35 @@ def set_advisor_voice_consent(slug: str, consent_given: bool, consent_note: str 
 
 VOICE_MODES = ("auto", "browser_only", "participant_choice")
 
+# Sentinel key for the base/default persona's own voice sample in
+# advisor_voice_samples — that table is keyed by advisor_slug, and the
+# default persona (no specific named advisor assigned) has no row in
+# the advisors table and thus no real slug of its own. Every voice
+# feature — sample upload, consent, mode, tuning — was originally only
+# reachable for named advisors as a result; this sentinel gives the
+# default persona the same table row shape so it gets the exact same
+# features rather than a parallel, simpler implementation. Chosen to be
+# distinct from any real slug (which come from advisor names) and to
+# never collide with an empty string, since "not slug" checks all over
+# this file treat "" as "no advisor" — using "" itself as the sentinel
+# would silently break every one of those checks.
+DEFAULT_PERSONA_SLUG = "__default_persona__"
+
+
+def _resolve_voice_target(slug):
+    """A minimal dict with at least slug/name for anything that can have
+    a voice sample — a real, named advisor, or the sentinel default-
+    persona slot, which has no row in the advisors table at all and so
+    can't be found via get_advisor(). Every admin voice route needs
+    exactly this (to display a name and confirm the target is real)
+    without needing the rest of what a full advisor record carries, so
+    this is shared rather than duplicating the same slug == sentinel
+    check in each one. Returns None only when slug is neither a real
+    advisor nor the sentinel."""
+    if slug == DEFAULT_PERSONA_SLUG:
+        return {"slug": DEFAULT_PERSONA_SLUG, "name": CONFIG["persona_name"]}
+    return get_advisor(slug)
+
 
 def set_advisor_voice_mode(slug: str, mode: str) -> bool:
     """Controls how synthesize_advisor_voice() (and /advisor/speak)
@@ -9247,8 +9276,12 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
             if not content:
                 return None, None, "sample-content-missing"
             audio_bytes, mime, filename = content
+            # A readable label on ElevenLabs' own dashboard, not the raw
+            # slug — the sentinel in particular would be an odd, internal
+            # string to see listed there next to real advisor names.
+            display_name = "Default Persona" if slug == DEFAULT_PERSONA_SLUG else slug
             voice_id = _elevenlabs_clone_voice(
-                api_key, f"J3P Advisor — {slug}", audio_bytes, mime, filename)
+                api_key, f"J3P Advisor — {display_name}", audio_bytes, mime, filename)
             set_advisor_voice_provider(slug, "elevenlabs", voice_id)
         audio_bytes, mime = _elevenlabs_text_to_speech(
             api_key, voice_id, text,
@@ -10543,11 +10576,18 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     # Only "participant_choice" mode needs to reach the frontend — auto
     # and browser_only are both decided entirely server-side, so there's
     # nothing for the page itself to act on for those.
+    #
+    # The default persona (no named advisor active) has its own voice
+    # sample slot under DEFAULT_PERSONA_SLUG, same as any named advisor —
+    # this used to only ever check a named advisor's slug, which meant
+    # the default persona's own voice_mode setting was silently ignored
+    # even when one had been configured for it.
+    _voice_lookup_slug = (active["slug"] if active and active.get("slug")
+                          else DEFAULT_PERSONA_SLUG)
     page_voice_mode = "auto"
-    if active and active.get("slug"):
-        _voice_meta = get_advisor_voice_meta(active["slug"])
-        if _voice_meta:
-            page_voice_mode = _voice_meta.get("voice_mode") or "auto"
+    _voice_meta = get_advisor_voice_meta(_voice_lookup_slug)
+    if _voice_meta:
+        page_voice_mode = _voice_meta.get("voice_mode") or "auto"
 
     return _cached_render(
         INDEX_HTML,
@@ -12168,8 +12208,11 @@ def advisor_speak():
     if not slug:
         slug = (data.get("advisor_slug") or session.get("advisor_slug") or "")
 
-    if not slug:
-        return Response(status=204, headers={"X-Voice-Status": "no-advisor-slug"})
+    # An empty slug here means the base/default persona, not "nobody" —
+    # it has its own voice sample slot under DEFAULT_PERSONA_SLUG, same
+    # as any named advisor, so it deserves the same chance at a cloned
+    # voice rather than being turned away before ever checking.
+    slug = slug or DEFAULT_PERSONA_SLUG
 
     force_browser = (data.get("voice_preference") == "default")
     audio_bytes, mime, reason = synthesize_advisor_voice(slug, text, force_browser=force_browser)
@@ -14184,6 +14227,216 @@ input[type="file"], input[type="text"] {
       </div>
     </div>
 
+    {% macro voice_sample_section(t_slug, t_name, t_voice_sample, can_edit_voice) %}
+      {% if can_edit_voice %}
+      <details class="advisor-section">
+        <summary>Voice Sample</summary>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
+          A recording of {{ t_name }}'s own voice, used to clone a custom
+          voice via ElevenLabs so "Speak" sounds like {{ t_name }} instead
+          of a generic browser voice.
+        </p>
+        <div style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                    padding: 0.6rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.78rem; line-height: 1.7;">
+          <div>{{ "✓" if t_voice_sample else "✗" }} Voice sample uploaded</div>
+          <div>{{ "✓" if t_voice_sample and t_voice_sample.consent_given else "✗" }} Consent given for this sample</div>
+          <div>{{ "✓" if elevenlabs_configured else "✗" }} ElevenLabs API key configured on this server</div>
+          <div>{{ "✓" if t_voice_sample and t_voice_sample.provider_voice_id else "✗" }} Voice successfully cloned (happens automatically on first use, once everything above is ✓)</div>
+          {% if t_voice_sample and t_voice_sample.consent_given and elevenlabs_configured %}
+          <div style="margin-top: 0.4rem; color: #2D7D5F;">
+            <strong>Everything needed is in place</strong> — "Speak" on {{ t_name }}'s
+            sessions will use their own cloned voice.
+          </div>
+          {% else %}
+          <div style="margin-top: 0.4rem; color: var(--rust);">
+            <strong>Not ready yet</strong> — any ✗ above means "Speak" will keep
+            using the plain browser voice for {{ t_name }} until it's resolved.
+          </div>
+          {% endif %}
+        </div>
+        {% if t_voice_sample %}
+        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
+          <strong>{{ t_voice_sample.filename }}</strong>
+          <span class="muted">
+            — {{ "%.1f"|format(t_voice_sample.size_bytes / 1048576) }} MB,
+            uploaded {{ t_voice_sample.uploaded_at.strftime("%Y-%m-%d") if t_voice_sample.uploaded_at else "" }}
+          </span>
+        </p>
+        <audio controls preload="none" style="width: 100%; max-width: 360px; display: block; margin-bottom: 0.6rem;"
+               src="{{ url_for('admin_play_advisor_voice', slug=t_slug) }}"></audio>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.76rem;">
+          {% if t_voice_sample.consent_given %}
+            ✓ Consent confirmed{% if t_voice_sample.consent_note %} — {{ t_voice_sample.consent_note }}{% endif %}
+          {% else %}
+            ⚠ No consent on record for this sample
+          {% endif %}
+        </p>
+        <form method="POST" action="{{ url_for('admin_set_advisor_voice_mode', slug=t_slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: block; margin-bottom: 0.5rem; font-size: 0.64rem; letter-spacing: 0.1em;
+                        text-transform: uppercase; color: var(--muted);">
+            When someone clicks "Speak"
+          </label>
+          {% set _mode = t_voice_sample.voice_mode or "auto" %}
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.5rem;">
+            <input type="radio" name="voice_mode" value="auto" {% if _mode == "auto" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Use {{ t_name }}'s own voice automatically, falling back to the
+              plain browser voice whenever it isn't available (default)</span>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.5rem;">
+            <input type="radio" name="voice_mode" value="browser_only" {% if _mode == "browser_only" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Always use the plain browser voice — turns their cloned voice off
+              without touching this recording or its consent record</span>
+          </label>
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
+            <input type="radio" name="voice_mode" value="participant_choice" {% if _mode == "participant_choice" %}checked{% endif %}
+                   style="margin-top: 0.2rem;" />
+            <span>Let each participant choose, from a control in their own Voice menu</span>
+          </label>
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.6rem;">
+            Save
+          </button>
+        </form>
+        {% if t_voice_sample.provider_voice_id %}
+        <form method="POST" action="{{ url_for('admin_set_advisor_voice_settings', slug=t_slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: block; margin-bottom: 0.6rem; font-size: 0.64rem; letter-spacing: 0.1em;
+                        text-transform: uppercase; color: var(--muted);">
+            How {{ t_name }}'s cloned voice sounds
+          </label>
+          <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.74rem; line-height: 1.5;">
+            These only affect this advisor's voice — there's no way to know the
+            right values without listening, so change one at a time, save, then
+            test a real reply before adjusting further.
+          </p>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Stability</span>
+              <span class="muted">{{ "%.2f"|format(t_voice_sample.voice_stability) }}</span>
+            </label>
+            <input type="range" name="stability" min="0" max="1" step="0.05"
+                   value="{{ t_voice_sample.voice_stability }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              Lower sounds more natural but can wander; higher is more
+              consistent but can sound flat.
+            </p>
+          </div>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Similarity boost</span>
+              <span class="muted">{{ "%.2f"|format(t_voice_sample.voice_similarity_boost) }}</span>
+            </label>
+            <input type="range" name="similarity_boost" min="0" max="1" step="0.05"
+                   value="{{ t_voice_sample.voice_similarity_boost }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              How closely this hews to the original recording — higher can
+              introduce artifacts on some samples.
+            </p>
+          </div>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Style exaggeration</span>
+              <span class="muted">{{ "%.2f"|format(t_voice_sample.voice_style) }}</span>
+            </label>
+            <input type="range" name="style" min="0" max="1" step="0.05"
+                   value="{{ t_voice_sample.voice_style }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              0 is the safest default — raising this can help expressiveness
+              but may sound unnatural past a point.
+            </p>
+          </div>
+          <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.7rem;">
+            <input type="checkbox" name="speaker_boost" value="1"
+                   {% if t_voice_sample.voice_speaker_boost %}checked{% endif %} />
+            <span>Speaker boost (an added clarity pass)</span>
+          </label>
+          <button type="submit" class="btn" style="font-size: 0.64rem;">
+            Save voice tuning
+          </button>
+        </form>
+        {% endif %}
+        {% if not t_voice_sample.consent_given %}
+        <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=t_slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.78rem; cursor: pointer;">
+            <input type="checkbox" name="consent" value="1" required style="margin-top: 0.15rem;" />
+            <span>{{ t_name }} has confirmed I can use this exact recording to
+              create a cloned voice for their sessions.</span>
+          </label>
+          <input type="text" name="consent_note" placeholder="Optional note (e.g. how/when confirmed)"
+                 style="width: 100%; margin-top: 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">
+            Confirm consent for this recording
+          </button>
+        </form>
+        {% endif %}
+        <form method="POST" action="{{ url_for('admin_delete_advisor_voice', slug=t_slug) }}"
+              onsubmit="return confirm('Remove this voice sample for {{ t_name }}?');">
+          <button type="submit" class="btn-danger">Remove sample</button>
+        </form>
+        {% else %}
+        <form method="POST" action="{{ url_for('admin_upload_advisor_voice', slug=t_slug) }}"
+              enctype="multipart/form-data" class="voice-record-form">
+          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
+            <button type="button" class="btn voice-record-btn"
+                    style="background: transparent; color: var(--navy); border-color: var(--navy); font-size: 0.66rem;">
+              Record
+            </button>
+            <span class="voice-record-timer muted" hidden style="font-size: 0.8rem; font-variant-numeric: tabular-nums;">0:00</span>
+            <span class="muted" style="font-size: 0.78rem;">or</span>
+            <input type="file" name="file" accept="audio/*" class="voice-file-input"
+                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+          </div>
+          <div class="voice-preview-row" hidden style="display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap;">
+            <audio controls preload="none" class="voice-preview-player"
+                   style="width: 100%; max-width: 360px; display: block;"></audio>
+            <button type="button" class="btn-danger voice-delete-btn">Delete</button>
+          </div>
+          <label style="display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.78rem; margin: 0.7rem 0 0.5rem;">
+            <input type="checkbox" name="consent" value="1" required
+                   style="width: 15px; height: 15px; margin-top: 0.15rem; accent-color: var(--navy); flex-shrink: 0;" />
+            <span class="muted">
+              I confirm {{ t_name }} has consented to a recording of their
+              voice being stored and, once configured, used to generate a
+              synthetic voice for this app.
+            </span>
+          </label>
+          <input type="text" name="consent_note" placeholder="Optional note — e.g. how or when consent was given"
+                 style="width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.78rem; margin-bottom: 0.6rem;" />
+          <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
+        </form>
+        {% endif %}
+      </details>
+      {% endif %}
+    {% endmacro %}
+
+    {% if admin_perms.edit_voice %}
+    <div class="advisor-block">
+      <div class="advisor-head">
+        <div>
+          <h3 style="margin: 0;">Default Persona</h3>
+          <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.78rem;">
+            Whoever a participant reaches when they aren't assigned to a
+            specific named advisor — this is that voice, separate from any
+            individual advisor's own.
+          </p>
+        </div>
+      </div>
+      {{ voice_sample_section(default_persona_slug, cfg.persona_name, default_persona_voice_sample, admin_perms.edit_voice) }}
+    </div>
+    {% endif %}
+
     {% if advisors %}
     {% for adv in advisors %}
     <div class="advisor-block">
@@ -14273,197 +14526,7 @@ input[type="file"], input[type="text"] {
         </p>
       </details>
 
-      {% if admin_perms.edit_voice %}
-      <details class="advisor-section">
-        <summary>Voice Sample</summary>
-        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
-          A recording of {{ adv.name }}'s own voice, used to clone a custom
-          voice via ElevenLabs so "Speak" sounds like {{ adv.name }} instead
-          of a generic browser voice.
-        </p>
-        <div style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
-                    padding: 0.6rem 0.8rem; margin-bottom: 0.8rem; font-size: 0.78rem; line-height: 1.7;">
-          <div>{{ "✓" if adv.voice_sample else "✗" }} Voice sample uploaded</div>
-          <div>{{ "✓" if adv.voice_sample and adv.voice_sample.consent_given else "✗" }} Consent given for this sample</div>
-          <div>{{ "✓" if elevenlabs_configured else "✗" }} ElevenLabs API key configured on this server</div>
-          <div>{{ "✓" if adv.voice_sample and adv.voice_sample.provider_voice_id else "✗" }} Voice successfully cloned (happens automatically on first use, once everything above is ✓)</div>
-          {% if adv.voice_sample and adv.voice_sample.consent_given and elevenlabs_configured %}
-          <div style="margin-top: 0.4rem; color: #2D7D5F;">
-            <strong>Everything needed is in place</strong> — "Speak" on {{ adv.name }}'s
-            sessions will use their own cloned voice.
-          </div>
-          {% else %}
-          <div style="margin-top: 0.4rem; color: var(--rust);">
-            <strong>Not ready yet</strong> — any ✗ above means "Speak" will keep
-            using the plain browser voice for {{ adv.name }} until it's resolved.
-          </div>
-          {% endif %}
-        </div>
-        {% if adv.voice_sample %}
-        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
-          <strong>{{ adv.voice_sample.filename }}</strong>
-          <span class="muted">
-            — {{ "%.1f"|format(adv.voice_sample.size_bytes / 1048576) }} MB,
-            uploaded {{ adv.voice_sample.uploaded_at.strftime("%Y-%m-%d") if adv.voice_sample.uploaded_at else "" }}
-          </span>
-        </p>
-        <audio controls preload="none" style="width: 100%; max-width: 360px; display: block; margin-bottom: 0.6rem;"
-               src="{{ url_for('admin_play_advisor_voice', slug=adv.slug) }}"></audio>
-        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.76rem;">
-          {% if adv.voice_sample.consent_given %}
-            ✓ Consent confirmed{% if adv.voice_sample.consent_note %} — {{ adv.voice_sample.consent_note }}{% endif %}
-          {% else %}
-            ⚠ No consent on record for this sample
-          {% endif %}
-        </p>
-        <form method="POST" action="{{ url_for('admin_set_advisor_voice_mode', slug=adv.slug) }}"
-              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
-                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
-          <label style="display: block; margin-bottom: 0.5rem; font-size: 0.64rem; letter-spacing: 0.1em;
-                        text-transform: uppercase; color: var(--muted);">
-            When someone clicks "Speak"
-          </label>
-          {% set _mode = adv.voice_sample.voice_mode or "auto" %}
-          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
-                        cursor: pointer; margin-bottom: 0.5rem;">
-            <input type="radio" name="voice_mode" value="auto" {% if _mode == "auto" %}checked{% endif %}
-                   style="margin-top: 0.2rem;" />
-            <span>Use {{ adv.name }}'s own voice automatically, falling back to the
-              plain browser voice whenever it isn't available (default)</span>
-          </label>
-          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem;
-                        cursor: pointer; margin-bottom: 0.5rem;">
-            <input type="radio" name="voice_mode" value="browser_only" {% if _mode == "browser_only" %}checked{% endif %}
-                   style="margin-top: 0.2rem;" />
-            <span>Always use the plain browser voice — turns their cloned voice off
-              without touching this recording or its consent record</span>
-          </label>
-          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.8rem; cursor: pointer;">
-            <input type="radio" name="voice_mode" value="participant_choice" {% if _mode == "participant_choice" %}checked{% endif %}
-                   style="margin-top: 0.2rem;" />
-            <span>Let each participant choose, from a control in their own Voice menu</span>
-          </label>
-          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.6rem;">
-            Save
-          </button>
-        </form>
-        {% if adv.voice_sample.provider_voice_id %}
-        <form method="POST" action="{{ url_for('admin_set_advisor_voice_settings', slug=adv.slug) }}"
-              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
-                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
-          <label style="display: block; margin-bottom: 0.6rem; font-size: 0.64rem; letter-spacing: 0.1em;
-                        text-transform: uppercase; color: var(--muted);">
-            How {{ adv.name }}'s cloned voice sounds
-          </label>
-          <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.74rem; line-height: 1.5;">
-            These only affect this advisor's voice — there's no way to know the
-            right values without listening, so change one at a time, save, then
-            test a real reply before adjusting further.
-          </p>
-          <div style="margin-bottom: 0.6rem;">
-            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
-              <span>Stability</span>
-              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_stability) }}</span>
-            </label>
-            <input type="range" name="stability" min="0" max="1" step="0.05"
-                   value="{{ adv.voice_sample.voice_stability }}" style="width: 100%;" />
-            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
-              Lower sounds more natural but can wander; higher is more
-              consistent but can sound flat.
-            </p>
-          </div>
-          <div style="margin-bottom: 0.6rem;">
-            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
-              <span>Similarity boost</span>
-              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_similarity_boost) }}</span>
-            </label>
-            <input type="range" name="similarity_boost" min="0" max="1" step="0.05"
-                   value="{{ adv.voice_sample.voice_similarity_boost }}" style="width: 100%;" />
-            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
-              How closely this hews to the original recording — higher can
-              introduce artifacts on some samples.
-            </p>
-          </div>
-          <div style="margin-bottom: 0.6rem;">
-            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
-              <span>Style exaggeration</span>
-              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_style) }}</span>
-            </label>
-            <input type="range" name="style" min="0" max="1" step="0.05"
-                   value="{{ adv.voice_sample.voice_style }}" style="width: 100%;" />
-            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
-              0 is the safest default — raising this can help expressiveness
-              but may sound unnatural past a point.
-            </p>
-          </div>
-          <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;
-                        cursor: pointer; margin-bottom: 0.7rem;">
-            <input type="checkbox" name="speaker_boost" value="1"
-                   {% if adv.voice_sample.voice_speaker_boost %}checked{% endif %} />
-            <span>Speaker boost (an added clarity pass)</span>
-          </label>
-          <button type="submit" class="btn" style="font-size: 0.64rem;">
-            Save voice tuning
-          </button>
-        </form>
-        {% endif %}
-        {% if not adv.voice_sample.consent_given %}
-        <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
-              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
-                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
-          <label style="display: flex; align-items: flex-start; gap: 0.5rem; font-size: 0.78rem; cursor: pointer;">
-            <input type="checkbox" name="consent" value="1" required style="margin-top: 0.15rem;" />
-            <span>{{ adv.name }} has confirmed I can use this exact recording to
-              create a cloned voice for their sessions.</span>
-          </label>
-          <input type="text" name="consent_note" placeholder="Optional note (e.g. how/when confirmed)"
-                 style="width: 100%; margin-top: 0.5rem; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
-          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">
-            Confirm consent for this recording
-          </button>
-        </form>
-        {% endif %}
-        <form method="POST" action="{{ url_for('admin_delete_advisor_voice', slug=adv.slug) }}"
-              onsubmit="return confirm('Remove this voice sample for {{ adv.name }}?');">
-          <button type="submit" class="btn-danger">Remove sample</button>
-        </form>
-        {% else %}
-        <form method="POST" action="{{ url_for('admin_upload_advisor_voice', slug=adv.slug) }}"
-              enctype="multipart/form-data" class="voice-record-form">
-          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
-            <button type="button" class="btn voice-record-btn"
-                    style="background: transparent; color: var(--navy); border-color: var(--navy); font-size: 0.66rem;">
-              Record
-            </button>
-            <span class="voice-record-timer muted" hidden style="font-size: 0.8rem; font-variant-numeric: tabular-nums;">0:00</span>
-            <span class="muted" style="font-size: 0.78rem;">or</span>
-            <input type="file" name="file" accept="audio/*" class="voice-file-input"
-                   style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-          </div>
-          <div class="voice-preview-row" hidden style="display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap;">
-            <audio controls preload="none" class="voice-preview-player"
-                   style="width: 100%; max-width: 360px; display: block;"></audio>
-            <button type="button" class="btn-danger voice-delete-btn">Delete</button>
-          </div>
-          <label style="display: flex; align-items: flex-start; gap: 0.45rem; font-size: 0.78rem; margin: 0.7rem 0 0.5rem;">
-            <input type="checkbox" name="consent" value="1" required
-                   style="width: 15px; height: 15px; margin-top: 0.15rem; accent-color: var(--navy); flex-shrink: 0;" />
-            <span class="muted">
-              I confirm {{ adv.name }} has consented to a recording of their
-              voice being stored and, once configured, used to generate a
-              synthetic voice for this app.
-            </span>
-          </label>
-          <input type="text" name="consent_note" placeholder="Optional note — e.g. how or when consent was given"
-                 style="width: 100%; padding: 0.4rem 0.6rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.78rem; margin-bottom: 0.6rem;" />
-          <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
-        </form>
-        {% endif %}
-      </details>
-      {% endif %}
+      {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -16695,6 +16758,8 @@ def admin_dashboard():
         mail_ready=mail_transport_configured(),
         avatar_custom=bool(load_avatar()),
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
+        default_persona_voice_sample=get_advisor_voice_meta(DEFAULT_PERSONA_SLUG),
+        default_persona_slug=DEFAULT_PERSONA_SLUG,
         advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
         owners=document_owners(),
         advisor_map=_advisor_map,
@@ -16917,7 +16982,7 @@ def admin_upload_advisor_voice(slug):
     Requires the consent checkbox; without it, nothing is saved, since a
     sample without on-record consent shouldn't exist at all, let alone
     ever reach a future voice-cloning call."""
-    advisor = get_advisor(slug)
+    advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
         return redirect(url_for("admin_dashboard") + "#advisors")
@@ -16961,7 +17026,7 @@ def admin_confirm_advisor_voice_consent(slug):
     before that was required to save one at all), and the only other way
     to fix that would be deleting a perfectly good recording and starting
     over just to check a box."""
-    advisor = get_advisor(slug)
+    advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
         return redirect(url_for("admin_dashboard") + "#advisors")
@@ -16985,7 +17050,7 @@ def admin_set_advisor_voice_mode(slug):
     specifically instead of leaving it to automatic fallback logic
     alone. See set_advisor_voice_mode for what each option actually
     does."""
-    advisor = get_advisor(slug)
+    advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
         return redirect(url_for("admin_dashboard") + "#advisors")
@@ -17006,7 +17071,7 @@ def admin_set_advisor_voice_settings(slug):
     """Saves how this advisor's cloned voice actually sounds — stability,
     similarity boost, style, and speaker boost. See
     set_advisor_voice_settings for what each one does."""
-    advisor = get_advisor(slug)
+    advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
         return redirect(url_for("admin_dashboard") + "#advisors")
