@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-15-c"
-APP_BUILD_NOTES = "participant page load timed; advisor photo now cacheable"
+APP_VERSION = "2026-09-15-d"
+APP_BUILD_NOTES = "admin per-advisor query fan-out replaced with bulk reads"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6965,6 +6965,28 @@ def load_avatar():
         conn.close()
 
 
+def avatar_exists() -> bool:
+    """Whether a photo has been uploaded — without reading it back.
+
+    The admin dashboard only needs a yes/no here, but was calling
+    load_avatar(), which pulls the whole JPEG out of Postgres and across the
+    network on every page load purely to test it for truthiness.
+    """
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _avatar_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM advisor_avatar WHERE id = 1")
+            return cur.fetchone() is not None
+    except Exception as e:
+        app.logger.error(f"[avatar] existence check failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def clear_avatar() -> bool:
     conn = _settings_db_conn()
     if not conn:
@@ -7137,7 +7159,165 @@ def slugify_advisor(name: str) -> str:
     return base[:40] or "advisor"
 
 
-def advisors_with_detail(advisor_rows=None, doc_map=None):
+# ---------------------------------------------------------------------------
+# Bulk advisor reads
+# ---------------------------------------------------------------------------
+# The admin dashboard used to ask five separate questions per advisor —
+# personality, behavioral, 360, voice sample, briefings — so the number of
+# round trips grew with the number of advisors. Each of these answers the
+# same question for every advisor in one query instead. The 360 and voice
+# reads deliberately omit their content/BYTEA columns; only metadata is
+# shown on the dashboard, and the files can be large.
+
+
+def advisor_personality_map() -> dict:
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_personality_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, openness, conscientiousness, extraversion,
+                       agreeableness, stability, completed_at
+                FROM advisor_personality
+            """)
+            for row in cur.fetchall():
+                scores = {k: v for k, v in zip(_PERSONALITY_TRAITS, row[1:6])
+                          if v is not None}
+                if scores:
+                    out[row[0]] = {"scores": scores, "completed_at": row[6]}
+    except Exception as e:
+        app.logger.error(f"[advisor-personality] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_behavioral_map() -> dict:
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_behavioral_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT advisor_slug, scores_json, completed_at "
+                        "FROM advisor_behavioral")
+            for slug, scores_json, completed_at in cur.fetchall():
+                try:
+                    scores = _json.loads(scores_json)
+                except (TypeError, ValueError):
+                    continue
+                if scores:
+                    out[slug] = {"scores": scores, "completed_at": completed_at}
+    except Exception as e:
+        app.logger.error(f"[advisor-behavioral] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_360_meta_map() -> dict:
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, id, filename, size_bytes, uploaded_at
+                FROM advisor_360_feedback
+            """)
+            for slug, fid, filename, size_bytes, uploaded_at in cur.fetchall():
+                out[slug] = {"id": fid, "filename": filename,
+                             "size_bytes": size_bytes or 0,
+                             "uploaded_at": uploaded_at}
+    except Exception as e:
+        app.logger.error(f"[advisor-360] bulk meta read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_voice_meta_map() -> dict:
+    """Same shape as get_advisor_voice_meta, for every advisor at once —
+    including the default persona, which lives under its sentinel slug."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, filename, size_bytes, consent_given,
+                       consent_note, provider, provider_voice_id, voice_mode,
+                       voice_stability, voice_similarity_boost, voice_style,
+                       voice_speaker_boost, voice_speed, uploaded_at
+                FROM advisor_voice_samples
+            """)
+            for r in cur.fetchall():
+                out[r[0]] = {
+                    "filename": r[1], "size_bytes": r[2] or 0,
+                    "consent_given": bool(r[3]), "consent_note": r[4] or "",
+                    "provider": r[5] or "", "provider_voice_id": r[6] or "",
+                    "voice_mode": r[7] or "auto",
+                    "voice_stability": r[8] if r[8] is not None else 0.5,
+                    "voice_similarity_boost": r[9] if r[9] is not None else 0.75,
+                    "voice_style": r[10] if r[10] is not None else 0.0,
+                    "voice_speaker_boost": bool(r[11]) if r[11] is not None else True,
+                    "voice_speed": r[12] if r[12] is not None else 1.0,
+                    "uploaded_at": r[13],
+                }
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] bulk meta read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def briefings_by_advisor(limit_per=10) -> dict:
+    """The most recent briefings for every named advisor, in one query."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _briefings_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, advisor_name, participant, summary,
+                       emailed, created_at
+                FROM (
+                    SELECT advisor_slug, advisor_name, participant, summary,
+                           emailed, created_at,
+                           ROW_NUMBER() OVER (PARTITION BY advisor_slug
+                                              ORDER BY id DESC) AS rn
+                    FROM session_briefings
+                    WHERE advisor_slug IS NOT NULL AND advisor_slug <> ''
+                ) ranked
+                WHERE rn <= %s
+                ORDER BY advisor_slug, rn
+            """, (limit_per,))
+            for slug, name, participant, summary, emailed, created_at in cur.fetchall():
+                out.setdefault(slug, []).append({
+                    "advisor": name or "\u2014", "participant": participant or "\u2014",
+                    "summary": summary, "emailed": bool(emailed),
+                    "when": _fmt_ts(created_at),
+                })
+    except Exception as e:
+        app.logger.error(f"[briefing] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisors_with_detail(advisor_rows=None, doc_map=None, personality_map=None,
+                          behavioral_map=None, meta_360_map=None,
+                          voice_map=None, briefings_map=None):
     """Advisor profiles plus their own briefings, for the admin panel.
 
     advisor_rows and doc_map let a caller that's already fetched
@@ -7150,15 +7330,28 @@ def advisors_with_detail(advisor_rows=None, doc_map=None):
         doc_map = document_advisor_map()
     if advisor_rows is None:
         advisor_rows = list_advisors()
+    # Each of these is one query for every advisor rather than one per
+    # advisor. A caller that has already fetched them passes them in; the
+    # fallbacks keep this function usable on its own.
+    if personality_map is None:
+        personality_map = advisor_personality_map()
+    if behavioral_map is None:
+        behavioral_map = advisor_behavioral_map()
+    if meta_360_map is None:
+        meta_360_map = advisor_360_meta_map()
+    if voice_map is None:
+        voice_map = advisor_voice_meta_map()
+    if briefings_map is None:
+        briefings_map = briefings_by_advisor(limit_per=10)
     for adv in advisor_rows:
         adv = dict(adv)
-        adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
+        adv["briefings"] = briefings_map.get(adv["slug"], [])
         adv["documents"] = [t for t, slugs in doc_map.items()
                             if adv["slug"] in slugs]
-        adv["personality"] = get_advisor_personality(adv["slug"])
-        adv["behavioral"] = get_advisor_behavioral(adv["slug"])
-        adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
-        adv["voice_sample"] = get_advisor_voice_meta(adv["slug"])
+        adv["personality"] = personality_map.get(adv["slug"]) or {}
+        adv["behavioral"] = behavioral_map.get(adv["slug"]) or {}
+        adv["feedback_360"] = meta_360_map.get(adv["slug"])
+        adv["voice_sample"] = voice_map.get(adv["slug"])
         adv["suggested_bio"] = (
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
             if adv["personality"] else ""
@@ -16951,6 +17144,7 @@ def advisor_portal_logout():
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
+    _phase_start("/admin")
     db_ok = db.is_enabled()
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
@@ -16988,6 +17182,7 @@ def admin_dashboard():
         persona=(log_persona or None),
     ) if db_ok else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
+    _phase_mark("documents + conversation log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
     _advisor_map = document_advisor_map()
     _advisor_rows = list_advisors()
@@ -17002,16 +17197,38 @@ def admin_dashboard():
     _links_by_advisor = {}
     for _l in _participant_links:
         _links_by_advisor.setdefault(_l["advisor_slug"] or "", []).append(_l)
-    return _cached_render(
+    _phase_mark("advisors + links")
+
+    # Five queries total, rather than five per advisor.
+    _personality_map = advisor_personality_map()
+    _behavioral_map = advisor_behavioral_map()
+    _meta_360_map = advisor_360_meta_map()
+    _voice_map = advisor_voice_meta_map()
+    _briefings_map = briefings_by_advisor(limit_per=10)
+    _phase_mark("advisor detail (5 bulk reads)")
+
+    # Sections a viewer never sees should not cost a query to build. Each of
+    # these is gated on the same permission the template gates the markup on.
+    _perms = ROLE_PERMISSIONS.get(current_admin_role(), {})
+    _biometric_files = list_biometric_files() if _perms.get("edit_biometric") else []
+    _admin_users = list_admin_users() if _perms.get("manage_admins") else []
+    _learning_runs = recent_learning_runs() if _perms.get("edit_learning") else []
+    _archived_runs = archived_run_count() if _perms.get("edit_learning") else 0
+    _phase_mark("permission-gated sections")
+
+    html = _cached_render(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
-        avatar_custom=bool(load_avatar()),
+        avatar_custom=avatar_exists(),
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
-        default_persona_voice_sample=get_advisor_voice_meta(DEFAULT_PERSONA_SLUG),
+        default_persona_voice_sample=_voice_map.get(DEFAULT_PERSONA_SLUG),
         default_persona_slug=DEFAULT_PERSONA_SLUG,
-        advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
-        owners=document_owners(),
+        advisors=advisors_with_detail(
+            advisor_rows=_advisor_rows, doc_map=_advisor_map,
+            personality_map=_personality_map, behavioral_map=_behavioral_map,
+            meta_360_map=_meta_360_map, voice_map=_voice_map,
+            briefings_map=_briefings_map),
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
@@ -17022,12 +17239,12 @@ def admin_dashboard():
         participant_links=_participant_links,
         participant_links_by_advisor=_links_by_advisor,
         default_persona_export_slug=DEFAULT_PERSONA_EXPORT_SLUG,
-        biometric_files=list_biometric_files(),
+        biometric_files=_biometric_files,
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
-        learning_runs=recent_learning_runs(),
+        learning_runs=_learning_runs,
         briefings=list_briefings(unassigned_only=True),
-        archived_runs=archived_run_count(),
+        archived_runs=_archived_runs,
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
@@ -17051,9 +17268,13 @@ def admin_dashboard():
         log_persona=log_persona,
         log_limit=log_limit,
         admin_identity=current_admin_identity(),
-        admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
-        admin_users=list_admin_users(),
+        admin_perms=_perms,
+        admin_users=_admin_users,
     )
+    _phase_mark("template render")
+    if FIRST_REQUEST_BOOT_MS is not None:
+        _phase_mark(f"[cold start on an earlier request: {FIRST_REQUEST_BOOT_MS:.0f}ms]")
+    return html + _phase_finish()
 
 
 @app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
