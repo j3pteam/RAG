@@ -10659,7 +10659,15 @@ def chat():
     # The one case NOT trusted from the client: a participant link. That
     # link's own assigned advisor is the only authoritative source there,
     # since the link exists to fix who someone reaches, not let a crafted
-    # request pick a different one.
+    # request pick a different one — but only while the token still
+    # actually resolves to something. A token that no longer resolves (the
+    # link was deleted, not merely disabled, sometime after it was issued)
+    # has nothing left to be authoritative about, and treating it as if it
+    # still did would mean this session can never respond as any advisor
+    # again — including the one the very page it's on actually rendered —
+    # until cookies are cleared. So a dead token gets discarded here
+    # rather than remembered, falling through to the same client-hint
+    # handling used when there was never a participant link at all.
     participant_link_token = session.get("participant_link_token", "")
     if participant_link_token:
         link = get_participant_link(participant_link_token)
@@ -10667,7 +10675,15 @@ def chat():
         if linked_slug:
             session["advisor_slug"] = linked_slug
         else:
+            # Dead token — stop trusting it, and fall through to treat
+            # this request the same as if there had never been one.
+            session.pop("participant_link_token", None)
             session.pop("advisor_slug", None)
+            if advisor_slug_hint is not None:
+                if advisor_slug_hint and get_advisor(advisor_slug_hint):
+                    session["advisor_slug"] = advisor_slug_hint
+                else:
+                    session.pop("advisor_slug", None)
     elif advisor_slug_hint is not None:
         if advisor_slug_hint and get_advisor(advisor_slug_hint):
             session["advisor_slug"] = advisor_slug_hint
@@ -11996,8 +12012,14 @@ def advisor_speak():
     Advisor resolution matches /chat's own rule: a participant link's own
     assigned advisor is authoritative and never overridden by the
     client, since that link exists specifically to fix who someone
-    reaches. Outside a participant link, the page's own advisor_slug
-    (sent by the client, same as /chat) is trusted, same as elsewhere.
+    reaches — but only while the token still actually resolves to
+    something. A deleted link's token gets discarded from the session
+    rather than trusted forever after, the same fix applied to /chat for
+    the identical gap: this exact scenario (a stale token from an
+    earlier participant-link visit silently overriding a completely
+    different, valid advisor page later in the same browser session) is
+    what "no-advisor-slug" turned out to mean the one time this was
+    actually pinned down with the X-Voice-Status header.
 
     voice_preference (optional, only meaningful when the advisor is set
     to "participant_choice" mode): "default" skips the cloned voice for
@@ -12010,10 +12032,18 @@ def advisor_speak():
         return Response(status=204, headers={"X-Voice-Status": "no-text"})
 
     participant_link_token = session.get("participant_link_token", "")
+    slug = ""
     if participant_link_token:
         link = get_participant_link(participant_link_token)
-        slug = (link["advisor_slug"] if link else "") or ""
-    else:
+        linked_slug = (link["advisor_slug"] if link else "") or ""
+        if linked_slug:
+            slug = linked_slug
+        else:
+            # Dead token — stop trusting it for the rest of this
+            # session, and fall through to the client-hint below exactly
+            # as if there had never been a participant link involved.
+            session.pop("participant_link_token", None)
+    if not slug:
         slug = (data.get("advisor_slug") or session.get("advisor_slug") or "")
 
     if not slug:
