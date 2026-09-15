@@ -89,8 +89,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-04-b"
-APP_BUILD_NOTES = "each advisor card lists their own knowledge"
+APP_VERSION = "2026-09-15-a"
+APP_BUILD_NOTES = "participant links live inside each advisor card"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7779,7 +7779,8 @@ def _parse_participant_bulk_file(file_bytes: bytes, filename: str) -> list:
     return out
 
 
-def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") -> dict:
+def bulk_create_participant_links(rows: list, default_advisor_slug: str = "",
+                                   lock_advisor: bool = False) -> dict:
     """Creates one participant link per parsed row. A row's own "advisor"
     value (matched case-insensitively against an advisor's name or slug)
     overrides default_advisor_slug for that row only; blank or
@@ -7796,11 +7797,17 @@ def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") ->
     created, errors = [], []
     for row in rows:
         advisor_raw = (row.get("advisor") or "").strip().lower()
-        # A recognized name/slug in the row wins; blank OR unrecognized
-        # both fall back to the form's own default — an unrecognized
-        # value should not silently become "no advisor" instead of the
-        # default the admin actually selected.
-        advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
+        if lock_advisor:
+            # Uploaded from inside one advisor's own card, so every row
+            # belongs to that advisor regardless of what an Advisor column
+            # in the file says — the card IS the choice.
+            advisor_slug = default_advisor_slug
+        else:
+            # A recognized name/slug in the row wins; blank OR unrecognized
+            # both fall back to the form's own default — an unrecognized
+            # value should not silently become "no advisor" instead of the
+            # default the admin actually selected.
+            advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
         result = create_participant_link(
             label=row["name"], advisor_slug=advisor_slug,
             first_name=row.get("first_name", ""), email=row.get("email", ""))
@@ -12586,6 +12593,41 @@ def admin_delete_avatar():
 # Admin panel
 # ---------------------------------------------------------------------------
 
+def public_base_url() -> str:
+    """The app's own public origin, always https.
+
+    Railway terminates TLS at the edge and forwards plain HTTP, so
+    request.host_url comes back http:// — which is what every link in the
+    admin panel was showing. PUBLIC_BASE_URL wins when set; otherwise the
+    scheme is corrected here rather than at each call site.
+    """
+    base = (paywall.PUBLIC_BASE_URL or request.host_url or "").rstrip("/")
+    if base.startswith("http://"):
+        base = "https://" + base[len("http://"):]
+    return base
+
+
+# The default persona has no row in the advisors table and so no real slug;
+# "" already means "no advisor" throughout this file, which a query string
+# can't distinguish from "parameter absent". This sentinel is only ever used
+# in URLs and form fields, never stored.
+DEFAULT_PERSONA_EXPORT_SLUG = "__default__"
+
+
+def _participant_link_redirect():
+    """Where to land after a participant-link change.
+
+    Participant links are managed from inside each advisor card now, so
+    every one of these routes returns to the Advisors tab. The forms still
+    post return_to=advisors; it is read here so that adding a second entry
+    point later is a one-line change rather than a hunt through the routes.
+    """
+    target = (request.form.get("return_to") or "advisors").strip()
+    if target not in ("advisors",):
+        target = "advisors"
+    return redirect(url_for("admin_dashboard") + "#" + target)
+
+
 ADMIN_LOGIN_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8" />
@@ -13903,10 +13945,6 @@ input[type="file"], input[type="text"] {
       Manage users
     </button>
     {% endif %}
-    <button type="button" class="tab-btn" data-tab="participant-links">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-      Participant links
-    </button>
     {% if admin_perms.edit_settings %}
     <button type="button" class="tab-btn" data-tab="settings">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
@@ -14371,6 +14409,130 @@ input[type="file"], input[type="text"] {
       {% endif %}
     {% endmacro %}
 
+    {% macro participant_links_section(t_slug, t_name, t_links, can_edit) %}
+      <details class="advisor-section">
+        <summary>Participant Links{% if t_links %} ({{ t_links|length }}){% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.78rem;">
+          Dedicated links for specific people, landing on {{ t_name }}. Each one
+          keeps that person's conversation across visits and devices, and can be
+          switched off at any time without deleting their history.
+        </p>
+
+        {% if can_edit %}
+        <div style="background: var(--paper); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.7rem;">
+          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
+                      text-transform: uppercase; margin-bottom: 0.5rem;">Add one link</div>
+          <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
+                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+            <input type="hidden" name="return_to" value="advisors" />
+            <input type="text" name="label" required
+                   placeholder="Label for your own reference (e.g. Jane Smith)"
+                   style="flex: 2 1 220px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <input type="text" name="first_name" placeholder="First name (greeting)"
+                   style="flex: 1 1 140px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <input type="email" name="email" placeholder="Email (optional)"
+                   style="flex: 1 1 160px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
+          </form>
+        </div>
+
+        <div style="background: var(--paper); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.9rem;">
+          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
+                      text-transform: uppercase; margin-bottom: 0.5rem;">Bulk upload</div>
+          <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.76rem; line-height: 1.5;">
+            A .csv or .xlsx with a <strong>Name</strong> column, and optionally
+            <strong>First Name</strong> and <strong>Email</strong>. Every row is
+            pinned to {{ t_name }} — an Advisor column in the file is ignored here.
+            The same file comes back with a Link column added.
+          </p>
+          <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
+                enctype="multipart/form-data"
+                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+            <input type="hidden" name="lock_advisor" value="1" />
+            <input type="hidden" name="return_to" value="advisors" />
+            <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
+                   style="flex: 2 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Upload &amp; create</button>
+          </form>
+        </div>
+        {% endif %}
+
+        {% if t_links %}
+        <div style="display: flex; justify-content: flex-end; gap: 0.4rem; margin-bottom: 0.5rem;">
+          <a class="btn" style="font-size: 0.6rem;"
+             href="{{ url_for('admin_export_participant_links_csv') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; CSV</a>
+          <a class="btn" style="font-size: 0.6rem;"
+             href="{{ url_for('admin_export_participant_links_xlsx') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; Excel</a>
+        </div>
+        <table style="font-size: 0.8rem;">
+          <tr>
+            <th style="width: 20%;">Label</th><th>Link</th>
+            <th style="width: 10%;">Status</th><th style="width: 12%;">Last used</th>
+            {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
+          </tr>
+          {% for l in t_links %}
+          <tr>
+            <td>
+              {{ l.label }}
+              {% if l.first_name or l.email %}
+              <br /><span class="muted" style="font-size: 0.72rem;">
+                {{ l.first_name }}{% if l.first_name and l.email %} &middot; {% endif %}{{ l.email }}
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
+                   class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
+                <button type="button" class="copy-link"
+                        data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
+                <button type="button" class="share-link"
+                        data-url="{{ base_url }}/p/{{ l.token }}"
+                        data-advisor="{{ t_name }}">Share</button>
+              </div>
+            </td>
+            <td>
+              {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
+              {% else %}<span class="muted">Disabled</span>{% endif %}
+            </td>
+            <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
+            {% if can_edit %}
+            <td>
+              <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
+                  <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
+                  <input type="hidden" name="return_to" value="advisors" />
+                  <button type="submit" class="btn" style="font-size: 0.6rem;">
+                    {{ "Disable" if l.enabled else "Enable" }}
+                  </button>
+                </form>
+                <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
+                      onsubmit="return confirm('Delete this participant link? It cannot be undone.');">
+                  <input type="hidden" name="return_to" value="advisors" />
+                  <button type="submit" class="btn-danger" style="font-size: 0.6rem;">Delete</button>
+                </form>
+              </div>
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          No participant links for {{ t_name }} yet.
+        </p>
+        {% endif %}
+      </details>
+    {% endmacro %}
+
   <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
 
@@ -14494,6 +14656,10 @@ input[type="file"], input[type="text"] {
 
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
+
+      {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
+                                   participant_links_by_advisor.get("", []),
+                                   admin_perms.edit_participant_links) }}
     </div>
 
 
@@ -14587,6 +14753,10 @@ input[type="file"], input[type="text"] {
       </details>
 
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
+
+      {{ participant_links_section(adv.slug, adv.name,
+                                   participant_links_by_advisor.get(adv.slug, []),
+                                   admin_perms.edit_participant_links) }}
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -14988,120 +15158,6 @@ input[type="file"], input[type="text"] {
   </div>
   </div>
   {% endif %}
-
-  <div class="tab-pane" data-tab="participant-links">
-  <h2 class="group-heading">Participant Links</h2>
-
-  <div class="section">
-    <h2>Add a participant link</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">
-      A dedicated link for one specific person. Their conversation stays
-      with them across visits and devices, the same as signing in — and
-      you can turn access off at any time without deleting their history.
-    </p>
-    <form method="POST" action="{{ url_for('admin_create_participant_link') }}" class="upload">
-      <input type="text" name="label" placeholder="Label for your own reference (e.g. Cohort 2026 — Jane Smith)" required />
-      <input type="text" name="first_name" placeholder="Their first name (for the greeting) — optional" />
-      <input type="email" name="email" placeholder="Their email — optional, for your own records" />
-      <select name="advisor_slug" title="Which advisor this participant lands on">
-        <option value="">Default persona</option>
-        {% for adv in advisors %}
-        <option value="{{ adv.slug }}">{{ adv.name }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" class="btn">Create link</button>
-    </form>
-    <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.76rem;">
-      With a first name, their session opens with "Hello Jane, welcome to
-      your session with {{ cfg.persona_name }}" instead of the plain
-      default greeting.
-    </p>
-  </div>
-
-  <div class="section">
-    <h2>Bulk-create from a list</h2>
-    <p class="muted" style="margin: 0 0 1rem 0;">
-      Upload a .csv or .xlsx with a <strong>Name</strong> column (used as
-      each link's label) and, optionally, <strong>First Name</strong>,
-      <strong>Email</strong>, and <strong>Advisor</strong> columns (an
-      advisor name or blank for the default persona — this overrides the
-      dropdown below just for that row). Column names aren't
-      case-sensitive. Every row becomes a real participant link, saved
-      below same as one created by hand — and the same file comes right
-      back with a Link column added, ready to send out.
-    </p>
-    <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
-          enctype="multipart/form-data" class="upload">
-      <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required />
-      <select name="advisor_slug" title="Default advisor for rows that don't specify their own">
-        <option value="">Default persona (unless a row specifies one)</option>
-        {% for adv in advisors %}
-        <option value="{{ adv.slug }}">{{ adv.name }}</option>
-        {% endfor %}
-      </select>
-      <button type="submit" class="btn">Upload &amp; create links</button>
-    </form>
-  </div>
-
-  <div class="section">
-    <div style="display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 0.6rem;">
-      <h2 style="margin: 0; border: none; padding: 0;">Existing links{% if participant_links %} ({{ participant_links|length }}){% endif %}</h2>
-      {% if participant_links %}
-      <div style="display: flex; gap: 0.5rem;">
-        <a href="{{ url_for('admin_export_participant_links_csv') }}" class="btn" style="font-size: 0.64rem;">↓ CSV</a>
-        <a href="{{ url_for('admin_export_participant_links_xlsx') }}" class="btn" style="font-size: 0.64rem;">↓ Excel</a>
-      </div>
-      {% endif %}
-    </div>
-    {% if participant_links %}
-    <table class="kb-table plinks-table">
-      <tr>
-        <th>Label</th><th>First name</th><th>Email</th><th>Advisor</th><th>Link</th><th>Status</th>
-        <th>Created</th><th>Last used</th><th></th>
-      </tr>
-      {% for l in participant_links %}
-      <tr>
-        <td>{{ l.label }}</td>
-        <td class="muted">{{ l.first_name or "—" }}</td>
-        <td class="muted">{{ l.email or "—" }}</td>
-        <td class="muted">{{ advisor_names.get(l.advisor_slug, "Default") if l.advisor_slug else "Default" }}</td>
-        <td>
-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-            <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
-               class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
-            <button type="button" class="copy-link" data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
-            <button type="button" class="share-link" data-url="{{ base_url }}/p/{{ l.token }}"
-                    data-advisor="{{ l.label }}">Share</button>
-          </div>
-        </td>
-        <td>
-          {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
-          {% else %}<span class="muted">Disabled</span>{% endif %}
-        </td>
-        <td class="muted">{{ l.created_at.strftime("%Y-%m-%d") if l.created_at else "" }}</td>
-        <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d %H:%M") if l.last_used_at else "Never" }}</td>
-        <td>
-          <div style="display: flex; gap: 0.4rem;">
-            <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
-              <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
-              <button type="submit" class="btn" style="font-size: 0.64rem;">
-                {{ "Disable" if l.enabled else "Enable" }}
-              </button>
-            </form>
-            <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
-                  onsubmit="return confirm('Delete the link for &quot;{{ l.label }}&quot;? This can\'t be undone.');">
-              <button type="submit" class="btn-danger">Delete</button>
-            </form>
-          </div>
-        </td>
-      </tr>
-      {% endfor %}
-    </table>
-    {% else %}
-    <p class="muted">No participant links yet.</p>
-    {% endif %}
-  </div>
-  </div>
 
   <div class="tab-pane" data-tab="activity">
   <h2 class="group-heading">Feedback</h2>
@@ -16478,9 +16534,18 @@ input[type="file"], input[type="text"] {
           try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
         }));
 
-        let saved = null;
-        try { saved = localStorage.getItem(KEY); } catch (e) {}
-        if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
+        // A redirect carrying #advisors wins over whatever tab was last
+        // open — otherwise a form posted from inside an advisor card lands
+        // back on a different tab entirely.
+        const fromHash = (location.hash || "").replace("#", "");
+        if (fromHash && tabs.some(t => t.dataset.tab === fromHash)) {
+          activate(fromHash);
+          try { localStorage.setItem(KEY, fromHash); } catch (e) {}
+        } else {
+          let saved = null;
+          try { saved = localStorage.getItem(KEY); } catch (e) {}
+          if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
+        }
       })();
     </script>
 </body></html>"""
@@ -16845,6 +16910,12 @@ def admin_dashboard():
     for d in docs:
         for slug in _advisor_map.get(d["title"], []):
             _advisor_docs.setdefault(slug, []).append(d)
+    # Grouped once here rather than filtered per card in the template.
+    # "" is the default persona, which has no row in the advisors table.
+    _participant_links = list_participant_links()
+    _links_by_advisor = {}
+    for _l in _participant_links:
+        _links_by_advisor.setdefault(_l["advisor_slug"] or "", []).append(_l)
     return _cached_render(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
@@ -16862,7 +16933,9 @@ def admin_dashboard():
         initials_for=initials_for,
         personality_summary_tag=personality_summary_tag,
         behavioral_summary_tag=behavioral_summary_tag,
-        participant_links=list_participant_links(),
+        participant_links=_participant_links,
+        participant_links_by_advisor=_links_by_advisor,
+        default_persona_export_slug=DEFAULT_PERSONA_EXPORT_SLUG,
         biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
@@ -16885,7 +16958,7 @@ def admin_dashboard():
             iid: personality_interaction_tips(scores)
             for iid, scores in _personality_by_interaction.items()
         },
-        base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
+        base_url=public_base_url(),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
         log_personas=log_personas,
@@ -17252,7 +17325,7 @@ def admin_create_participant_link():
         flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
     else:
         flash(result["error"])
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/participant-links/bulk", methods=["POST"])
@@ -17265,7 +17338,7 @@ def admin_bulk_create_participant_links():
     file = request.files.get("bulk_file")
     if not file or not file.filename:
         flash("Choose a .csv or .xlsx file first.")
-        return redirect(url_for("admin_dashboard") + "#participant-links")
+        return _participant_link_redirect()
 
     default_advisor_slug = (request.form.get("advisor_slug") or "").strip()
 
@@ -17274,26 +17347,27 @@ def admin_bulk_create_participant_links():
         rows = _parse_participant_bulk_file(file_bytes, file.filename)
     except ValueError as e:
         flash(str(e))
-        return redirect(url_for("admin_dashboard") + "#participant-links")
+        return _participant_link_redirect()
     except Exception as e:
         app.logger.error(f"[participant-links] bulk parse failed: {e}")
         flash("Could not read that file — check it's a valid .csv or .xlsx.")
-        return redirect(url_for("admin_dashboard") + "#participant-links")
+        return _participant_link_redirect()
 
-    result = bulk_create_participant_links(rows, default_advisor_slug)
+    lock_advisor = request.form.get("lock_advisor") == "1"
+    result = bulk_create_participant_links(rows, default_advisor_slug, lock_advisor)
     created, errors = result["created"], result["errors"]
 
     if not created:
         flash(f"No links were created — {len(errors)} row(s) failed. "
               f"Check the file has a Name column with values in it.")
-        return redirect(url_for("admin_dashboard") + "#participant-links")
+        return _participant_link_redirect()
 
     # Build the enriched export: same format as what was uploaded, plus a
     # Link column (and an Error column so any failed rows are visible
     # right in the file, rather than only in a flash message that a file
     # download wouldn't display anyway).
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    base_url = public_base_url()
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
 
     export_rows = []
@@ -17354,12 +17428,29 @@ def admin_bulk_create_participant_links():
         )
 
 
-def _participant_links_export_rows():
-    """Shared by both export formats below: every existing link, resolved
-    to a display-ready advisor name and full URL."""
+def _export_scope_suffix(scope: str) -> str:
+    """Filename tail so a scoped export is distinguishable in Downloads."""
+    if not scope:
+        return ""
+    if scope == DEFAULT_PERSONA_EXPORT_SLUG:
+        return "_default"
+    return "_" + re.sub(r"[^a-z0-9]+", "-", scope.lower()).strip("-")
+
+
+def _participant_links_export_rows(scope: str = ""):
+    """Existing links, resolved to a display-ready advisor name and full URL.
+
+    scope limits the export to one advisor — their slug, or the sentinel for
+    the default persona. Empty means every link, which is what the
+    unparameterised export URL still does.
+    """
     links = list_participant_links()
+    if scope == DEFAULT_PERSONA_EXPORT_SLUG:
+        links = [l for l in links if not l["advisor_slug"]]
+    elif scope:
+        links = [l for l in links if l["advisor_slug"] == scope]
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
-    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    base_url = public_base_url()
     out = []
     for l in links:
         advisor_label = advisor_names.get(l["advisor_slug"], "Default") if l["advisor_slug"] else "Default"
@@ -17382,15 +17473,16 @@ def admin_export_participant_links_csv():
     import io
     buffer = io.StringIO()
     writer = _csv.writer(buffer)
+    scope = (request.args.get("advisor") or "").strip()
     writer.writerow(["Label", "First Name", "Email", "Advisor", "Status",
                       "Link", "Created", "Last Used"])
-    writer.writerows(_participant_links_export_rows())
+    writer.writerows(_participant_links_export_rows(scope))
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     return Response(
         buffer.getvalue(),
         mimetype="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.csv"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links{_export_scope_suffix(scope)}_{timestamp}.csv"',
             "Cache-Control": "no-store",
         },
     )
@@ -17418,7 +17510,8 @@ def admin_export_participant_links_xlsx():
         cell = ws.cell(row=1, column=col_idx)
         cell.font = header_font
         cell.fill = header_fill
-    for r in _participant_links_export_rows():
+    scope = (request.args.get("advisor") or "").strip()
+    for r in _participant_links_export_rows(scope):
         ws.append([xlsx_safe(v) for v in r])
     ws.column_dimensions["A"].width = 24
     ws.column_dimensions["F"].width = 50
@@ -17431,7 +17524,7 @@ def admin_export_participant_links_xlsx():
         buffer.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.xlsx"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links{_export_scope_suffix(scope)}_{timestamp}.xlsx"',
             "Cache-Control": "no-store",
         },
     )
@@ -17445,7 +17538,7 @@ def admin_toggle_participant_link(link_id):
         flash("✓ Link enabled." if enable else "✓ Link disabled — access through it is blocked immediately.")
     else:
         flash("Could not update that link.")
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/participant-links/delete/<int:link_id>", methods=["POST"])
@@ -17455,7 +17548,7 @@ def admin_delete_participant_link(link_id):
         flash("✓ Link removed.")
     else:
         flash("Could not remove that link.")
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/settings", methods=["POST"])
