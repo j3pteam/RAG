@@ -6897,6 +6897,29 @@ def load_avatar():
         conn.close()
 
 
+def avatar_exists() -> bool:
+    """Is a custom photo on file?
+
+    The admin dashboard only needs the yes/no, and load_avatar() returns the
+    whole image — a multi-hundred-KB BYTEA column pulled out of Postgres and
+    thrown away on every single admin page load. This asks the question
+    without moving the bytes.
+    """
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _avatar_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM advisor_avatar WHERE id = 1")
+            return cur.fetchone() is not None
+    except Exception as e:
+        app.logger.error(f"[avatar] existence check failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def clear_avatar() -> bool:
     conn = _settings_db_conn()
     if not conn:
@@ -7082,20 +7105,182 @@ def advisors_with_detail(advisor_rows=None, doc_map=None):
         doc_map = document_advisor_map()
     if advisor_rows is None:
         advisor_rows = list_advisors()
+    # Five bulk reads for the whole list, rather than five per advisor.
+    briefings = briefings_by_advisor()
+    personalities = advisor_personality_map()
+    behaviorals = advisor_behavioral_map()
+    feedback_360s = advisor_360_meta_map()
+    voice_samples = advisor_voice_meta_map()
     for adv in advisor_rows:
         adv = dict(adv)
-        adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
-        adv["documents"] = [t for t, slugs in doc_map.items()
-                            if adv["slug"] in slugs]
-        adv["personality"] = get_advisor_personality(adv["slug"])
-        adv["behavioral"] = get_advisor_behavioral(adv["slug"])
-        adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
-        adv["voice_sample"] = get_advisor_voice_meta(adv["slug"])
+        slug = adv["slug"]
+        adv["briefings"] = briefings.get(slug, [])
+        adv["documents"] = [t for t, slugs in doc_map.items() if slug in slugs]
+        adv["personality"] = personalities.get(slug, {})
+        adv["behavioral"] = behaviorals.get(slug, {})
+        adv["feedback_360"] = feedback_360s.get(slug)
+        adv["voice_sample"] = voice_samples.get(slug)
         adv["suggested_bio"] = (
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
             if adv["personality"] else ""
         )
         out.append(adv)
+    return out
+
+
+
+
+# --- Bulk reads for the admin dashboard -------------------------------------
+# advisors_with_detail() used to call get_advisor_personality(),
+# get_advisor_behavioral(), get_advisor_360_meta(), get_advisor_voice_meta()
+# and list_briefings() once per advisor — five round trips each, so twenty
+# on a four-advisor deployment, all of them sequential against a remote
+# managed Postgres where latency, not query cost, is what's actually being
+# paid. These fetch the same data for every advisor at once. The per-advisor
+# functions above stay exactly as they are: they're still the right thing for
+# a single-advisor page (the portal, the voice routes), and this is only
+# about the dashboard's N+1.
+
+def advisor_personality_map() -> dict:
+    """{slug: {scores, completed_at}} for every advisor that has completed it."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_personality_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, openness, conscientiousness, extraversion,
+                       agreeableness, stability, completed_at
+                FROM advisor_personality
+            """)
+            for row in cur.fetchall():
+                scores = {k: v for k, v in zip(_PERSONALITY_TRAITS, row[1:6])
+                          if v is not None}
+                if scores:
+                    out[row[0]] = {"scores": scores, "completed_at": row[6]}
+    except Exception as e:
+        app.logger.error(f"[advisor-personality] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_behavioral_map() -> dict:
+    """{slug: {scores, completed_at}} for every advisor that has completed it."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_behavioral_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT advisor_slug, scores_json, completed_at FROM advisor_behavioral")
+            for slug, scores_json, completed_at in cur.fetchall():
+                try:
+                    scores = _json.loads(scores_json)
+                except (TypeError, ValueError):
+                    continue
+                if scores:
+                    out[slug] = {"scores": scores, "completed_at": completed_at}
+    except Exception as e:
+        app.logger.error(f"[advisor-behavioral] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_360_meta_map() -> dict:
+    """{slug: meta} — filename/size/date only, never the file content."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_360_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, id, filename, size_bytes, uploaded_at
+                FROM advisor_360_feedback
+            """)
+            for slug, fid, filename, size_bytes, uploaded_at in cur.fetchall():
+                out[slug] = {"id": fid, "filename": filename,
+                             "size_bytes": size_bytes or 0, "uploaded_at": uploaded_at}
+    except Exception as e:
+        app.logger.error(f"[advisor-360] bulk meta read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_voice_meta_map() -> dict:
+    """{slug: meta} — everything except the audio bytes, same shape as
+    get_advisor_voice_meta() returns for one advisor."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, filename, size_bytes, consent_given, consent_note,
+                       provider, provider_voice_id, voice_mode, voice_stability,
+                       voice_similarity_boost, voice_style, voice_speaker_boost, uploaded_at
+                FROM advisor_voice_samples
+            """)
+            for row in cur.fetchall():
+                out[row[0]] = {
+                    "filename": row[1], "size_bytes": row[2] or 0,
+                    "consent_given": bool(row[3]), "consent_note": row[4] or "",
+                    "provider": row[5] or "", "provider_voice_id": row[6] or "",
+                    "voice_mode": row[7] or "auto",
+                    "voice_stability": row[8] if row[8] is not None else 0.5,
+                    "voice_similarity_boost": row[9] if row[9] is not None else 0.75,
+                    "voice_style": row[10] if row[10] is not None else 0.0,
+                    "voice_speaker_boost": bool(row[11]) if row[11] is not None else True,
+                    "uploaded_at": row[12],
+                }
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] bulk meta read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def briefings_by_advisor(per_advisor=10, scan_limit=400) -> dict:
+    """{slug: [briefing, ...]} newest first, capped per advisor.
+
+    One pass over the most recent briefings rather than a query per advisor.
+    scan_limit bounds the work on a deployment with a long history; an
+    advisor whose last ten briefings fall outside that window shows fewer,
+    which is the same trade the old per-advisor LIMIT 10 was making anyway.
+    """
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _briefings_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, advisor_name, participant, summary, emailed, created_at
+                FROM session_briefings
+                WHERE advisor_slug IS NOT NULL AND advisor_slug != ''
+                ORDER BY id DESC LIMIT %s
+            """, (scan_limit,))
+            for slug, name, participant, summary, emailed, created_at in cur.fetchall():
+                bucket = out.setdefault(slug, [])
+                if len(bucket) >= per_advisor:
+                    continue
+                bucket.append({"advisor": name or "—", "participant": participant or "—",
+                               "summary": summary, "emailed": bool(emailed),
+                               "when": _fmt_ts(created_at)})
+    except Exception as e:
+        app.logger.error(f"[briefing] bulk read failed: {e}")
+    finally:
+        conn.close()
     return out
 
 
@@ -16900,7 +17085,15 @@ def advisor_portal_logout():
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
+    import time as _time
+    _t0 = _time.perf_counter()
+    _marks = []
+
+    def _mark(name):
+        _marks.append((name, (_time.perf_counter() - _t0) * 1000))
+
     db_ok = db.is_enabled()
+    _mark("db.is_enabled")
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
     docs = db.list_documents() if db_ok else []
@@ -16945,15 +17138,19 @@ def admin_dashboard():
     for d in docs:
         for slug in _advisor_map.get(d["title"], []):
             _advisor_docs.setdefault(slug, []).append(d)
-    return _cached_render(
+    _mark("queries: documents, feedback, advisors")
+    _advisor_detail = advisors_with_detail(advisor_rows=_advisor_rows,
+                                           doc_map=_advisor_map)
+    _mark("queries: advisor detail")
+    html = _cached_render(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
-        avatar_custom=bool(load_avatar()),
+        avatar_custom=avatar_exists(),
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
         default_persona_voice_sample=get_advisor_voice_meta(DEFAULT_PERSONA_SLUG),
         default_persona_slug=DEFAULT_PERSONA_SLUG,
-        advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
+        advisors=_advisor_detail,
         owners=document_owners(),
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
@@ -16963,12 +17160,15 @@ def admin_dashboard():
         personality_summary_tag=personality_summary_tag,
         behavioral_summary_tag=behavioral_summary_tag,
         participant_links=list_participant_links(),
-        biometric_files=list_biometric_files(),
+        biometric_files=(list_biometric_files()
+                         if has_permission("edit_biometric") else []),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
-        learning_runs=recent_learning_runs(),
+        learning_runs=(recent_learning_runs()
+                       if has_permission("edit_learning") else []),
         briefings=list_briefings(unassigned_only=True),
-        archived_runs=archived_run_count(),
+        archived_runs=(archived_run_count()
+                       if has_permission("edit_learning") else 0),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
@@ -16993,8 +17193,22 @@ def admin_dashboard():
         log_limit=log_limit,
         admin_identity=current_admin_identity(),
         admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
-        admin_users=list_admin_users(),
+        admin_users=(list_admin_users()
+                     if has_permission("manage_admins") else []),
     )
+    _mark("queries: remaining + render")
+
+    # Every guess at why this page is slow has so far been a guess. This
+    # records where the time actually went — in the Railway logs on every
+    # load, and as an HTML comment at the end of the page (view source) so
+    # it can be read without server access.
+    total = (_time.perf_counter() - _t0) * 1000
+    breakdown = " | ".join(f"{n} {ms:.0f}ms" for n, ms in _marks)
+    app.logger.info(f"[admin] rendered in {total:.0f}ms — {breakdown} "
+                    f"— {len(html) // 1024}KB, {len(feedback_rows)} log rows, "
+                    f"{len(_advisor_rows)} advisors, {len(docs)} docs")
+    return html + (f"\n<!-- admin render {total:.0f}ms | {breakdown} | "
+                   f"{len(html) // 1024}KB -->")
 
 
 @app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
