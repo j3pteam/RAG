@@ -8798,13 +8798,33 @@ def _advisor_voice_ensure_table(conn):
                 provider          TEXT,
                 provider_voice_id TEXT,
                 voice_mode        TEXT NOT NULL DEFAULT 'auto',
+                voice_stability        REAL NOT NULL DEFAULT 0.5,
+                voice_similarity_boost REAL NOT NULL DEFAULT 0.75,
+                voice_style             REAL NOT NULL DEFAULT 0.0,
+                voice_speaker_boost     BOOLEAN NOT NULL DEFAULT TRUE,
                 uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
-        # Existing rows from before this setting existed
+        # Existing rows from before these settings existed
         cur.execute("""
             ALTER TABLE advisor_voice_samples
             ADD COLUMN IF NOT EXISTS voice_mode TEXT NOT NULL DEFAULT 'auto'
+        """)
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_stability REAL NOT NULL DEFAULT 0.5
+        """)
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_similarity_boost REAL NOT NULL DEFAULT 0.75
+        """)
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_style REAL NOT NULL DEFAULT 0.0
+        """)
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_speaker_boost BOOLEAN NOT NULL DEFAULT TRUE
         """)
     conn.commit()
 
@@ -8861,7 +8881,9 @@ def get_advisor_voice_meta(slug: str):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT filename, size_bytes, consent_given, consent_note,
-                       provider, provider_voice_id, voice_mode, uploaded_at
+                       provider, provider_voice_id, voice_mode,
+                       voice_stability, voice_similarity_boost, voice_style,
+                       voice_speaker_boost, uploaded_at
                 FROM advisor_voice_samples WHERE advisor_slug = %s
             """, (slug,))
             row = cur.fetchone()
@@ -8870,7 +8892,12 @@ def get_advisor_voice_meta(slug: str):
         return {"filename": row[0], "size_bytes": row[1] or 0,
                 "consent_given": bool(row[2]), "consent_note": row[3] or "",
                 "provider": row[4] or "", "provider_voice_id": row[5] or "",
-                "voice_mode": row[6] or "auto", "uploaded_at": row[7]}
+                "voice_mode": row[6] or "auto",
+                "voice_stability": row[7] if row[7] is not None else 0.5,
+                "voice_similarity_boost": row[8] if row[8] is not None else 0.75,
+                "voice_style": row[9] if row[9] is not None else 0.0,
+                "voice_speaker_boost": bool(row[10]) if row[10] is not None else True,
+                "uploaded_at": row[11]}
     except Exception as e:
         app.logger.error(f"[advisor-voice] meta read failed: {e}")
         return None
@@ -9021,6 +9048,55 @@ def set_advisor_voice_mode(slug: str, mode: str) -> bool:
         conn.close()
 
 
+def set_advisor_voice_settings(slug: str, stability: float, similarity_boost: float,
+                                style: float = 0.0, speaker_boost: bool = True) -> bool:
+    """Tunes how this advisor's cloned voice actually sounds — separate
+    from whether it's used at all (voice_mode). A cloned voice getting
+    through the whole pipeline successfully doesn't guarantee it sounds
+    natural; ElevenLabs' own stability/similarity_boost/style knobs are
+    the actual levers for that, and there's no way to know the right
+    values without listening, since that's a judgment only a human ear
+    can make. Kept per-advisor rather than global, since a different
+    source recording may need different tuning to sound right.
+
+    - stability (0-1): lower allows more natural variation in tone but
+      can sound erratic at the extreme; higher is more consistent but
+      can sound flat or monotone at the extreme.
+    - similarity_boost (0-1): how closely the output hews to the
+      original sample; higher can introduce artifacts on some samples.
+    - style (0-1): exaggeration/expressiveness, supported on some
+      models — 0 is the safest default if unsure.
+    - speaker_boost: an additional clarity pass some models support.
+
+    Only meaningful once a sample exists, same as voice_mode — returns
+    False if none has been uploaded for this advisor yet."""
+    if not slug:
+        return False
+    stability = max(0.0, min(1.0, float(stability)))
+    similarity_boost = max(0.0, min(1.0, float(similarity_boost)))
+    style = max(0.0, min(1.0, float(style)))
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE advisor_voice_samples
+                SET voice_stability = %s, voice_similarity_boost = %s,
+                    voice_style = %s, voice_speaker_boost = %s
+                WHERE advisor_slug = %s
+            """, (stability, similarity_boost, style, bool(speaker_boost), slug))
+            updated = cur.rowcount
+        conn.commit()
+        return updated > 0
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] settings update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: str, filename: str) -> str:
     """POST a stored sample to ElevenLabs' voice-add (cloning) endpoint.
     Returns the new voice_id, or raises on any failure — caller decides
@@ -9073,8 +9149,15 @@ def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: s
     return voice_id
 
 
-def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
+def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
+                                stability: float = 0.5, similarity_boost: float = 0.75,
+                                style: float = 0.0, speaker_boost: bool = True):
     """POST text to ElevenLabs' text-to-speech endpoint for one voice_id.
+    stability/similarity_boost/style/speaker_boost come from this
+    advisor's own tuned settings (see set_advisor_voice_settings) rather
+    than a fixed default, since how natural a cloned voice actually
+    sounds is a real, separate concern from whether the pipeline works
+    at all, and the right values differ per source recording.
     Returns (audio_bytes, mime), or raises on failure."""
     import urllib.request as _url
     import urllib.error as _url_error
@@ -9083,7 +9166,12 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str):
     body = _j.dumps({
         "text": text,
         "model_id": "eleven_multilingual_v2",
-        "voice_settings": {"stability": 0.5, "similarity_boost": 0.75},
+        "voice_settings": {
+            "stability": stability,
+            "similarity_boost": similarity_boost,
+            "style": style,
+            "use_speaker_boost": speaker_boost,
+        },
     }).encode("utf-8")
     req = _url.Request(
         f"https://api.elevenlabs.io/v1/text-to-speech/{voice_id}",
@@ -9162,7 +9250,13 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
             voice_id = _elevenlabs_clone_voice(
                 api_key, f"J3P Advisor — {slug}", audio_bytes, mime, filename)
             set_advisor_voice_provider(slug, "elevenlabs", voice_id)
-        audio_bytes, mime = _elevenlabs_text_to_speech(api_key, voice_id, text)
+        audio_bytes, mime = _elevenlabs_text_to_speech(
+            api_key, voice_id, text,
+            stability=meta.get("voice_stability", 0.5),
+            similarity_boost=meta.get("voice_similarity_boost", 0.75),
+            style=meta.get("voice_style", 0.0),
+            speaker_boost=meta.get("voice_speaker_boost", True),
+        )
         return audio_bytes, mime, "ok"
     except Exception as e:
         app.logger.error(f"[advisor-voice] synthesis failed for {slug}: {e}")
@@ -14253,6 +14347,66 @@ input[type="file"], input[type="text"] {
             Save
           </button>
         </form>
+        {% if adv.voice_sample.provider_voice_id %}
+        <form method="POST" action="{{ url_for('admin_set_advisor_voice_settings', slug=adv.slug) }}"
+              style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
+                     padding: 0.6rem 0.8rem; margin-bottom: 0.8rem;">
+          <label style="display: block; margin-bottom: 0.6rem; font-size: 0.64rem; letter-spacing: 0.1em;
+                        text-transform: uppercase; color: var(--muted);">
+            How {{ adv.name }}'s cloned voice sounds
+          </label>
+          <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.74rem; line-height: 1.5;">
+            These only affect this advisor's voice — there's no way to know the
+            right values without listening, so change one at a time, save, then
+            test a real reply before adjusting further.
+          </p>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Stability</span>
+              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_stability) }}</span>
+            </label>
+            <input type="range" name="stability" min="0" max="1" step="0.05"
+                   value="{{ adv.voice_sample.voice_stability }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              Lower sounds more natural but can wander; higher is more
+              consistent but can sound flat.
+            </p>
+          </div>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Similarity boost</span>
+              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_similarity_boost) }}</span>
+            </label>
+            <input type="range" name="similarity_boost" min="0" max="1" step="0.05"
+                   value="{{ adv.voice_sample.voice_similarity_boost }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              How closely this hews to the original recording — higher can
+              introduce artifacts on some samples.
+            </p>
+          </div>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Style exaggeration</span>
+              <span class="muted">{{ "%.2f"|format(adv.voice_sample.voice_style) }}</span>
+            </label>
+            <input type="range" name="style" min="0" max="1" step="0.05"
+                   value="{{ adv.voice_sample.voice_style }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              0 is the safest default — raising this can help expressiveness
+              but may sound unnatural past a point.
+            </p>
+          </div>
+          <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;
+                        cursor: pointer; margin-bottom: 0.7rem;">
+            <input type="checkbox" name="speaker_boost" value="1"
+                   {% if adv.voice_sample.voice_speaker_boost %}checked{% endif %} />
+            <span>Speaker boost (an added clarity pass)</span>
+          </label>
+          <button type="submit" class="btn" style="font-size: 0.64rem;">
+            Save voice tuning
+          </button>
+        </form>
+        {% endif %}
         {% if not adv.voice_sample.consent_given %}
         <form method="POST" action="{{ url_for('admin_confirm_advisor_voice_consent', slug=adv.slug) }}"
               style="background: var(--paper); border: 1px solid var(--line); border-radius: 4px;
@@ -16841,6 +16995,31 @@ def admin_set_advisor_voice_mode(slug):
         return redirect(url_for("admin_dashboard") + "#advisors")
     if set_advisor_voice_mode(slug, mode):
         flash(f"✓ Voice setting saved for {advisor['name']}.")
+    else:
+        flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
+    return redirect(url_for("admin_dashboard") + "#advisors")
+
+
+@app.route("/admin/advisors/voice/settings/<slug>", methods=["POST"])
+@require_permission("edit_voice")
+def admin_set_advisor_voice_settings(slug):
+    """Saves how this advisor's cloned voice actually sounds — stability,
+    similarity boost, style, and speaker boost. See
+    set_advisor_voice_settings for what each one does."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    try:
+        stability = float(request.form.get("stability", 0.5))
+        similarity_boost = float(request.form.get("similarity_boost", 0.75))
+        style = float(request.form.get("style", 0.0))
+    except (TypeError, ValueError):
+        flash("Those values didn't look like numbers — nothing was changed.")
+        return redirect(url_for("admin_dashboard") + "#advisors")
+    speaker_boost = request.form.get("speaker_boost") == "1"
+    if set_advisor_voice_settings(slug, stability, similarity_boost, style, speaker_boost):
+        flash(f"✓ Voice tuning saved for {advisor['name']}. Test it with a real reply.")
     else:
         flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
     return redirect(url_for("admin_dashboard") + "#advisors")
