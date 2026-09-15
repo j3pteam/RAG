@@ -13577,6 +13577,11 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
+.btn-quiet-danger {
+  background: transparent; color: var(--rust); border-color: var(--line);
+  padding: 0.3rem 0.7rem; font-size: 0.7rem;
+}
+.btn-quiet-danger:hover { border-color: var(--rust); background: #FEEAE5; }
 .pw-field { position: relative; display: block; min-width: 0; }
 .pw-field .pw-input { padding-right: 2.3rem !important; box-sizing: border-box; }
 .pw-toggle {
@@ -14363,7 +14368,7 @@ input[type="file"], input[type="text"] {
         <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
         <div class="initials-preview-row">
           <span id="initials-preview-new" class="initials-preview">?</span>
-          <span class="muted">Preview if no photo is used</span>
+          <span class="muted">Shown when no photo is set</span>
         </div>
         <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
       </form>
@@ -14409,16 +14414,20 @@ input[type="file"], input[type="text"] {
           </label>
           <div class="initials-preview-row">
             <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
-            <span class="muted">Preview if no photo is used</span>
+            <span class="muted">Shown when no photo is set</span>
           </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
-                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
+                        letter-spacing: 0.08em;">Booking URL — their own Calendly/Acuity</label>
           <input type="url" name="default_scheduling_url"
                  value="{{ settings.default_scheduling_url or '' }}"
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+          <p class="muted" style="flex: 1 1 100%; margin: 0.5rem 0 0; font-size: 0.76rem;">
+            The name appears beneath the photo in their sessions. Leave the file
+            blank to keep the current photo.
+          </p>
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
         {% if avatar_custom %}
@@ -14428,14 +14437,10 @@ input[type="file"], input[type="text"] {
                          border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
         </form>
         {% endif %}
-        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
-          The name appears beneath the photo in their sessions. Leave the
-          file blank to keep the current photo.
-        </p>
       </div>
 
       <div class="advisor-links">
-        <h3>Scheduling Links</h3>
+        <h3>Share Links</h3>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden')] %}
@@ -14472,11 +14477,11 @@ input[type="file"], input[type="text"] {
         </div>
         <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
               style="display:inline;" data-doc-title="{{ adv.name }}">
-          <button type="submit" class="btn btn-danger">Delete</button>
+          <button type="submit" class="btn btn-quiet-danger">Delete</button>
         </form>
       </div>
 
-      <details class="advisor-section" open>
+      <details class="advisor-section">
         <summary>Photo &amp; Name</summary>
         <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
@@ -14502,11 +14507,11 @@ input[type="file"], input[type="text"] {
           </label>
           <div class="initials-preview-row">
             <span id="initials-preview-{{ adv.slug }}" class="initials-preview">{{ initials_for(adv.name) }}</span>
-            <span class="muted">Preview if no photo is used</span>
+            <span class="muted">Shown when no photo is set</span>
           </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
-                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
+                        letter-spacing: 0.08em;">Booking URL — their own Calendly/Acuity</label>
           <input type="url" name="scheduling_url" value="{{ adv.scheduling_url or '' }}"
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
@@ -14537,18 +14542,18 @@ input[type="file"], input[type="text"] {
             {% endfor %}
           </div>
 
+          <p class="muted" style="flex: 1 1 100%; margin: 0.5rem 0 0; font-size: 0.76rem;">
+            The name appears beneath the photo in their sessions. Leave the file
+            blank to keep the current photo.
+          </p>
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
-        <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
-          The name appears beneath the photo in their sessions. Leave the file
-          blank to keep the current photo.
-        </p>
       </details>
 
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
       <details class="advisor-section">
-        <summary>Scheduling Links</summary>
+        <summary>Share Links</summary>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden')] %}
@@ -16844,7 +16849,7 @@ def admin_dashboard():
             iid: personality_interaction_tips(scores)
             for iid, scores in _personality_by_interaction.items()
         },
-        base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
+        base_url=public_base_url(),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
         log_personas=log_personas,
@@ -17251,7 +17256,7 @@ def admin_bulk_create_participant_links():
     # right in the file, rather than only in a flash message that a file
     # download wouldn't display anyway).
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    base_url = public_base_url()
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
 
     export_rows = []
@@ -17317,7 +17322,7 @@ def _participant_links_export_rows():
     to a display-ready advisor name and full URL."""
     links = list_participant_links()
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
-    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
+    base_url = public_base_url()
     out = []
     for l in links:
         advisor_label = advisor_names.get(l["advisor_slug"], "Default") if l["advisor_slug"] else "Default"
@@ -18014,6 +18019,20 @@ def admin_delete_biometric(file_id):
     else:
         flash("Delete failed — check the server logs.")
     return redirect(url_for("admin_dashboard"))
+
+
+def public_base_url() -> str:
+    """The app's own public base URL, always https where that's real.
+
+    Railway terminates TLS at its proxy and forwards plain HTTP, so
+    request.host_url comes back as http:// — every link copied out of the
+    admin panel then went out insecure. PUBLIC_BASE_URL still wins when set.
+    """
+    base = paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")
+    host = request.headers.get("X-Forwarded-Host") or request.host or ""
+    if base.startswith("http://") and not host.startswith(("localhost", "127.0.0.1")):
+        base = "https://" + base[len("http://"):]
+    return base
 
 
 def _fmt_ts(value) -> str:
