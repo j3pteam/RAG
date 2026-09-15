@@ -2253,6 +2253,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-btn:disabled { cursor: default; }
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
 
+    /* Persists on the message after a Speak attempt finishes — separate
+       from the transient Speaking/Listening label under the avatar,
+       which resets the moment speech ends and has proven too easy to
+       miss the timing of. This stays put so it can be checked
+       afterward instead of needing to be caught live. */
+    .voice-status-note {
+      font-size: 0.72rem; color: var(--muted); margin-top: 0.5rem;
+      padding-top: 0.5rem; border-top: 1px solid var(--line);
+    }
+
     /* Action buttons (copy + share) — labeled pill style */
     .action-sep {
       width: 1px; height: 22px; background: var(--line);
@@ -5313,6 +5323,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
           if (window.__activeSpeakMsg === msgDiv) window.__activeSpeakMsg = null;
         }
 
+        // A persistent note on the message itself, separate from the
+        // Speaking/Listening label under the avatar — that label resets
+        // the moment speech ends (or was even caught mid-reset in a
+        // screenshot taken a beat too late/early more than once), so
+        // there was never a reliable window to actually read it. This
+        // stays on the message indefinitely once a Speak attempt
+        // finishes, so it can be checked at any point afterward rather
+        // than needing to catch it live.
+        function showVoiceStatusNote(text) {
+          let note = msgDiv.querySelector(".voice-status-note");
+          if (!note) {
+            note = document.createElement("div");
+            note.className = "voice-status-note";
+            msgDiv.appendChild(note);
+          }
+          note.textContent = text;
+        }
+
         msgDiv.__speakReply = async function() {
           const activeMsg = window.__activeSpeakMsg;
           // This message is the one currently playing — toggle it off
@@ -5372,6 +5400,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                   clearAllAvatarStates();
                   setAvatarSpeaking(msgDiv, true);
                   Presence.set("speaking", "their own voice");
+                  showVoiceStatusNote("🔊 Played in their own voice");
                 });
                 audio.addEventListener("ended", () => {
                   URL.revokeObjectURL(url);
@@ -5406,6 +5435,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
               Presence.set("speaking", fallbackReason
                 ? ("default voice — " + fallbackReason.slice(0, 70))
                 : "default voice");
+              showVoiceStatusNote(fallbackReason
+                ? ("🔈 Played in the default voice — " + fallbackReason)
+                : "🔈 Played in the default voice");
             },
             onEnd: () => resetSpeakUI(),
             onError: (reason) => {
