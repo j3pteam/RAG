@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-15-d"
-APP_BUILD_NOTES = "admin per-advisor query fan-out replaced with bulk reads"
+APP_VERSION = "2026-09-15-e"
+APP_BUILD_NOTES = "advisor cards grouped, collapsed, with status at a glance"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -13982,6 +13982,20 @@ input[type="file"], input[type="text"] {
   padding-bottom: 0.85rem; border-bottom: 1px solid var(--line);
 }
 .advisor-links { padding-top: 0.85rem; }
+/* At-a-glance state, so a card that is entirely collapsed still says what
+   is and is not set up for that advisor. */
+.advisor-chips {
+  display: flex; flex-wrap: wrap; gap: 0.35rem;
+  margin-top: 0.4rem; flex: 1 1 100%;
+}
+.advisor-chip {
+  font-size: 0.66rem; letter-spacing: 0.04em;
+  padding: 0.14rem 0.5rem; border-radius: 9px;
+  background: rgba(39, 51, 74, 0.06); color: var(--navy);
+  border: 1px solid var(--line); white-space: nowrap;
+}
+.advisor-chip.on { background: rgba(45, 125, 95, 0.12); border-color: rgba(45, 125, 95, 0.4); }
+.advisor-chip.off { color: var(--muted); border-style: dashed; }
 .advisor-links h3 {
   margin: 0 0 0.7rem; font-size: 0.68rem; font-weight: 500;
   letter-spacing: 0.14em; text-transform: uppercase; color: var(--muted);
@@ -14009,6 +14023,20 @@ input[type="file"], input[type="text"] {
 }
 .advisor-section[open] summary::before { transform: rotate(90deg); }
 .advisor-section summary:hover { color: var(--navy); }
+/* The collapsed rows are the main navigation inside a card, so give them a
+   real hit area and a hover state rather than leaving them as bare text. */
+.advisor-section > summary {
+  padding: 0.4rem 0.5rem; margin: -0.4rem -0.5rem; border-radius: 3px;
+}
+.advisor-section > summary:hover { background: rgba(39, 51, 74, 0.04); }
+.advisor-section[open] > summary { color: var(--navy); margin-bottom: 0.2rem; }
+.advisor-section-group {
+  font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--muted); opacity: 0.75;
+  margin: 0.9rem 0 0.2rem; padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+.advisor-section-group:first-of-type { margin-top: 0.5rem; }
 .advisor-section > *:not(summary) { margin-top: 0.75rem; }
 
 /* Live "what will the initials look like" preview beside the name field */
@@ -14863,10 +14891,21 @@ input[type="file"], input[type="text"] {
             Default — used on the main link{% if settings.avatar_no_photo %} · initials, no photo{% elif avatar_custom %} · uploaded photo{% else %} · bundled photo{% endif %}
           </span>
         </div>
+        {% set default_links = participant_links_by_advisor.get("", []) %}
+        <div class="advisor-chips">
+          <span class="advisor-chip {{ 'on' if default_links else 'off' }}">
+            {{ default_links|length }} participant link{{ '' if default_links|length == 1 else 's' }}
+          </span>
+          <span class="advisor-chip {{ 'on' if default_persona_voice_sample else 'off' }}">
+            {{ 'Voice sample on file' if default_persona_voice_sample else 'No voice sample' }}
+          </span>
+        </div>
       </div>
 
-      <div class="advisor-links">
-        <h3>Photo &amp; Name</h3>
+      <div class="advisor-section-group">Profile</div>
+
+      <details class="advisor-section">
+        <summary>Photo, name &amp; scheduling link</summary>
         <form method="POST" action="/admin/avatar" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <input type="text" name="avatar_name" value="{{ settings.avatar_name or '' }}"
@@ -14914,10 +14953,12 @@ input[type="file"], input[type="text"] {
           The name appears beneath the photo in their sessions. Leave the
           file blank to keep the current photo.
         </p>
-      </div>
+      </details>
 
-      <div class="advisor-links">
-        <h3>Scheduling Links</h3>
+      <div class="advisor-section-group">Links</div>
+
+      <details class="advisor-section">
+        <summary>Scheduling Links</summary>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden')] %}
@@ -14931,14 +14972,16 @@ input[type="file"], input[type="text"] {
           </div>
         </div>
         {% endfor %}
-      </div>
-
-      {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
-                               default_persona_voice_sample, admin_perms.edit_voice) }}
+      </details>
 
       {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
                                    participant_links_by_advisor.get("", []),
                                    admin_perms.edit_participant_links) }}
+
+      <div class="advisor-section-group">Setup</div>
+
+      {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
+                               default_persona_voice_sample, admin_perms.edit_voice) }}
     </div>
 
 
@@ -14960,10 +15003,32 @@ input[type="file"], input[type="text"] {
               style="display:inline;" data-doc-title="{{ adv.name }}">
           <button type="submit" class="btn btn-danger">Delete</button>
         </form>
+        {% set adv_links = participant_links_by_advisor.get(adv.slug, []) %}
+        {% set adv_kb = advisor_docs.get(adv.slug, []) %}
+        {% set onboarding_done = (1 if adv.personality else 0) + (1 if adv.behavioral else 0) %}
+        <div class="advisor-chips">
+          <span class="advisor-chip {{ 'on' if adv_links else 'off' }}">
+            {{ adv_links|length }} participant link{{ '' if adv_links|length == 1 else 's' }}
+          </span>
+          <span class="advisor-chip {{ 'on' if adv_kb else 'off' }}">
+            {{ adv_kb|length }} document{{ '' if adv_kb|length == 1 else 's' }}
+          </span>
+          <span class="advisor-chip {{ 'on' if onboarding_done == 2 else 'off' }}">
+            Onboarding {{ onboarding_done }}/2
+          </span>
+          <span class="advisor-chip {{ 'on' if adv.voice_sample else 'off' }}">
+            {{ 'Voice sample on file' if adv.voice_sample else 'No voice sample' }}
+          </span>
+          <span class="advisor-chip {{ 'on' if adv.portal_token else 'off' }}">
+            {{ 'Portal link active' if adv.portal_token else 'No portal link' }}
+          </span>
+        </div>
       </div>
 
-      <details class="advisor-section" open>
-        <summary>Photo &amp; Name</summary>
+      <div class="advisor-section-group">Profile</div>
+
+      <details class="advisor-section">
+        <summary>Photo, name &amp; display settings</summary>
         <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
           <input type="hidden" name="slug" value="{{ adv.slug }}" />
@@ -15023,19 +15088,15 @@ input[type="file"], input[type="text"] {
             {% endfor %}
           </div>
 
+          <p class="muted" style="flex: 1 1 100%; margin: 0.6rem 0 0; font-size: 0.76rem;">
+            The name appears beneath the photo in their sessions. Leave the file
+            blank to keep the current photo.
+          </p>
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
-        <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
-          The name appears beneath the photo in their sessions. Leave the file
-          blank to keep the current photo.
-        </p>
       </details>
 
-      {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
-
-      {{ participant_links_section(adv.slug, adv.name,
-                                   participant_links_by_advisor.get(adv.slug, []),
-                                   admin_perms.edit_participant_links) }}
+      <div class="advisor-section-group">Links</div>
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -15056,6 +15117,14 @@ input[type="file"], input[type="text"] {
         </div>
         {% endfor %}
       </details>
+
+      {{ participant_links_section(adv.slug, adv.name,
+                                   participant_links_by_advisor.get(adv.slug, []),
+                                   admin_perms.edit_participant_links) }}
+
+      <div class="advisor-section-group">Setup</div>
+
+      {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
       <details class="advisor-section">
         <summary>Knowledge-Base Portal</summary>
@@ -15228,6 +15297,8 @@ input[type="file"], input[type="text"] {
         </p>
         {% endif %}
       </details>
+
+      <div class="advisor-section-group">Activity</div>
 
       <details class="advisor-section">
         <summary>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</summary>
@@ -16789,6 +16860,26 @@ input[type="file"], input[type="text"] {
           ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z"/><circle cx="12" cy="12" r="3"/></svg>'
           : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16"><path d="M17.94 17.94A10.94 10.94 0 0 1 12 19c-7 0-11-7-11-7a18.5 18.5 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>';
       });
+    </script>
+
+    <script>
+      // ---------------------------------------------------------------
+      // Advisor cards: one section open at a time
+      // ---------------------------------------------------------------
+      // Each card has seven collapsible sections. With several open at once
+      // the page becomes the same wall of forms the collapsing was meant to
+      // avoid, so opening one closes the others in that card. Other cards
+      // are left alone — comparing two advisors side by side is reasonable.
+      document.addEventListener("toggle", function(e) {
+        const section = e.target;
+        if (!section.matches || !section.matches("details.advisor-section")) return;
+        if (!section.open) return;
+        const card = section.closest(".advisor-block");
+        if (!card) return;
+        card.querySelectorAll("details.advisor-section[open]").forEach(function(other) {
+          if (other !== section) other.open = false;
+        });
+      }, true);
     </script>
 
     <script>
