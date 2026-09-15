@@ -14335,6 +14335,78 @@ input[type="file"], input[type="text"] {
       {% endif %}
     {% endmacro %}
 
+    {% macro participant_links_section(t_slug, t_name, links) %}
+      {% if admin_perms.view_participant_links %}
+      <details class="advisor-section">
+        <summary>Participant Links{% if links %} ({{ links|length }}){% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
+          A private link for one named person that opens straight into a
+          session with {{ t_name }} — no sign-in, and their conversation
+          follows them across visits and devices. Give a first name and the
+          session greets them by it. Turning a link off blocks access
+          immediately without touching that person's history.
+        </p>
+        {% if admin_perms.edit_participant_links %}
+        <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
+              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+                     background: var(--paper); border: 1px solid var(--line);
+                     border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.8rem;">
+          <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+          <input type="hidden" name="return_to" value="advisors" />
+          <input type="text" name="first_name" placeholder="First name — used in their greeting"
+                 style="flex: 1 1 190px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
+          <input type="text" name="label" required
+                 placeholder="Label for your own reference (e.g. Jane Smith — Cohort 2026)"
+                 style="flex: 2 1 240px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
+          <input type="email" name="email" placeholder="Email — optional, for your records"
+                 style="flex: 1 1 190px; padding: 0.45rem; border: 1px solid var(--line);
+                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
+          <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
+        </form>
+        {% endif %}
+        {% if links %}
+        {% for l in links %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">
+            {{ l.first_name or l.label }}{% if l.first_name %} · {{ l.label }}{% endif %}
+            {% if not l.enabled %} · <span style="color: var(--rust);">disabled</span>{% endif %}
+            {% if l.last_used_at %} · last used {{ l.last_used_at.strftime("%Y-%m-%d") }}
+            {% else %} · never used{% endif %}
+          </div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
+               class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
+            <button type="button" class="copy-link" data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
+            <button type="button" class="share-link" data-url="{{ base_url }}/p/{{ l.token }}"
+                    data-advisor="{{ t_name }}">Share</button>
+            {% if admin_perms.edit_participant_links %}
+            <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}"
+                  style="display: inline;">
+              <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
+              <input type="hidden" name="return_to" value="advisors" />
+              <button type="submit" class="copy-link">{{ "Disable" if l.enabled else "Enable" }}</button>
+            </form>
+            <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
+                  style="display: inline;"
+                  onsubmit="return confirm('Delete the link for &quot;{{ l.label }}&quot;? This can\'t be undone.');">
+              <input type="hidden" name="return_to" value="advisors" />
+              <button type="submit" class="copy-link" style="color: var(--rust);">Delete</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+        {% endfor %}
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          None yet — anyone reaching {{ t_name }} is using the shared links above.
+        </p>
+        {% endif %}
+      </details>
+      {% endif %}
+    {% endmacro %}
+
   <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
 
@@ -14456,6 +14528,9 @@ input[type="file"], input[type="text"] {
         {% endfor %}
       </div>
 
+      {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
+                                    participant_links | rejectattr("advisor_slug") | list) }}
+
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
     </div>
@@ -14571,6 +14646,11 @@ input[type="file"], input[type="text"] {
         </div>
         {% endfor %}
       </details>
+
+      {{ participant_links_section(adv.slug, adv.name,
+                                    participant_links
+                                      | selectattr("advisor_slug", "equalto", adv.slug)
+                                      | list) }}
 
       <details class="advisor-section">
         <summary>Knowledge-Base Portal</summary>
@@ -15048,6 +15128,7 @@ input[type="file"], input[type="text"] {
           <div style="display: flex; gap: 0.4rem;">
             <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
               <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
+              <input type="hidden" name="return_to" value="participant-links" />
               <button type="submit" class="btn" style="font-size: 0.64rem;">
                 {{ "Disable" if l.enabled else "Enable" }}
               </button>
@@ -16442,6 +16523,14 @@ input[type="file"], input[type="text"] {
           try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
         }));
 
+        // A #hash in the URL wins over the remembered tab — that's how a
+        // redirect after a form submission says where it wants to land.
+        const hash = (window.location.hash || "").replace("#", "");
+        if (hash && tabs.some(t => t.dataset.tab === hash)) {
+          activate(hash);
+          try { localStorage.setItem(KEY, hash); } catch (e) {}
+          return;
+        }
         let saved = null;
         try { saved = localStorage.getItem(KEY); } catch (e) {}
         if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
@@ -17203,6 +17292,16 @@ def admin_save_advisor_expertise(slug):
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
+def _participant_link_redirect():
+    """Back to whichever tab the form was submitted from. Participant links
+    can now be created from an advisor's own card as well as from the
+    Participant Links tab, and being thrown to the other one mid-task is
+    disorienting."""
+    anchor = ("#advisors" if request.form.get("return_to") == "advisors"
+              else "#participant-links")
+    return redirect(url_for("admin_dashboard") + anchor)
+
+
 @app.route("/admin/participant-links", methods=["POST"])
 @require_permission("edit_participant_links")
 def admin_create_participant_link():
@@ -17215,7 +17314,7 @@ def admin_create_participant_link():
         flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
     else:
         flash(result["error"])
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/participant-links/bulk", methods=["POST"])
@@ -17408,7 +17507,7 @@ def admin_toggle_participant_link(link_id):
         flash("✓ Link enabled." if enable else "✓ Link disabled — access through it is blocked immediately.")
     else:
         flash("Could not update that link.")
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/participant-links/delete/<int:link_id>", methods=["POST"])
@@ -17418,7 +17517,7 @@ def admin_delete_participant_link(link_id):
         flash("✓ Link removed.")
     else:
         flash("Could not remove that link.")
-    return redirect(url_for("admin_dashboard") + "#participant-links")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/settings", methods=["POST"])
