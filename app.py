@@ -3975,6 +3975,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
               const blob = await resp.blob();
               if (blob.size > 0) {
                 const audio = new Audio(URL.createObjectURL(blob));
+                audio.playbackRate = J3PSpeech.getRate();
                 await audio.play();
                 return;
               }
@@ -5422,6 +5423,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
               if (blob.size > 0) {
                 const url = URL.createObjectURL(blob);
                 const audio = new Audio(url);
+                // The Speed slider in the Voice menu previously only ever
+                // touched the browser's own text-to-speech rate — it had
+                // no effect at all on this server-rendered audio, so
+                // adjusting it while the cloned voice was playing did
+                // nothing, silently. One familiar control should work
+                // for whichever voice actually ends up playing.
+                audio.playbackRate = J3PSpeech.getRate();
                 msgDiv.__serverAudio = audio;
                 audio.addEventListener("play", () => {
                   window.__activeSpeakMsg = msgDiv;
@@ -6897,29 +6905,6 @@ def load_avatar():
         conn.close()
 
 
-def avatar_exists() -> bool:
-    """Is a custom photo on file?
-
-    The admin dashboard only needs the yes/no, and load_avatar() returns the
-    whole image — a multi-hundred-KB BYTEA column pulled out of Postgres and
-    thrown away on every single admin page load. This asks the question
-    without moving the bytes.
-    """
-    conn = _settings_db_conn()
-    if not conn:
-        return False
-    try:
-        _avatar_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM advisor_avatar WHERE id = 1")
-            return cur.fetchone() is not None
-    except Exception as e:
-        app.logger.error(f"[avatar] existence check failed: {e}")
-        return False
-    finally:
-        conn.close()
-
-
 def clear_avatar() -> bool:
     conn = _settings_db_conn()
     if not conn:
@@ -7105,182 +7090,20 @@ def advisors_with_detail(advisor_rows=None, doc_map=None):
         doc_map = document_advisor_map()
     if advisor_rows is None:
         advisor_rows = list_advisors()
-    # Five bulk reads for the whole list, rather than five per advisor.
-    briefings = briefings_by_advisor()
-    personalities = advisor_personality_map()
-    behaviorals = advisor_behavioral_map()
-    feedback_360s = advisor_360_meta_map()
-    voice_samples = advisor_voice_meta_map()
     for adv in advisor_rows:
         adv = dict(adv)
-        slug = adv["slug"]
-        adv["briefings"] = briefings.get(slug, [])
-        adv["documents"] = [t for t, slugs in doc_map.items() if slug in slugs]
-        adv["personality"] = personalities.get(slug, {})
-        adv["behavioral"] = behaviorals.get(slug, {})
-        adv["feedback_360"] = feedback_360s.get(slug)
-        adv["voice_sample"] = voice_samples.get(slug)
+        adv["briefings"] = list_briefings(limit=10, advisor_slug=adv["slug"])
+        adv["documents"] = [t for t, slugs in doc_map.items()
+                            if adv["slug"] in slugs]
+        adv["personality"] = get_advisor_personality(adv["slug"])
+        adv["behavioral"] = get_advisor_behavioral(adv["slug"])
+        adv["feedback_360"] = get_advisor_360_meta(adv["slug"])
+        adv["voice_sample"] = get_advisor_voice_meta(adv["slug"])
         adv["suggested_bio"] = (
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
             if adv["personality"] else ""
         )
         out.append(adv)
-    return out
-
-
-
-
-# --- Bulk reads for the admin dashboard -------------------------------------
-# advisors_with_detail() used to call get_advisor_personality(),
-# get_advisor_behavioral(), get_advisor_360_meta(), get_advisor_voice_meta()
-# and list_briefings() once per advisor — five round trips each, so twenty
-# on a four-advisor deployment, all of them sequential against a remote
-# managed Postgres where latency, not query cost, is what's actually being
-# paid. These fetch the same data for every advisor at once. The per-advisor
-# functions above stay exactly as they are: they're still the right thing for
-# a single-advisor page (the portal, the voice routes), and this is only
-# about the dashboard's N+1.
-
-def advisor_personality_map() -> dict:
-    """{slug: {scores, completed_at}} for every advisor that has completed it."""
-    conn = _settings_db_conn()
-    if not conn:
-        return {}
-    out = {}
-    try:
-        _advisor_personality_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT advisor_slug, openness, conscientiousness, extraversion,
-                       agreeableness, stability, completed_at
-                FROM advisor_personality
-            """)
-            for row in cur.fetchall():
-                scores = {k: v for k, v in zip(_PERSONALITY_TRAITS, row[1:6])
-                          if v is not None}
-                if scores:
-                    out[row[0]] = {"scores": scores, "completed_at": row[6]}
-    except Exception as e:
-        app.logger.error(f"[advisor-personality] bulk read failed: {e}")
-    finally:
-        conn.close()
-    return out
-
-
-def advisor_behavioral_map() -> dict:
-    """{slug: {scores, completed_at}} for every advisor that has completed it."""
-    conn = _settings_db_conn()
-    if not conn:
-        return {}
-    out = {}
-    try:
-        _advisor_behavioral_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("SELECT advisor_slug, scores_json, completed_at FROM advisor_behavioral")
-            for slug, scores_json, completed_at in cur.fetchall():
-                try:
-                    scores = _json.loads(scores_json)
-                except (TypeError, ValueError):
-                    continue
-                if scores:
-                    out[slug] = {"scores": scores, "completed_at": completed_at}
-    except Exception as e:
-        app.logger.error(f"[advisor-behavioral] bulk read failed: {e}")
-    finally:
-        conn.close()
-    return out
-
-
-def advisor_360_meta_map() -> dict:
-    """{slug: meta} — filename/size/date only, never the file content."""
-    conn = _settings_db_conn()
-    if not conn:
-        return {}
-    out = {}
-    try:
-        _advisor_360_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT advisor_slug, id, filename, size_bytes, uploaded_at
-                FROM advisor_360_feedback
-            """)
-            for slug, fid, filename, size_bytes, uploaded_at in cur.fetchall():
-                out[slug] = {"id": fid, "filename": filename,
-                             "size_bytes": size_bytes or 0, "uploaded_at": uploaded_at}
-    except Exception as e:
-        app.logger.error(f"[advisor-360] bulk meta read failed: {e}")
-    finally:
-        conn.close()
-    return out
-
-
-def advisor_voice_meta_map() -> dict:
-    """{slug: meta} — everything except the audio bytes, same shape as
-    get_advisor_voice_meta() returns for one advisor."""
-    conn = _settings_db_conn()
-    if not conn:
-        return {}
-    out = {}
-    try:
-        _advisor_voice_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT advisor_slug, filename, size_bytes, consent_given, consent_note,
-                       provider, provider_voice_id, voice_mode, voice_stability,
-                       voice_similarity_boost, voice_style, voice_speaker_boost, uploaded_at
-                FROM advisor_voice_samples
-            """)
-            for row in cur.fetchall():
-                out[row[0]] = {
-                    "filename": row[1], "size_bytes": row[2] or 0,
-                    "consent_given": bool(row[3]), "consent_note": row[4] or "",
-                    "provider": row[5] or "", "provider_voice_id": row[6] or "",
-                    "voice_mode": row[7] or "auto",
-                    "voice_stability": row[8] if row[8] is not None else 0.5,
-                    "voice_similarity_boost": row[9] if row[9] is not None else 0.75,
-                    "voice_style": row[10] if row[10] is not None else 0.0,
-                    "voice_speaker_boost": bool(row[11]) if row[11] is not None else True,
-                    "uploaded_at": row[12],
-                }
-    except Exception as e:
-        app.logger.error(f"[advisor-voice] bulk meta read failed: {e}")
-    finally:
-        conn.close()
-    return out
-
-
-def briefings_by_advisor(per_advisor=10, scan_limit=400) -> dict:
-    """{slug: [briefing, ...]} newest first, capped per advisor.
-
-    One pass over the most recent briefings rather than a query per advisor.
-    scan_limit bounds the work on a deployment with a long history; an
-    advisor whose last ten briefings fall outside that window shows fewer,
-    which is the same trade the old per-advisor LIMIT 10 was making anyway.
-    """
-    conn = _settings_db_conn()
-    if not conn:
-        return {}
-    out = {}
-    try:
-        _briefings_ensure_table(conn)
-        with conn.cursor() as cur:
-            cur.execute("""
-                SELECT advisor_slug, advisor_name, participant, summary, emailed, created_at
-                FROM session_briefings
-                WHERE advisor_slug IS NOT NULL AND advisor_slug != ''
-                ORDER BY id DESC LIMIT %s
-            """, (scan_limit,))
-            for slug, name, participant, summary, emailed, created_at in cur.fetchall():
-                bucket = out.setdefault(slug, [])
-                if len(bucket) >= per_advisor:
-                    continue
-                bucket.append({"advisor": name or "—", "participant": participant or "—",
-                               "summary": summary, "emailed": bool(emailed),
-                               "when": _fmt_ts(created_at)})
-    except Exception as e:
-        app.logger.error(f"[briefing] bulk read failed: {e}")
-    finally:
-        conn.close()
     return out
 
 
@@ -7956,21 +7779,14 @@ def _parse_participant_bulk_file(file_bytes: bytes, filename: str) -> list:
     return out
 
 
-def bulk_create_participant_links(rows: list, default_advisor_slug: str = "",
-                                   lock_advisor: bool = False) -> dict:
+def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") -> dict:
     """Creates one participant link per parsed row. A row's own "advisor"
     value (matched case-insensitively against an advisor's name or slug)
     overrides default_advisor_slug for that row only; blank or
     unrecognized falls back to default_advisor_slug (itself possibly
     blank, meaning the default persona). Returns the created rows
     (each with its new token and resolved advisor_slug) plus any errors,
-    so the caller can build an enriched export of exactly this batch.
-
-    lock_advisor ignores the per-row Advisor column entirely and pins every
-    row to default_advisor_slug. That's what an upload started from one
-    advisor's own card means: the admin picked the advisor by choosing
-    where to upload, so a stray column in the file shouldn't quietly
-    reroute half the batch to someone else."""
+    so the caller can build an enriched export of exactly this batch."""
     advisors = list_advisors()
     name_to_slug = {}
     for a in advisors:
@@ -7984,10 +7800,7 @@ def bulk_create_participant_links(rows: list, default_advisor_slug: str = "",
         # both fall back to the form's own default — an unrecognized
         # value should not silently become "no advisor" instead of the
         # default the admin actually selected.
-        if lock_advisor:
-            advisor_slug = default_advisor_slug
-        else:
-            advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
+        advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
         result = create_participant_link(
             label=row["name"], advisor_slug=advisor_slug,
             first_name=row.get("first_name", ""), email=row.get("email", ""))
@@ -8997,6 +8810,7 @@ def _advisor_voice_ensure_table(conn):
                 voice_similarity_boost REAL NOT NULL DEFAULT 0.75,
                 voice_style             REAL NOT NULL DEFAULT 0.0,
                 voice_speaker_boost     BOOLEAN NOT NULL DEFAULT TRUE,
+                voice_speed             REAL NOT NULL DEFAULT 1.0,
                 uploaded_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
@@ -9020,6 +8834,10 @@ def _advisor_voice_ensure_table(conn):
         cur.execute("""
             ALTER TABLE advisor_voice_samples
             ADD COLUMN IF NOT EXISTS voice_speaker_boost BOOLEAN NOT NULL DEFAULT TRUE
+        """)
+        cur.execute("""
+            ALTER TABLE advisor_voice_samples
+            ADD COLUMN IF NOT EXISTS voice_speed REAL NOT NULL DEFAULT 1.0
         """)
     conn.commit()
 
@@ -9078,7 +8896,7 @@ def get_advisor_voice_meta(slug: str):
                 SELECT filename, size_bytes, consent_given, consent_note,
                        provider, provider_voice_id, voice_mode,
                        voice_stability, voice_similarity_boost, voice_style,
-                       voice_speaker_boost, uploaded_at
+                       voice_speaker_boost, voice_speed, uploaded_at
                 FROM advisor_voice_samples WHERE advisor_slug = %s
             """, (slug,))
             row = cur.fetchone()
@@ -9092,7 +8910,8 @@ def get_advisor_voice_meta(slug: str):
                 "voice_similarity_boost": row[8] if row[8] is not None else 0.75,
                 "voice_style": row[9] if row[9] is not None else 0.0,
                 "voice_speaker_boost": bool(row[10]) if row[10] is not None else True,
-                "uploaded_at": row[11]}
+                "voice_speed": row[11] if row[11] is not None else 1.0,
+                "uploaded_at": row[12]}
     except Exception as e:
         app.logger.error(f"[advisor-voice] meta read failed: {e}")
         return None
@@ -9273,12 +9092,13 @@ def set_advisor_voice_mode(slug: str, mode: str) -> bool:
 
 
 def set_advisor_voice_settings(slug: str, stability: float, similarity_boost: float,
-                                style: float = 0.0, speaker_boost: bool = True) -> bool:
+                                style: float = 0.0, speaker_boost: bool = True,
+                                speed: float = 1.0) -> bool:
     """Tunes how this advisor's cloned voice actually sounds — separate
     from whether it's used at all (voice_mode). A cloned voice getting
     through the whole pipeline successfully doesn't guarantee it sounds
-    natural; ElevenLabs' own stability/similarity_boost/style knobs are
-    the actual levers for that, and there's no way to know the right
+    natural; ElevenLabs' own stability/similarity_boost/style/speed knobs
+    are the actual levers for that, and there's no way to know the right
     values without listening, since that's a judgment only a human ear
     can make. Kept per-advisor rather than global, since a different
     source recording may need different tuning to sound right.
@@ -9291,6 +9111,14 @@ def set_advisor_voice_settings(slug: str, stability: float, similarity_boost: fl
     - style (0-1): exaggeration/expressiveness, supported on some
       models — 0 is the safest default if unsure.
     - speaker_boost: an additional clarity pass some models support.
+    - speed (0.7-1.2, 1.0 = normal): how fast the model paces the speech
+      it generates — distinct from a participant's own playback-rate
+      control, which just stretches the finished audio afterward. This
+      changes how ElevenLabs actually synthesizes pauses and rhythm, so
+      it can sound more natural than a naive speed-up/slow-down of a
+      fixed recording. ElevenLabs may adjust their supported range for
+      this over time; if a saved value stops taking effect, check their
+      current API reference for text-to-speech voice_settings.
 
     Only meaningful once a sample exists, same as voice_mode — returns
     False if none has been uploaded for this advisor yet."""
@@ -9299,6 +9127,7 @@ def set_advisor_voice_settings(slug: str, stability: float, similarity_boost: fl
     stability = max(0.0, min(1.0, float(stability)))
     similarity_boost = max(0.0, min(1.0, float(similarity_boost)))
     style = max(0.0, min(1.0, float(style)))
+    speed = max(0.7, min(1.2, float(speed)))
     conn = _settings_db_conn()
     if not conn:
         return False
@@ -9308,9 +9137,9 @@ def set_advisor_voice_settings(slug: str, stability: float, similarity_boost: fl
             cur.execute("""
                 UPDATE advisor_voice_samples
                 SET voice_stability = %s, voice_similarity_boost = %s,
-                    voice_style = %s, voice_speaker_boost = %s
+                    voice_style = %s, voice_speaker_boost = %s, voice_speed = %s
                 WHERE advisor_slug = %s
-            """, (stability, similarity_boost, style, bool(speaker_boost), slug))
+            """, (stability, similarity_boost, style, bool(speaker_boost), speed, slug))
             updated = cur.rowcount
         conn.commit()
         return updated > 0
@@ -9375,9 +9204,10 @@ def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: s
 
 def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
                                 stability: float = 0.5, similarity_boost: float = 0.75,
-                                style: float = 0.0, speaker_boost: bool = True):
+                                style: float = 0.0, speaker_boost: bool = True,
+                                speed: float = 1.0):
     """POST text to ElevenLabs' text-to-speech endpoint for one voice_id.
-    stability/similarity_boost/style/speaker_boost come from this
+    stability/similarity_boost/style/speaker_boost/speed come from this
     advisor's own tuned settings (see set_advisor_voice_settings) rather
     than a fixed default, since how natural a cloned voice actually
     sounds is a real, separate concern from whether the pipeline works
@@ -9395,6 +9225,7 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
             "similarity_boost": similarity_boost,
             "style": style,
             "use_speaker_boost": speaker_boost,
+            "speed": speed,
         },
     }).encode("utf-8")
     req = _url.Request(
@@ -9484,6 +9315,7 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
             similarity_boost=meta.get("voice_similarity_boost", 0.75),
             style=meta.get("voice_style", 0.0),
             speaker_boost=meta.get("voice_speaker_boost", True),
+            speed=meta.get("voice_speed", 1.0),
         )
         return audio_bytes, mime, "ok"
     except Exception as e:
@@ -13772,11 +13604,6 @@ td { padding: 0.6rem 0.5rem; border-bottom: 1px solid var(--line); vertical-alig
 .btn:hover { background: var(--gold); color: var(--navy); }
 .btn-danger { background: var(--rust); color: #fff; border-color: var(--rust); padding: 0.3rem 0.7rem; font-size: 0.7rem; }
 .btn-danger:hover { background: #fff; color: var(--rust); }
-.btn-quiet-danger {
-  background: transparent; color: var(--rust); border-color: var(--line);
-  padding: 0.3rem 0.7rem; font-size: 0.7rem;
-}
-.btn-quiet-danger:hover { border-color: var(--rust); background: #FEEAE5; }
 .pw-field { position: relative; display: block; min-width: 0; }
 .pw-field .pw-input { padding-right: 2.3rem !important; box-sizing: border-box; }
 .pw-toggle {
@@ -14429,6 +14256,20 @@ input[type="file"], input[type="text"] {
               but may sound unnatural past a point.
             </p>
           </div>
+          <div style="margin-bottom: 0.6rem;">
+            <label style="display: flex; justify-content: space-between; font-size: 0.78rem; margin-bottom: 0.2rem;">
+              <span>Speaking speed</span>
+              <span class="muted">{{ "%.2f"|format(t_voice_sample.voice_speed) }}&times;</span>
+            </label>
+            <input type="range" name="speed" min="0.7" max="1.2" step="0.05"
+                   value="{{ t_voice_sample.voice_speed }}" style="width: 100%;" />
+            <p class="muted" style="margin: 0.2rem 0 0; font-size: 0.7rem;">
+              How the model actually paces speech as it generates it — not
+              the same as a participant's own playback-speed control, which
+              just stretches the finished audio afterward. This can sound
+              more natural since pauses adjust with it. 1.00 is normal pace.
+            </p>
+          </div>
           <label style="display: flex; align-items: center; gap: 0.5rem; font-size: 0.8rem;
                         cursor: pointer; margin-bottom: 0.7rem;">
             <input type="checkbox" name="speaker_boost" value="1"
@@ -14530,115 +14371,6 @@ input[type="file"], input[type="text"] {
       {% endif %}
     {% endmacro %}
 
-    {% macro participant_links_section(t_slug, t_name, links) %}
-      {% if admin_perms.view_participant_links %}
-      <details class="advisor-section">
-        <summary>Participant Links{% if links %} ({{ links|length }}){% endif %}</summary>
-        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
-          A private link for one named person that opens straight into a
-          session with {{ t_name }} — no sign-in, and their conversation
-          follows them across visits and devices. Give a first name and the
-          session greets them by it. Turning a link off blocks access
-          immediately without touching that person's history.
-        </p>
-        {% if admin_perms.edit_participant_links %}
-        <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
-              style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
-                     background: var(--paper); border: 1px solid var(--line);
-                     border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.8rem;">
-          <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
-          <input type="hidden" name="return_to" value="advisors" />
-          <input type="text" name="first_name" placeholder="First name — used in their greeting"
-                 style="flex: 1 1 190px; padding: 0.45rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
-          <input type="text" name="label" required
-                 placeholder="Label for your own reference (e.g. Jane Smith — Cohort 2026)"
-                 style="flex: 2 1 240px; padding: 0.45rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
-          <input type="email" name="email" placeholder="Email — optional, for your records"
-                 style="flex: 1 1 190px; padding: 0.45rem; border: 1px solid var(--line);
-                        border-radius: 2px; font-family: inherit; font-size: 0.83rem;" />
-          <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
-        </form>
-        {% endif %}
-        <details style="margin-bottom: 0.9rem;">
-          <summary style="font-size: 0.76rem; cursor: pointer; color: var(--navy);">
-            Bulk create &amp; export
-          </summary>
-          {% if admin_perms.edit_participant_links %}
-          <p class="muted" style="margin: 0.6rem 0; font-size: 0.76rem; line-height: 1.6;">
-            Upload a .csv or .xlsx with a <strong>Name</strong> column, plus
-            optional <strong>First Name</strong> and <strong>Email</strong>
-            columns. Every row becomes a link for {{ t_name }} — an Advisor
-            column in the file is ignored here, since you've already chosen
-            the advisor by uploading from this card. The same file downloads
-            straight back with a Link column added; reload the page to see
-            the new links listed below.
-          </p>
-          <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
-                enctype="multipart/form-data"
-                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
-            <input type="hidden" name="lock_advisor" value="1" />
-            <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
-                   style="flex: 1 1 240px; padding: 0.4rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-            <button type="submit" class="btn" style="font-size: 0.64rem;">Upload &amp; create</button>
-          </form>
-          {% endif %}
-          {% if links %}
-          <div style="display: flex; gap: 0.5rem; margin-top: 0.7rem; align-items: center; flex-wrap: wrap;">
-            <span class="muted" style="font-size: 0.76rem;">
-              Export {{ t_name }}'s {{ links|length }} link{{ "s" if links|length != 1 else "" }}:
-            </span>
-            <a href="{{ url_for('admin_export_participant_links_csv') }}?advisor={{ t_slug or '__default__' }}"
-               class="btn" style="font-size: 0.64rem;">&darr; CSV</a>
-            <a href="{{ url_for('admin_export_participant_links_xlsx') }}?advisor={{ t_slug or '__default__' }}"
-               class="btn" style="font-size: 0.64rem;">&darr; Excel</a>
-          </div>
-          {% endif %}
-        </details>
-        {% if links %}
-        {% for l in links %}
-        <div class="advisor-link-row">
-          <div class="muted advisor-link-label">
-            {{ l.first_name or l.label }}{% if l.first_name %} · {{ l.label }}{% endif %}
-            {% if not l.enabled %} · <span style="color: var(--rust);">disabled</span>{% endif %}
-            {% if l.last_used_at %} · last used {{ l.last_used_at.strftime("%Y-%m-%d") }}
-            {% else %} · never used{% endif %}
-          </div>
-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-            <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
-               class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
-            <button type="button" class="copy-link" data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
-            <button type="button" class="share-link" data-url="{{ base_url }}/p/{{ l.token }}"
-                    data-advisor="{{ t_name }}">Share</button>
-            {% if admin_perms.edit_participant_links %}
-            <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}"
-                  style="display: inline;">
-              <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
-              <input type="hidden" name="return_to" value="advisors" />
-              <button type="submit" class="copy-link">{{ "Disable" if l.enabled else "Enable" }}</button>
-            </form>
-            <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
-                  style="display: inline;"
-                  onsubmit="return confirm('Delete the link for &quot;{{ l.label }}&quot;? This can\'t be undone.');">
-              <input type="hidden" name="return_to" value="advisors" />
-              <button type="submit" class="copy-link" style="color: var(--rust);">Delete</button>
-            </form>
-            {% endif %}
-          </div>
-        </div>
-        {% endfor %}
-        {% else %}
-        <p class="muted" style="margin: 0; font-size: 0.8rem;">
-          None yet — anyone reaching {{ t_name }} is using the shared links above.
-        </p>
-        {% endif %}
-      </details>
-      {% endif %}
-    {% endmacro %}
-
   <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
 
@@ -14672,7 +14404,7 @@ input[type="file"], input[type="text"] {
         <span class="camera-pending-indicator" id="camera-pending-new" hidden></span>
         <div class="initials-preview-row">
           <span id="initials-preview-new" class="initials-preview">?</span>
-          <span class="muted">Shown when no photo is set</span>
+          <span class="muted">Preview if no photo is used</span>
         </div>
         <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
       </form>
@@ -14718,20 +14450,16 @@ input[type="file"], input[type="text"] {
           </label>
           <div class="initials-preview-row">
             <span id="initials-preview-default" class="initials-preview">{{ initials_for(settings.avatar_name or cfg.persona_name) }}</span>
-            <span class="muted">Shown when no photo is set</span>
+            <span class="muted">Preview if no photo is used</span>
           </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
-                        letter-spacing: 0.08em;">Booking URL — their own Calendly/Acuity</label>
+                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
           <input type="url" name="default_scheduling_url"
                  value="{{ settings.default_scheduling_url or '' }}"
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
-          <p class="muted" style="flex: 1 1 100%; margin: 0.5rem 0 0; font-size: 0.76rem;">
-            The name appears beneath the photo in their sessions. Leave the file
-            blank to keep the current photo.
-          </p>
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
         {% if avatar_custom %}
@@ -14741,10 +14469,14 @@ input[type="file"], input[type="text"] {
                          border-color: var(--rust); font-size: 0.64rem;">Revert to bundled photo</button>
         </form>
         {% endif %}
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.76rem;">
+          The name appears beneath the photo in their sessions. Leave the
+          file blank to keep the current photo.
+        </p>
       </div>
 
       <div class="advisor-links">
-        <h3>Share Links</h3>
+        <h3>Scheduling Links</h3>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden')] %}
@@ -14759,9 +14491,6 @@ input[type="file"], input[type="text"] {
         </div>
         {% endfor %}
       </div>
-
-      {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
-                                    participant_links | rejectattr("advisor_slug") | list) }}
 
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
@@ -14784,11 +14513,11 @@ input[type="file"], input[type="text"] {
         </div>
         <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
               style="display:inline;" data-doc-title="{{ adv.name }}">
-          <button type="submit" class="btn btn-quiet-danger">Delete</button>
+          <button type="submit" class="btn btn-danger">Delete</button>
         </form>
       </div>
 
-      <details class="advisor-section">
+      <details class="advisor-section" open>
         <summary>Photo &amp; Name</summary>
         <form method="POST" action="/admin/advisors" enctype="multipart/form-data"
               style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
@@ -14814,11 +14543,11 @@ input[type="file"], input[type="text"] {
           </label>
           <div class="initials-preview-row">
             <span id="initials-preview-{{ adv.slug }}" class="initials-preview">{{ initials_for(adv.name) }}</span>
-            <span class="muted">Shown when no photo is set</span>
+            <span class="muted">Preview if no photo is used</span>
           </div>
           <label class="muted" style="display: block; font-size: 0.72rem;
                         flex: 1 1 100%; margin-top: 0.5rem; text-transform: uppercase;
-                        letter-spacing: 0.08em;">Booking URL — their own Calendly/Acuity</label>
+                        letter-spacing: 0.08em;">Scheduling link (optional)</label>
           <input type="url" name="scheduling_url" value="{{ adv.scheduling_url or '' }}"
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
@@ -14849,18 +14578,18 @@ input[type="file"], input[type="text"] {
             {% endfor %}
           </div>
 
-          <p class="muted" style="flex: 1 1 100%; margin: 0.5rem 0 0; font-size: 0.76rem;">
-            The name appears beneath the photo in their sessions. Leave the file
-            blank to keep the current photo.
-          </p>
           <button type="submit" class="btn" style="font-size: 0.66rem; margin-top: 0.5rem;">Save</button>
         </form>
+        <p class="muted" style="margin: 0.4rem 0 0; font-size: 0.76rem;">
+          The name appears beneath the photo in their sessions. Leave the file
+          blank to keep the current photo.
+        </p>
       </details>
 
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
       <details class="advisor-section">
-        <summary>Share Links</summary>
+        <summary>Scheduling Links</summary>
         {% for path, label in [
             ('/scheduling', 'Booking button always shown'),
             ('/no-scheduling', 'Booking button always hidden')] %}
@@ -14878,11 +14607,6 @@ input[type="file"], input[type="text"] {
         </div>
         {% endfor %}
       </details>
-
-      {{ participant_links_section(adv.slug, adv.name,
-                                    participant_links
-                                      | selectattr("advisor_slug", "equalto", adv.slug)
-                                      | list) }}
 
       <details class="advisor-section">
         <summary>Knowledge-Base Portal</summary>
@@ -15360,7 +15084,6 @@ input[type="file"], input[type="text"] {
           <div style="display: flex; gap: 0.4rem;">
             <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
               <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
-              <input type="hidden" name="return_to" value="participant-links" />
               <button type="submit" class="btn" style="font-size: 0.64rem;">
                 {{ "Disable" if l.enabled else "Enable" }}
               </button>
@@ -16755,14 +16478,6 @@ input[type="file"], input[type="text"] {
           try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
         }));
 
-        // A #hash in the URL wins over the remembered tab — that's how a
-        // redirect after a form submission says where it wants to land.
-        const hash = (window.location.hash || "").replace("#", "");
-        if (hash && tabs.some(t => t.dataset.tab === hash)) {
-          activate(hash);
-          try { localStorage.setItem(KEY, hash); } catch (e) {}
-          return;
-        }
         let saved = null;
         try { saved = localStorage.getItem(KEY); } catch (e) {}
         if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
@@ -17085,15 +16800,7 @@ def advisor_portal_logout():
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
-    import time as _time
-    _t0 = _time.perf_counter()
-    _marks = []
-
-    def _mark(name):
-        _marks.append((name, (_time.perf_counter() - _t0) * 1000))
-
     db_ok = db.is_enabled()
-    _mark("db.is_enabled")
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
     docs = db.list_documents() if db_ok else []
@@ -17138,19 +16845,15 @@ def admin_dashboard():
     for d in docs:
         for slug in _advisor_map.get(d["title"], []):
             _advisor_docs.setdefault(slug, []).append(d)
-    _mark("queries: documents, feedback, advisors")
-    _advisor_detail = advisors_with_detail(advisor_rows=_advisor_rows,
-                                           doc_map=_advisor_map)
-    _mark("queries: advisor detail")
-    html = _cached_render(
+    return _cached_render(
         ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
-        avatar_custom=avatar_exists(),
+        avatar_custom=bool(load_avatar()),
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
         default_persona_voice_sample=get_advisor_voice_meta(DEFAULT_PERSONA_SLUG),
         default_persona_slug=DEFAULT_PERSONA_SLUG,
-        advisors=_advisor_detail,
+        advisors=advisors_with_detail(advisor_rows=_advisor_rows, doc_map=_advisor_map),
         owners=document_owners(),
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
@@ -17160,15 +16863,12 @@ def admin_dashboard():
         personality_summary_tag=personality_summary_tag,
         behavioral_summary_tag=behavioral_summary_tag,
         participant_links=list_participant_links(),
-        biometric_files=(list_biometric_files()
-                         if has_permission("edit_biometric") else []),
+        biometric_files=list_biometric_files(),
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
-        learning_runs=(recent_learning_runs()
-                       if has_permission("edit_learning") else []),
+        learning_runs=recent_learning_runs(),
         briefings=list_briefings(unassigned_only=True),
-        archived_runs=(archived_run_count()
-                       if has_permission("edit_learning") else 0),
+        archived_runs=archived_run_count(),
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
         locations=locations_for([r.get("id") for r in feedback_rows]),
@@ -17185,7 +16885,7 @@ def admin_dashboard():
             iid: personality_interaction_tips(scores)
             for iid, scores in _personality_by_interaction.items()
         },
-        base_url=public_base_url(),
+        base_url=(paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
         log_personas=log_personas,
@@ -17193,22 +16893,8 @@ def admin_dashboard():
         log_limit=log_limit,
         admin_identity=current_admin_identity(),
         admin_perms=ROLE_PERMISSIONS.get(current_admin_role(), {}),
-        admin_users=(list_admin_users()
-                     if has_permission("manage_admins") else []),
+        admin_users=list_admin_users(),
     )
-    _mark("queries: remaining + render")
-
-    # Every guess at why this page is slow has so far been a guess. This
-    # records where the time actually went — in the Railway logs on every
-    # load, and as an HTML comment at the end of the page (view source) so
-    # it can be read without server access.
-    total = (_time.perf_counter() - _t0) * 1000
-    breakdown = " | ".join(f"{n} {ms:.0f}ms" for n, ms in _marks)
-    app.logger.info(f"[admin] rendered in {total:.0f}ms — {breakdown} "
-                    f"— {len(html) // 1024}KB, {len(feedback_rows)} log rows, "
-                    f"{len(_advisor_rows)} advisors, {len(docs)} docs")
-    return html + (f"\n<!-- admin render {total:.0f}ms | {breakdown} | "
-                   f"{len(html) // 1024}KB -->")
 
 
 @app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
@@ -17476,7 +17162,7 @@ def admin_set_advisor_voice_mode(slug):
 @require_permission("edit_voice")
 def admin_set_advisor_voice_settings(slug):
     """Saves how this advisor's cloned voice actually sounds — stability,
-    similarity boost, style, and speaker boost. See
+    similarity boost, style, speed, and speaker boost. See
     set_advisor_voice_settings for what each one does."""
     advisor = _resolve_voice_target(slug)
     if not advisor:
@@ -17486,11 +17172,12 @@ def admin_set_advisor_voice_settings(slug):
         stability = float(request.form.get("stability", 0.5))
         similarity_boost = float(request.form.get("similarity_boost", 0.75))
         style = float(request.form.get("style", 0.0))
+        speed = float(request.form.get("speed", 1.0))
     except (TypeError, ValueError):
         flash("Those values didn't look like numbers — nothing was changed.")
         return redirect(url_for("admin_dashboard") + "#advisors")
     speaker_boost = request.form.get("speaker_boost") == "1"
-    if set_advisor_voice_settings(slug, stability, similarity_boost, style, speaker_boost):
+    if set_advisor_voice_settings(slug, stability, similarity_boost, style, speaker_boost, speed):
         flash(f"✓ Voice tuning saved for {advisor['name']}. Test it with a real reply.")
     else:
         flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
@@ -17553,16 +17240,6 @@ def admin_save_advisor_expertise(slug):
     return redirect(url_for("admin_dashboard") + "#advisors")
 
 
-def _participant_link_redirect():
-    """Back to whichever tab the form was submitted from. Participant links
-    can now be created from an advisor's own card as well as from the
-    Participant Links tab, and being thrown to the other one mid-task is
-    disorienting."""
-    anchor = ("#advisors" if request.form.get("return_to") == "advisors"
-              else "#participant-links")
-    return redirect(url_for("admin_dashboard") + anchor)
-
-
 @app.route("/admin/participant-links", methods=["POST"])
 @require_permission("edit_participant_links")
 def admin_create_participant_link():
@@ -17575,7 +17252,7 @@ def admin_create_participant_link():
         flash(f"✓ Created a link for \u201c{label}\u201d. Copy it below and send it to them.")
     else:
         flash(result["error"])
-    return _participant_link_redirect()
+    return redirect(url_for("admin_dashboard") + "#participant-links")
 
 
 @app.route("/admin/participant-links/bulk", methods=["POST"])
@@ -17591,7 +17268,6 @@ def admin_bulk_create_participant_links():
         return redirect(url_for("admin_dashboard") + "#participant-links")
 
     default_advisor_slug = (request.form.get("advisor_slug") or "").strip()
-    lock_advisor = request.form.get("lock_advisor") == "1"
 
     try:
         file_bytes = file.read()
@@ -17604,7 +17280,7 @@ def admin_bulk_create_participant_links():
         flash("Could not read that file — check it's a valid .csv or .xlsx.")
         return redirect(url_for("admin_dashboard") + "#participant-links")
 
-    result = bulk_create_participant_links(rows, default_advisor_slug, lock_advisor)
+    result = bulk_create_participant_links(rows, default_advisor_slug)
     created, errors = result["created"], result["errors"]
 
     if not created:
@@ -17617,7 +17293,7 @@ def admin_bulk_create_participant_links():
     # right in the file, rather than only in a flash message that a file
     # download wouldn't display anyway).
     ext = (file.filename or "").rsplit(".", 1)[-1].lower()
-    base_url = public_base_url()
+    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
 
     export_rows = []
@@ -17678,33 +17354,12 @@ def admin_bulk_create_participant_links():
         )
 
 
-PARTICIPANT_EXPORT_DEFAULT_SCOPE = "__default__"
-
-
-def _participant_links_export_scope():
-    """Which links an export covers, from the ?advisor= query parameter.
-
-    Absent or blank means every link. The sentinel means only links with no
-    advisor assigned (the default persona) — an empty string can't carry
-    that meaning here, since it's indistinguishable from "not filtering".
-    Anything else is an advisor slug. Returns (predicate, filename_tag).
-    """
-    scope = (request.args.get("advisor") or "").strip()
-    if not scope:
-        return (lambda l: True), ""
-    if scope == PARTICIPANT_EXPORT_DEFAULT_SCOPE:
-        return (lambda l: not l["advisor_slug"]), "_default"
-    return (lambda l: l["advisor_slug"] == scope), "_" + slugify_advisor(scope)
-
-
 def _participant_links_export_rows():
     """Shared by both export formats below: every existing link, resolved
-    to a display-ready advisor name and full URL. Honours ?advisor= so an
-    advisor's own card can export just their own participants."""
-    in_scope, _tag = _participant_links_export_scope()
-    links = [l for l in list_participant_links() if in_scope(l)]
+    to a display-ready advisor name and full URL."""
+    links = list_participant_links()
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
-    base_url = public_base_url()
+    base_url = (paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/"))
     out = []
     for l in links:
         advisor_label = advisor_names.get(l["advisor_slug"], "Default") if l["advisor_slug"] else "Default"
@@ -17731,12 +17386,11 @@ def admin_export_participant_links_csv():
                       "Link", "Created", "Last Used"])
     writer.writerows(_participant_links_export_rows())
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _, tag = _participant_links_export_scope()
     return Response(
         buffer.getvalue(),
         mimetype="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links{tag}_{timestamp}.csv"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.csv"',
             "Cache-Control": "no-store",
         },
     )
@@ -17773,12 +17427,11 @@ def admin_export_participant_links_xlsx():
     wb.save(buffer)
     buffer.seek(0)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    _, tag = _participant_links_export_scope()
     return Response(
         buffer.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links{tag}_{timestamp}.xlsx"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.xlsx"',
             "Cache-Control": "no-store",
         },
     )
@@ -17792,7 +17445,7 @@ def admin_toggle_participant_link(link_id):
         flash("✓ Link enabled." if enable else "✓ Link disabled — access through it is blocked immediately.")
     else:
         flash("Could not update that link.")
-    return _participant_link_redirect()
+    return redirect(url_for("admin_dashboard") + "#participant-links")
 
 
 @app.route("/admin/participant-links/delete/<int:link_id>", methods=["POST"])
@@ -17802,7 +17455,7 @@ def admin_delete_participant_link(link_id):
         flash("✓ Link removed.")
     else:
         flash("Could not remove that link.")
-    return _participant_link_redirect()
+    return redirect(url_for("admin_dashboard") + "#participant-links")
 
 
 @app.route("/admin/settings", methods=["POST"])
@@ -18403,20 +18056,6 @@ def admin_delete_biometric(file_id):
     else:
         flash("Delete failed — check the server logs.")
     return redirect(url_for("admin_dashboard"))
-
-
-def public_base_url() -> str:
-    """The app's own public base URL, always https where that's real.
-
-    Railway terminates TLS at its proxy and forwards plain HTTP, so
-    request.host_url comes back as http:// — every link copied out of the
-    admin panel then went out insecure. PUBLIC_BASE_URL still wins when set.
-    """
-    base = paywall.PUBLIC_BASE_URL or request.host_url.rstrip("/")
-    host = request.headers.get("X-Forwarded-Host") or request.host or ""
-    if base.startswith("http://") and not host.startswith(("localhost", "127.0.0.1")):
-        base = "https://" + base[len("http://"):]
-    return base
 
 
 def _fmt_ts(value) -> str:
