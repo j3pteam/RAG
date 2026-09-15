@@ -7771,14 +7771,21 @@ def _parse_participant_bulk_file(file_bytes: bytes, filename: str) -> list:
     return out
 
 
-def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") -> dict:
+def bulk_create_participant_links(rows: list, default_advisor_slug: str = "",
+                                   lock_advisor: bool = False) -> dict:
     """Creates one participant link per parsed row. A row's own "advisor"
     value (matched case-insensitively against an advisor's name or slug)
     overrides default_advisor_slug for that row only; blank or
     unrecognized falls back to default_advisor_slug (itself possibly
     blank, meaning the default persona). Returns the created rows
     (each with its new token and resolved advisor_slug) plus any errors,
-    so the caller can build an enriched export of exactly this batch."""
+    so the caller can build an enriched export of exactly this batch.
+
+    lock_advisor ignores the per-row Advisor column entirely and pins every
+    row to default_advisor_slug. That's what an upload started from one
+    advisor's own card means: the admin picked the advisor by choosing
+    where to upload, so a stray column in the file shouldn't quietly
+    reroute half the batch to someone else."""
     advisors = list_advisors()
     name_to_slug = {}
     for a in advisors:
@@ -7792,7 +7799,10 @@ def bulk_create_participant_links(rows: list, default_advisor_slug: str = "") ->
         # both fall back to the form's own default — an unrecognized
         # value should not silently become "no advisor" instead of the
         # default the admin actually selected.
-        advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
+        if lock_advisor:
+            advisor_slug = default_advisor_slug
+        else:
+            advisor_slug = name_to_slug[advisor_raw] if advisor_raw in name_to_slug else default_advisor_slug
         result = create_participant_link(
             label=row["name"], advisor_slug=advisor_slug,
             first_name=row.get("first_name", ""), email=row.get("email", ""))
@@ -14366,6 +14376,43 @@ input[type="file"], input[type="text"] {
           <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
         </form>
         {% endif %}
+        <details style="margin-bottom: 0.9rem;">
+          <summary style="font-size: 0.76rem; cursor: pointer; color: var(--navy);">
+            Bulk create &amp; export
+          </summary>
+          {% if admin_perms.edit_participant_links %}
+          <p class="muted" style="margin: 0.6rem 0; font-size: 0.76rem; line-height: 1.6;">
+            Upload a .csv or .xlsx with a <strong>Name</strong> column, plus
+            optional <strong>First Name</strong> and <strong>Email</strong>
+            columns. Every row becomes a link for {{ t_name }} — an Advisor
+            column in the file is ignored here, since you've already chosen
+            the advisor by uploading from this card. The same file downloads
+            straight back with a Link column added; reload the page to see
+            the new links listed below.
+          </p>
+          <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
+                enctype="multipart/form-data"
+                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+            <input type="hidden" name="lock_advisor" value="1" />
+            <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
+                   style="flex: 1 1 240px; padding: 0.4rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Upload &amp; create</button>
+          </form>
+          {% endif %}
+          {% if links %}
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.7rem; align-items: center; flex-wrap: wrap;">
+            <span class="muted" style="font-size: 0.76rem;">
+              Export {{ t_name }}'s {{ links|length }} link{{ "s" if links|length != 1 else "" }}:
+            </span>
+            <a href="{{ url_for('admin_export_participant_links_csv') }}?advisor={{ t_slug or '__default__' }}"
+               class="btn" style="font-size: 0.64rem;">&darr; CSV</a>
+            <a href="{{ url_for('admin_export_participant_links_xlsx') }}?advisor={{ t_slug or '__default__' }}"
+               class="btn" style="font-size: 0.64rem;">&darr; Excel</a>
+          </div>
+          {% endif %}
+        </details>
         {% if links %}
         {% for l in links %}
         <div class="advisor-link-row">
@@ -17330,6 +17377,7 @@ def admin_bulk_create_participant_links():
         return redirect(url_for("admin_dashboard") + "#participant-links")
 
     default_advisor_slug = (request.form.get("advisor_slug") or "").strip()
+    lock_advisor = request.form.get("lock_advisor") == "1"
 
     try:
         file_bytes = file.read()
@@ -17342,7 +17390,7 @@ def admin_bulk_create_participant_links():
         flash("Could not read that file — check it's a valid .csv or .xlsx.")
         return redirect(url_for("admin_dashboard") + "#participant-links")
 
-    result = bulk_create_participant_links(rows, default_advisor_slug)
+    result = bulk_create_participant_links(rows, default_advisor_slug, lock_advisor)
     created, errors = result["created"], result["errors"]
 
     if not created:
@@ -17416,10 +17464,31 @@ def admin_bulk_create_participant_links():
         )
 
 
+PARTICIPANT_EXPORT_DEFAULT_SCOPE = "__default__"
+
+
+def _participant_links_export_scope():
+    """Which links an export covers, from the ?advisor= query parameter.
+
+    Absent or blank means every link. The sentinel means only links with no
+    advisor assigned (the default persona) — an empty string can't carry
+    that meaning here, since it's indistinguishable from "not filtering".
+    Anything else is an advisor slug. Returns (predicate, filename_tag).
+    """
+    scope = (request.args.get("advisor") or "").strip()
+    if not scope:
+        return (lambda l: True), ""
+    if scope == PARTICIPANT_EXPORT_DEFAULT_SCOPE:
+        return (lambda l: not l["advisor_slug"]), "_default"
+    return (lambda l: l["advisor_slug"] == scope), "_" + slugify_advisor(scope)
+
+
 def _participant_links_export_rows():
     """Shared by both export formats below: every existing link, resolved
-    to a display-ready advisor name and full URL."""
-    links = list_participant_links()
+    to a display-ready advisor name and full URL. Honours ?advisor= so an
+    advisor's own card can export just their own participants."""
+    in_scope, _tag = _participant_links_export_scope()
+    links = [l for l in list_participant_links() if in_scope(l)]
     advisor_names = {a["slug"]: a["name"] for a in list_advisors()}
     base_url = public_base_url()
     out = []
@@ -17448,11 +17517,12 @@ def admin_export_participant_links_csv():
                       "Link", "Created", "Last Used"])
     writer.writerows(_participant_links_export_rows())
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _, tag = _participant_links_export_scope()
     return Response(
         buffer.getvalue(),
         mimetype="text/csv; charset=utf-8",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.csv"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links{tag}_{timestamp}.csv"',
             "Cache-Control": "no-store",
         },
     )
@@ -17489,11 +17559,12 @@ def admin_export_participant_links_xlsx():
     wb.save(buffer)
     buffer.seek(0)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    _, tag = _participant_links_export_scope()
     return Response(
         buffer.read(),
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
-            "Content-Disposition": f'attachment; filename="j3p_participant_links_{timestamp}.xlsx"',
+            "Content-Disposition": f'attachment; filename="j3p_participant_links{tag}_{timestamp}.xlsx"',
             "Cache-Control": "no-store",
         },
     )
