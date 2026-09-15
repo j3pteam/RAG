@@ -14384,6 +14384,36 @@ input[type="file"], input[type="text"] {
           <button type="submit" class="btn-danger">Remove sample</button>
         </form>
         {% else %}
+        <details style="margin-bottom: 0.7rem;">
+          <summary style="font-size: 0.76rem; cursor: pointer; color: var(--navy);">
+            What makes a good sample (read before recording)
+          </summary>
+          <div class="muted" style="font-size: 0.74rem; line-height: 1.6; margin-top: 0.5rem;
+                      background: var(--paper); border: 1px solid var(--line); border-radius: 4px; padding: 0.6rem 0.8rem;">
+            <p style="margin: 0 0 0.5rem;">
+              <strong>Aim for at least 1–2 minutes</strong> — a clone built from a
+              10–20 second clip is the single most common cause of a cloned
+              voice sounding flat or "off." More natural speech to learn from
+              produces a noticeably better result.
+            </p>
+            <p style="margin: 0 0 0.5rem;">
+              Record somewhere quiet, at a normal conversational pace and
+              volume — not a monotone read. A mix of statements and questions,
+              spoken the way {{ t_name }} actually talks, works better than a
+              flat list of words.
+            </p>
+            <p style="margin: 0;">Here's a script that works well if nothing else comes to mind:</p>
+            <p style="margin: 0.4rem 0 0; font-style: italic;">
+              "Hi, I'm {{ t_name }}. I've spent years working through problems like
+              the one you're probably facing right now, and I want you to know —
+              there's no situation so complicated that we can't break it down into
+              something manageable. What's on your mind today? Take your time,
+              there's no rush here. Whether it's a quick question or something
+              you've been sitting with for a while, I'm glad you're here, and
+              we'll figure it out together, one step at a time."
+            </p>
+          </div>
+        </details>
         <form method="POST" action="{{ url_for('admin_upload_advisor_voice', slug=t_slug) }}"
               enctype="multipart/form-data" class="voice-record-form">
           <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;">
@@ -14397,6 +14427,7 @@ input[type="file"], input[type="text"] {
                    style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                           border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
           </div>
+          <p class="voice-record-hint muted" hidden style="margin: 0.4rem 0 0; font-size: 0.72rem;"></p>
           <div class="voice-preview-row" hidden style="display: flex; align-items: center; gap: 0.6rem; margin: 0.6rem 0; flex-wrap: wrap;">
             <audio controls preload="none" class="voice-preview-player"
                    style="width: 100%; max-width: 360px; display: block;"></audio>
@@ -16221,6 +16252,7 @@ input[type="file"], input[type="text"] {
       document.querySelectorAll(".voice-record-form").forEach(form => {
         const recordBtn = form.querySelector(".voice-record-btn");
         const timerEl = form.querySelector(".voice-record-timer");
+        const hintEl = form.querySelector(".voice-record-hint");
         const fileInput = form.querySelector(".voice-file-input");
         const previewRow = form.querySelector(".voice-preview-row");
         const player = form.querySelector(".voice-preview-player");
@@ -16230,6 +16262,14 @@ input[type="file"], input[type="text"] {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.MediaRecorder) {
           recordBtn.style.display = "none";
         }
+
+        // A clone built from a very short clip is the single most common
+        // cause of it sounding flat or "off" — these aren't hard limits
+        // ElevenLabs enforces, just guidance surfaced here directly,
+        // since nothing was telling anyone this beforehand and a bad
+        // sample isn't obviously bad until after it's already cloned.
+        const RECOMMENDED_MIN_SECONDS = 60;
+        const AUTO_STOP_SECONDS = 300; // 5 minutes — plenty for IVC; mostly a safety cap
 
         let mediaRecorder = null;
         let chunks = [];
@@ -16244,6 +16284,18 @@ input[type="file"], input[type="text"] {
           const m = String(Math.floor(secs / 60)).padStart(1, "0");
           const s = String(secs % 60).padStart(2, "0");
           timerEl.textContent = `${m}:${s}`;
+          if (hintEl) {
+            if (secs < RECOMMENDED_MIN_SECONDS) {
+              hintEl.hidden = false;
+              hintEl.textContent = `Keep going — aim for at least 1 minute (${RECOMMENDED_MIN_SECONDS - secs}s to go)`;
+              hintEl.style.color = "";
+            } else {
+              hintEl.hidden = false;
+              hintEl.textContent = "✓ Good length — stop whenever you're ready";
+              hintEl.style.color = "#2D7D5F";
+            }
+          }
+          if (secs >= AUTO_STOP_SECONDS) stopRecording();
         }
 
         function setRecordingUI(isRecording) {
@@ -16265,6 +16317,7 @@ input[type="file"], input[type="text"] {
           player.load();
           previewRow.hidden = true;
           timerEl.hidden = true;
+          if (hintEl) hintEl.hidden = true;
           fileInput.value = "";
           fileInput.disabled = false;
           setRecordingUI(false);
@@ -16276,6 +16329,7 @@ input[type="file"], input[type="text"] {
             mediaRecorder = new MediaRecorder(stream);
             mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
             mediaRecorder.onstop = () => {
+              const recordedSeconds = Math.floor((Date.now() - startedAt) / 1000);
               recordedBlob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
               stream.getTracks().forEach(t => t.stop());
               if (previewUrl) URL.revokeObjectURL(previewUrl);
@@ -16285,6 +16339,16 @@ input[type="file"], input[type="text"] {
               fileInput.value = "";
               fileInput.disabled = true;
               setRecordingUI(false);
+              if (hintEl) {
+                if (recordedSeconds < RECOMMENDED_MIN_SECONDS) {
+                  hintEl.hidden = false;
+                  hintEl.style.color = "var(--rust)";
+                  hintEl.textContent = `⚠ Only ${recordedSeconds}s — under a minute often clones `
+                    + `poorly. Worth re-recording longer before saving, if you can.`;
+                } else {
+                  hintEl.hidden = true;
+                }
+              }
             };
             mediaRecorder.start();
             recording = true;
