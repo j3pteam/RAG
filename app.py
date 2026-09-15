@@ -3951,11 +3951,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
         J3PSpeech.setRate(range.value);
       });
 
-      preview.addEventListener("click", () => {
-        J3PSpeech.play(
-          "Naming the hard thing early is usually the work. This is the voice you'll hear.",
-          {}, { fromGesture: true }
-        );
+      preview.addEventListener("click", async () => {
+        const previewText = "Naming the hard thing early is usually the work. This is the voice you'll hear.";
+        // "Preview voice" sat right next to the new advisor-voice choice
+        // but never actually reflected it — it always tested the plain
+        // browser voice regardless of which one was selected, which
+        // meant clicking it while "their own voice" was chosen played
+        // something that wasn't what Speak would actually use. Route
+        // through the same cloned-voice attempt Speak itself uses so
+        // this preview is honest about which voice will really play.
+        if (PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE !== "default") {
+          try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const resp = await fetch("/advisor/speak", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: previewText, advisor_slug: PAGE_ADVISOR_SLUG }),
+              signal: controller.signal,
+            });
+            clearTimeout(timeoutId);
+            if (resp.ok && resp.status === 200) {
+              const blob = await resp.blob();
+              if (blob.size > 0) {
+                const audio = new Audio(URL.createObjectURL(blob));
+                await audio.play();
+                return;
+              }
+            }
+          } catch (e) {
+            // Falls through to the browser voice below, same as Speak does.
+          }
+        }
+        J3PSpeech.play(previewText, {}, { fromGesture: true });
       });
 
       document.addEventListener("click", (e) => {
