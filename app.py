@@ -20,6 +20,7 @@ import secrets
 import tempfile
 import re
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from functools import wraps
@@ -67,6 +68,62 @@ except Exception as _e:
 
 
 # ---------------------------------------------------------------------------
+# Page-load timing
+# ---------------------------------------------------------------------------
+# "The link is slow" can mean a cold container, a slow database, or a slow
+# render, and guessing between them has already cost a round of changes that
+# did not help. This records each phase of a participant page load, logs it
+# to Railway, and appends it to the HTML as a comment so it can be read from
+# view-source without server access.
+
+
+class _Phases:
+    def __init__(self, label):
+        self.label = label
+        self.t0 = time.perf_counter()
+        self.last = self.t0
+        self.marks = []
+
+    def mark(self, name):
+        now = time.perf_counter()
+        self.marks.append((name, (now - self.last) * 1000))
+        self.last = now
+
+    def summary(self):
+        total = (time.perf_counter() - self.t0) * 1000
+        parts = " | ".join(f"{n} {ms:.0f}ms" for n, ms in self.marks)
+        return f"{self.label}: total {total:.0f}ms — {parts}"
+
+
+def _phase_start(label):
+    g._phases = _Phases(label)
+    return g._phases
+
+
+def _phase_mark(name):
+    """No-op on any route that did not start a timer."""
+    phases = getattr(g, "_phases", None)
+    if phases is not None:
+        phases.mark(name)
+
+
+def _phase_finish():
+    phases = getattr(g, "_phases", None)
+    if phases is None:
+        return ""
+    line = phases.summary()
+    app.logger.info("[timing] " + line)
+    return f"\n<!-- {line} -->\n"
+
+
+# Cold-start cost lands on whichever request arrives first after a deploy or
+# a scale-down: psycopg, voyageai, trafilatura, tokenizers and numpy all
+# import lazily, and the schema check runs, before that request is answered.
+# Recorded here so a slow first load can be told apart from a slow one.
+FIRST_REQUEST_BOOT_MS = None
+
+
+# ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
 
@@ -89,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-15-b"
-APP_BUILD_NOTES = "participant links live inside each advisor card"
+APP_VERSION = "2026-09-15-c"
+APP_BUILD_NOTES = "participant page load timed; advisor photo now cacheable"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -10524,6 +10581,20 @@ def _personalize_greeting(opening: str, first_name: str) -> str:
     return f"Hello {first_name} — {opening}"
 
 
+def _avatar_cache_version() -> int:
+    """Cache-buster for the advisor photo on participant pages.
+
+    This was datetime.now(), which made the photo URL unique on every single
+    load — so the browser re-downloaded the image every time, and each of
+    those is another request that reads the JPEG back out of Postgres. This
+    changes at most once every five minutes, so a returning participant
+    reuses the cached photo while a newly uploaded one still appears
+    promptly. The admin panel keeps the old behaviour, since an admin who
+    just uploaded a photo should see it immediately.
+    """
+    return int(time.time() // 300)
+
+
 def _render_chat(force_scheduling=None, advisor=None, participant_first_name=None):
     """Render the chat page.
 
@@ -10540,6 +10611,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     # toggles) can silently fail to take effect for whichever worker
     # happens to serve a given visitor, sometimes indefinitely.
     settings = load_settings(force=True)
+    _phase_mark("settings read")
 
     # Anonymous visitors start fresh each visit. Signed-in participants and
     # anyone on their own dedicated participant link keep their history —
@@ -10623,10 +10695,11 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
                           else DEFAULT_PERSONA_SLUG)
     page_voice_mode = "auto"
     _voice_meta = get_advisor_voice_meta(_voice_lookup_slug)
+    _phase_mark("voice mode lookup")
     if _voice_meta:
         page_voice_mode = _voice_meta.get("voice_mode") or "auto"
 
-    return _cached_render(
+    html = _cached_render(
         INDEX_HTML,
         cfg=page_cfg,
         show_avatar=_effective("show_avatar_override", "show_avatar"),
@@ -10640,10 +10713,14 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         personality_questions=TIPI_ITEMS,
         personality_enabled=_effective("personality_override",
                                         "personality_assessment_enabled", True),
-        avatar_version=int(datetime.now().timestamp()),
+        avatar_version=_avatar_cache_version(),
         page_advisor_slug=(active["slug"] if active else ""),
         page_voice_mode=page_voice_mode,
     )
+    _phase_mark("template render")
+    if FIRST_REQUEST_BOOT_MS is not None:
+        _phase_mark(f"[cold start on an earlier request: {FIRST_REQUEST_BOOT_MS:.0f}ms]")
+    return html + _phase_finish()
 
 
 @app.route("/")
@@ -10732,7 +10809,9 @@ def advisor_photo(slug):
     if stored:
         data, mime = stored
         resp = app.response_class(data, mimetype=mime)
-        resp.headers["Cache-Control"] = "no-cache"
+        # Matches the five-minute window the page's cache-buster uses, so the
+        # photo is fetched once per window rather than once per page load.
+        resp.headers["Cache-Control"] = "public, max-age=300"
         return resp
 
     advisor = get_advisor(slug)
@@ -10777,7 +10856,9 @@ def participant_link_index(token):
     this link's own secret token already establishes who they are, the
     same way a password would, so a second sign-in on top of it would just
     be redundant friction."""
+    _phase_start(f"/p/{token[:8]}")
     link = get_participant_link(token)
+    _phase_mark("link lookup")
     if not link:
         app.logger.info(f"[participant-links] unknown token requested: {token[:8]}\u2026")
         return _participant_link_unavailable("not_found")
@@ -10787,9 +10868,11 @@ def participant_link_index(token):
     session["participant_link_token"] = token
     session.permanent = True
     touch_participant_link(token)
+    _phase_mark("touch last-used")
     session.pop("force_scheduling", None)
 
     advisor = get_advisor(link["advisor_slug"]) if link["advisor_slug"] else None
+    _phase_mark("advisor lookup")
     if not advisor:
         # This link is for the default/shared persona — make sure a stale
         # advisor_slug from some earlier visit on this browser can't bleed in.
@@ -18766,10 +18849,15 @@ def _boot_background_once():
         return
     if request.path in ("/health", "/debug"):
         return
+    global FIRST_REQUEST_BOOT_MS
     _background_started = True
     print("[boot] first request received, starting background work", flush=True)
+    _boot_t0 = time.perf_counter()
     ensure_schema_once()
     _start_background_work()
+    FIRST_REQUEST_BOOT_MS = (time.perf_counter() - _boot_t0) * 1000
+    print(f"[boot] cold-start work took {FIRST_REQUEST_BOOT_MS:.0f}ms "
+          f"(paid by {request.path})", flush=True)
 
 
 print("[boot] routes registered, ready to serve", flush=True)
