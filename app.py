@@ -89,7 +89,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-15-a"
+APP_VERSION = "2026-09-15-b"
 APP_BUILD_NOTES = "participant links live inside each advisor card"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -2254,7 +2254,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .feedback-thanks { font-size: 0.7rem; color: var(--muted); margin-left: 0.4rem; font-style: italic; }
 
     /* Persists on the message after a Speak attempt finishes — separate
-       from the transient Speaking/Listening label under the avatar,
+       from the transient Speaking/Ready label under the avatar,
        which resets the moment speech ends and has proven too easy to
        miss the timing of. This stays put so it can be checked
        afterward instead of needing to be caught live. */
@@ -3233,7 +3233,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
     </button>
     <div class="presence-name">{{ cfg.avatar_name or cfg.persona_name }}</div>
-    <div class="presence-status" id="presence-status">Listening</div>
+    <div class="presence-status" id="presence-status">Ready</div>
   </div>
   {% endif %}
 
@@ -4856,7 +4856,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       let respondTimer = null;
 
       const LABELS = {
-        idle: "Listening",
+        // "Listening" read as though the microphone were live, which it
+        // is not at rest — the mic is a separate, explicit button. "Ready"
+        // says the advisor is there without implying it is recording.
+        idle: "Ready",
         thinking: "Thinking",
         responding: "Responding",
         speaking: "Speaking",
@@ -5353,7 +5356,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
 
         // A persistent note on the message itself, separate from the
-        // Speaking/Listening label under the avatar — that label resets
+        // Speaking/Ready label under the avatar — that label resets
         // the moment speech ends (or was even caught mid-reset in a
         // screenshot taken a beat too late/early more than once), so
         // there was never a reliable window to actually read it. This
