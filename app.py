@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-a"
-APP_BUILD_NOTES = "admin restyled on Atlassian Design System in J3P brand"
+APP_VERSION = "2026-09-16-b"
+APP_BUILD_NOTES = "admin renders one tab per request instead of all seven"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -12827,7 +12827,7 @@ def admin_upload_avatar():
     scheduling_url = (request.form.get("default_scheduling_url") or "").strip()
     if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
         flash("The scheduling link needs to start with http:// or https://.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     file = request.files.get("avatar")
     if file and file.filename:
@@ -12835,11 +12835,11 @@ def admin_upload_avatar():
         if len(raw) > AVATAR_MAX_BYTES:
             flash(f"That image is {len(raw)/1048576:.1f} MB — the limit is "
                   f"{AVATAR_MAX_BYTES // 1048576} MB.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="advisors"))
         ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
         if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
             flash("Use a JPG, PNG, WEBP or GIF image.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="advisors"))
         data, mime = prepare_avatar(raw)
         store_avatar(data, mime)
 
@@ -12854,7 +12854,7 @@ def admin_upload_avatar():
     save_setting("default_scheduling_url", scheduling_url[:500])
 
     flash("✓ Default advisor saved.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/avatar/delete", methods=["POST"])
@@ -12865,7 +12865,7 @@ def admin_delete_avatar():
         flash("Reverted to the bundled advisor photo.")
     else:
         flash("Could not revert the photo.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 # ---------------------------------------------------------------------------
@@ -12904,7 +12904,7 @@ def _participant_link_redirect():
     target = (request.form.get("return_to") or "advisors").strip()
     if target not in ("advisors",):
         target = "advisors"
-    return redirect(url_for("admin_dashboard") + "#" + target)
+    return redirect(url_for("admin_dashboard", tab=target))
 
 
 ADMIN_LOGIN_HTML = """<!DOCTYPE html>
@@ -13893,8 +13893,7 @@ body { font-family: 'Jost', -apple-system, BlinkMacSystemFont, sans-serif; backg
 }
 .admin-sidebar-foot a { font-size: 0.78rem; color: rgba(210, 188, 141, 0.7); text-decoration: none; }
 .admin-sidebar-foot a:hover { color: var(--gold); }
-.tab-pane { display: none; }
-.tab-pane.active { display: block; }
+.tab-pane { display: block; }
 .tab-pane .group-heading:first-child { margin-top: 0; }
 
 .section h2 { margin: 0 0 1rem 0; font-size: 0.85rem; letter-spacing: 0.16em; text-transform: uppercase; color: var(--navy); border-bottom: 1px solid var(--line); padding-bottom: 0.6rem; }
@@ -14530,39 +14529,39 @@ tbody tr:hover td { background: var(--N10); }
     </div>
   </div>
   <nav class="admin-sidebar-nav">
-    <button type="button" class="tab-btn active" data-tab="overview">
+    <a class="tab-btn {{ 'active' if active_tab == 'overview' else '' }}" href="{{ url_for('admin_dashboard', tab='overview') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
       Overview
-    </button>
-    <button type="button" class="tab-btn" data-tab="activity">
+    </a>
+    <a class="tab-btn {{ 'active' if active_tab == 'activity' else '' }}" href="{{ url_for('admin_dashboard', tab='activity') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
       Activity
-    </button>
-    <button type="button" class="tab-btn" data-tab="advisors">
+    </a>
+    <a class="tab-btn {{ 'active' if active_tab == 'advisors' else '' }}" href="{{ url_for('admin_dashboard', tab='advisors') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Advisors
-    </button>
+    </a>
     {% if admin_perms.edit_biometric %}
-    <button type="button" class="tab-btn" data-tab="biometric">
+    <a class="tab-btn {{ 'active' if active_tab == 'biometric' else '' }}" href="{{ url_for('admin_dashboard', tab='biometric') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
       Biometric data
-    </button>
+    </a>
     {% endif %}
-    <button type="button" class="tab-btn" data-tab="knowledge">
+    <a class="tab-btn {{ 'active' if active_tab == 'knowledge' else '' }}" href="{{ url_for('admin_dashboard', tab='knowledge') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>
       Knowledge
-    </button>
+    </a>
     {% if admin_perms.manage_admins %}
-    <button type="button" class="tab-btn" data-tab="users">
+    <a class="tab-btn {{ 'active' if active_tab == 'users' else '' }}" href="{{ url_for('admin_dashboard', tab='users') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       Manage users
-    </button>
+    </a>
     {% endif %}
     {% if admin_perms.edit_settings %}
-    <button type="button" class="tab-btn" data-tab="settings">
+    <a class="tab-btn {{ 'active' if active_tab == 'settings' else '' }}" href="{{ url_for('admin_dashboard', tab='settings') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       Settings
-    </button>
+    </a>
     {% endif %}
   </nav>
   <div class="admin-sidebar-foot">
@@ -14679,6 +14678,7 @@ tbody tr:hover td { background: var(--N10); }
   {% endmacro %}
 
   {% if admin_perms.edit_biometric %}
+  {% if active_tab == "biometric" %}
   <div class="tab-pane" data-tab="biometric">
     <h2 class="group-heading">Biometric Data</h2>
 
@@ -14741,8 +14741,10 @@ tbody tr:hover td { background: var(--N10); }
       {% endif %}
     </div>
   </div>
+  {% endif %}
 
-  <div class="tab-pane active" data-tab="overview">
+  {% if active_tab == "overview" %}
+  <div class="tab-pane" data-tab="overview">
     <h2 class="group-heading">Overview</h2>
     <div class="section">
       <h2>At a Glance</h2>
@@ -15145,7 +15147,9 @@ tbody tr:hover td { background: var(--N10); }
         {% endif %}
       </details>
     {% endmacro %}
+  {% endif %}
 
+  {% if active_tab == "advisors" %}
   <div class="tab-pane" data-tab="advisors">
   <h2 class="group-heading">Advisors</h2>
 
@@ -15648,7 +15652,10 @@ tbody tr:hover td { background: var(--N10); }
   </div>
   </div>
 
+  {% endif %}
+
   {% if admin_perms.edit_settings %}
+  {% if active_tab == "settings" %}
   <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Access</h2>
 
@@ -15688,8 +15695,10 @@ tbody tr:hover td { background: var(--N10); }
   </div>
   </div>
   {% endif %}
+  {% endif %}
 
   {% if admin_perms.manage_admins %}
+  {% if active_tab == "users" %}
   <div class="tab-pane" data-tab="users">
   <h2 class="group-heading">Manage Users</h2>
 
@@ -15814,7 +15823,9 @@ tbody tr:hover td { background: var(--N10); }
   </div>
   </div>
   {% endif %}
+  {% endif %}
 
+  {% if active_tab == "activity" %}
   <div class="tab-pane" data-tab="activity">
   <h2 class="group-heading">Feedback</h2>
 
@@ -16329,7 +16340,9 @@ tbody tr:hover td { background: var(--N10); }
     {% endif %}
   </div>
   </div>
+  {% endif %}
 
+  {% if active_tab == "knowledge" %}
   <div class="tab-pane" data-tab="knowledge">
   {% if rag_ready %}
   <h2 class="group-heading">Knowledge Base</h2>
@@ -16486,6 +16499,7 @@ tbody tr:hover td { background: var(--N10); }
   <p class="muted">Set up Postgres and <code>OPENAI_API_KEY</code> to enable the knowledge base — see the notice above.</p>
   {% endif %}
   </div>
+  {% endif %}
 
 </main>
 </div>
@@ -17194,35 +17208,11 @@ tbody tr:hover td { background: var(--N10); }
       // The active tab is remembered in localStorage so it survives the
       // full-page reload every form submission on this page causes.
       // ---------------------------------------------------------------
-      (function() {
-        const KEY = "j3p_admin_tab";
-        const tabs = Array.from(document.querySelectorAll(".tab-btn"));
-        const panes = Array.from(document.querySelectorAll(".tab-pane"));
-        if (!tabs.length) return;
-
-        function activate(name) {
-          tabs.forEach(t => t.classList.toggle("active", t.dataset.tab === name));
-          panes.forEach(p => p.classList.toggle("active", p.dataset.tab === name));
-        }
-
-        tabs.forEach(t => t.addEventListener("click", () => {
-          activate(t.dataset.tab);
-          try { localStorage.setItem(KEY, t.dataset.tab); } catch (e) {}
-        }));
-
-        // A redirect carrying #advisors wins over whatever tab was last
-        // open — otherwise a form posted from inside an advisor card lands
-        // back on a different tab entirely.
-        const fromHash = (location.hash || "").replace("#", "");
-        if (fromHash && tabs.some(t => t.dataset.tab === fromHash)) {
-          activate(fromHash);
-          try { localStorage.setItem(KEY, fromHash); } catch (e) {}
-        } else {
-          let saved = null;
-          try { saved = localStorage.getItem(KEY); } catch (e) {}
-          if (saved && tabs.some(t => t.dataset.tab === saved)) activate(saved);
-        }
-      })();
+      // Tabs are rendered server-side now: the sidebar links carry
+      // ?tab=<name> and only that pane is built and sent. The old script
+      // toggled an .active class over seven panes that were all present in
+      // the DOM — which is exactly the 553KB-per-load problem it existed to
+      // hide. Nothing replaces it; a link does the work.
     </script>
 </body></html>"""
 
@@ -17538,10 +17528,28 @@ def advisor_portal_logout():
     return redirect(url_for("advisor_portal_login_info"))
 
 
+ADMIN_TABS = ("overview", "activity", "advisors", "biometric",
+              "knowledge", "users", "settings")
+
+
 @app.route("/admin")
 @admin_required
 def admin_dashboard():
     _phase_start("/admin")
+
+    # Only one pane is ever visible, but all seven used to be rendered and
+    # shipped on every load — 553KB of HTML, of which the Activity log and
+    # the advisor cards were 410KB between them, parsed by the browser
+    # whether or not anyone looked at them. The tab now comes from the URL
+    # and only its own pane is built, so the queries behind the other six
+    # are skipped as well.
+    active_tab = (request.args.get("tab") or "overview").lower()
+    if active_tab not in ADMIN_TABS:
+        active_tab = "overview"
+    want_activity = active_tab == "activity"
+    want_advisors = active_tab == "advisors"
+    want_knowledge = active_tab == "knowledge"
+
     db_ok = db.is_enabled()
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
@@ -17553,7 +17561,7 @@ def admin_dashboard():
         log_filter = "all"
     # Second, independent filter — which advisor's sessions to show.
     # "" (All advisors) means no persona filter at all.
-    log_personas = db.list_feedback_personas() if db_ok else []
+    log_personas = db.list_feedback_personas() if (db_ok and want_activity) else []
     log_persona = request.args.get("advisor") or ""
     if log_persona not in log_personas:
         log_persona = ""
@@ -17577,7 +17585,7 @@ def admin_dashboard():
         limit=log_limit,
         rating=(None if log_filter == "all" else log_filter),
         persona=(log_persona or None),
-    ) if db_ok else []
+    ) if (db_ok and want_activity) else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _phase_mark("documents + conversation log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
@@ -17590,31 +17598,41 @@ def admin_dashboard():
             _advisor_docs.setdefault(slug, []).append(d)
     # Grouped once here rather than filtered per card in the template.
     # "" is the default persona, which has no row in the advisors table.
-    _participant_links = list_participant_links()
+    _participant_links = list_participant_links() if want_advisors else []
     _links_by_advisor = {}
     for _l in _participant_links:
         _links_by_advisor.setdefault(_l["advisor_slug"] or "", []).append(_l)
     _phase_mark("advisors + links")
 
-    # Five queries total, rather than five per advisor.
-    _personality_map = advisor_personality_map()
-    _behavioral_map = advisor_behavioral_map()
-    _meta_360_map = advisor_360_meta_map()
-    _voice_map = advisor_voice_meta_map()
-    _briefings_map = briefings_by_advisor(limit_per=10)
+    # Five queries total rather than five per advisor — and none at all
+    # unless the Advisors tab is the one being rendered.
+    if want_advisors:
+        _personality_map = advisor_personality_map()
+        _behavioral_map = advisor_behavioral_map()
+        _meta_360_map = advisor_360_meta_map()
+        _voice_map = advisor_voice_meta_map()
+        _briefings_map = briefings_by_advisor(limit_per=10)
+    else:
+        _personality_map = _behavioral_map = _meta_360_map = {}
+        _voice_map = _briefings_map = {}
     _phase_mark("advisor detail (5 bulk reads)")
 
     # Sections a viewer never sees should not cost a query to build. Each of
     # these is gated on the same permission the template gates the markup on.
     _perms = ROLE_PERMISSIONS.get(current_admin_role(), {})
-    _biometric_files = list_biometric_files() if _perms.get("edit_biometric") else []
-    _admin_users = list_admin_users() if _perms.get("manage_admins") else []
-    _learning_runs = recent_learning_runs() if _perms.get("edit_learning") else []
-    _archived_runs = archived_run_count() if _perms.get("edit_learning") else 0
+    _biometric_files = (list_biometric_files()
+                        if _perms.get("edit_biometric") and active_tab == "biometric" else [])
+    _admin_users = (list_admin_users()
+                    if _perms.get("manage_admins") and active_tab == "users" else [])
+    _learning_runs = (recent_learning_runs()
+                      if _perms.get("edit_learning") and want_activity else [])
+    _archived_runs = (archived_run_count()
+                      if _perms.get("edit_learning") and want_activity else 0)
     _phase_mark("permission-gated sections")
 
     html = _cached_render(
-        ADMIN_HTML, cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
+        ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
+        cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
         avatar_custom=avatar_exists(),
@@ -17706,7 +17724,7 @@ def admin_run_learning():
         flash(f"\u2713 Learned from {result['approved']} exchange"
               f"{'s' if result['approved'] != 1 else ''}{breakdown}; "
               f"{result['skipped']} held back for review.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/learning/archive", methods=["POST"])
@@ -17717,7 +17735,7 @@ def admin_archive_learning():
         flash("Run history archived — still available under View archive.")
     else:
         flash("Could not archive the run history.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/learning/archive", methods=["GET"])
@@ -17735,7 +17753,7 @@ def admin_save_advisor():
     name = (request.form.get("name") or "").strip()[:80]
     if not name:
         flash("Give the advisor a name.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     slug = (request.form.get("slug") or "").strip().lower()
     slug = slugify_advisor(slug or name)
@@ -17747,11 +17765,11 @@ def admin_save_advisor():
         if len(raw) > AVATAR_MAX_BYTES:
             flash(f"That photo is {len(raw)/1048576:.1f} MB — the limit is "
                   f"{AVATAR_MAX_BYTES // 1048576} MB.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="advisors"))
         ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
         if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
             flash("Use a JPG, PNG, WEBP or GIF photo.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="advisors"))
         photo, mime = prepare_avatar(raw)
 
     # Three states: a new photo, deliberately none, or keep the current one.
@@ -17768,7 +17786,7 @@ def admin_save_advisor():
     scheduling_url = (request.form.get("scheduling_url") or "").strip()
     if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
         flash("The scheduling link needs to start with http:// or https://.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     def _tristate(field):
         """'' -> inherit the global setting (None); '1'/'0' -> an explicit
@@ -17793,7 +17811,7 @@ def admin_save_advisor():
             flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/delete/<slug>", methods=["POST"])
@@ -17804,7 +17822,7 @@ def admin_delete_advisor(slug):
         flash(f"Advisor “{slug}” removed. Their links no longer work.")
     else:
         flash("Could not remove that advisor.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/portal-token/<slug>", methods=["POST"])
@@ -17816,7 +17834,7 @@ def admin_advisor_portal_token(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     action = (request.form.get("action") or "generate").strip()
     if action == "revoke":
@@ -17827,7 +17845,7 @@ def admin_advisor_portal_token(slug):
         set_advisor_portal_token(slug, token)
         verb = "Regenerated" if advisor.get("portal_token") else "Generated"
         flash(f"✓ {verb} {advisor['name']}'s portal link.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/360/download/<slug>")
@@ -17838,7 +17856,7 @@ def admin_download_advisor_360(slug):
     result = get_advisor_360_content(slug)
     if not result:
         flash("No 360 feedback file on record for that advisor.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     content, mime, filename = result
     return Response(content, mimetype=mime, headers={
         "Content-Disposition": f'attachment; filename="{filename}"'
@@ -17855,26 +17873,26 @@ def admin_upload_advisor_voice(slug):
     advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     consent_given = request.form.get("consent") == "1"
     consent_note = (request.form.get("consent_note") or "").strip()
     if not consent_given:
         flash("A voice sample can't be saved without confirming consent first.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     file = request.files.get("file")
     if not file or not file.filename:
         flash("Choose or record an audio file first.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     raw = file.read()
     if not raw:
         flash("That recording appears to be empty.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
         flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
               f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     mime = file.mimetype or "audio/webm"
     filename = file.filename if "." in file.filename else f"{file.filename}.webm"
@@ -17884,7 +17902,7 @@ def admin_upload_advisor_voice(slug):
               f"check the Voice Sample status here to confirm everything's in place.")
     else:
         flash("Could not save that voice sample — check the server logs.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/consent/<slug>", methods=["POST"])
@@ -17899,17 +17917,17 @@ def admin_confirm_advisor_voice_consent(slug):
     advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     consent_given = request.form.get("consent") == "1"
     consent_note = (request.form.get("consent_note") or "").strip()
     if not consent_given:
         flash("Check the consent box to confirm — nothing was changed.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     if set_advisor_voice_consent(slug, consent_given, consent_note):
         flash(f"✓ Consent confirmed for {advisor['name']}'s existing voice sample.")
     else:
         flash("Could not save that — check the server logs.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/mode/<slug>", methods=["POST"])
@@ -17923,16 +17941,16 @@ def admin_set_advisor_voice_mode(slug):
     advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     mode = request.form.get("voice_mode", "")
     if mode not in VOICE_MODES:
         flash("That's not a valid voice option — nothing was changed.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     if set_advisor_voice_mode(slug, mode):
         flash(f"✓ Voice setting saved for {advisor['name']}.")
     else:
         flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/settings/<slug>", methods=["POST"])
@@ -17944,7 +17962,7 @@ def admin_set_advisor_voice_settings(slug):
     advisor = _resolve_voice_target(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     try:
         stability = float(request.form.get("stability", 0.5))
         similarity_boost = float(request.form.get("similarity_boost", 0.75))
@@ -17952,13 +17970,13 @@ def admin_set_advisor_voice_settings(slug):
         speed = float(request.form.get("speed", 1.0))
     except (TypeError, ValueError):
         flash("Those values didn't look like numbers — nothing was changed.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     speaker_boost = request.form.get("speaker_boost") == "1"
     if set_advisor_voice_settings(slug, stability, similarity_boost, style, speaker_boost, speed):
         flash(f"✓ Voice tuning saved for {advisor['name']}. Test it with a real reply.")
     else:
         flash(f"Could not save that — {advisor['name']} needs a voice sample uploaded first.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/play/<slug>")
@@ -17980,7 +17998,7 @@ def admin_delete_advisor_voice(slug):
         flash("✓ Removed the voice sample.")
     else:
         flash("Could not remove that voice sample.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/bio/<slug>", methods=["POST"])
@@ -17992,12 +18010,12 @@ def admin_save_advisor_bio(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     bio = (request.form.get("client_bio") or "").strip()
     set_advisor_bio(slug, bio)
     flash(f"✓ Saved {advisor['name']}'s client-facing bio." if bio
           else f"✓ Cleared {advisor['name']}'s client-facing bio.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/expertise/<slug>", methods=["POST"])
@@ -18009,12 +18027,12 @@ def admin_save_advisor_expertise(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard") + "#advisors")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
     expertise = (request.form.get("expertise") or "").strip()
     set_advisor_expertise(slug, expertise)
     flash(f"✓ Saved {advisor['name']}'s areas of expertise." if expertise
           else f"✓ Cleared {advisor['name']}'s areas of expertise.")
-    return redirect(url_for("admin_dashboard") + "#advisors")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/participant-links", methods=["POST"])
@@ -18297,7 +18315,7 @@ def admin_settings():
             messages.append(f"Could not save {name.lower()}")
 
     flash((" · ".join(messages) + ".") if messages else "Nothing to save.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="settings"))
 
 
 @app.route("/admin/upload", methods=["POST"])
@@ -18305,12 +18323,12 @@ def admin_settings():
 def admin_upload():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot upload: RAG not fully configured.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     file = request.files.get("file")
     if not file or not file.filename:
         flash("No file selected.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     title = (request.form.get("title") or "").strip() or file.filename
 
@@ -18324,19 +18342,19 @@ def admin_upload():
             f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
             f"if you want to replace it."
         )
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     try:
         file_bytes = file.read()
         text = extract_attachment_text(file.filename, file_bytes)
         if not text.strip():
             flash(f"No text could be extracted from {file.filename}.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="knowledge"))
 
         chunks = emb.chunk_text(text)
         if not chunks:
             flash("Document produced no chunks (too short or empty).")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="knowledge"))
 
         # Embed all chunks in batch
         vectors = emb.embed_batch(chunks)
@@ -18349,7 +18367,7 @@ def admin_upload():
         app.logger.error(f"Upload failed: {e}")
         flash(f"Upload failed: {str(e)[:200]}")
 
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 @app.route("/admin/upload-folder", methods=["POST"])
@@ -18365,18 +18383,18 @@ def admin_upload_folder():
     """
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot upload: RAG not fully configured.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     files = request.files.getlist("files")
     if not files:
         flash("No files were selected.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     folder_title = (request.form.get("folder_title") or "").strip()[:80]
     folder_owner = (request.form.get("owner") or "").strip()
     summary = ingest_folder_batch(files, folder_title=folder_title, owner=folder_owner)
     flash(summary["message"])
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 def ingest_folder_batch(files, folder_title: str = "", scope_slugs=None, owner: str = "") -> dict:
@@ -18478,13 +18496,13 @@ def admin_upload_text():
     JavaScript page won't hand over."""
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot add text: RAG not fully configured.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     title = (request.form.get("text_title") or "").strip()
     body = (request.form.get("text_body") or "").strip()
     if len(body) < 100:
         flash("Paste a bit more text than that — at least a paragraph.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
     if not title:
         title = body.split("\n", 1)[0][:70].strip() or "Pasted text"
 
@@ -18492,13 +18510,13 @@ def admin_upload_text():
     if dup:
         flash(f"⚠ '{title}' already exists in the knowledge base. Use a "
               f"different title or delete the existing entry first.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     try:
         chunks = emb.chunk_text(body)
         if not chunks:
             flash("That text produced no chunks.")
-            return redirect(url_for("admin_dashboard"))
+            return redirect(url_for("admin_dashboard", tab="knowledge"))
         vectors = emb.embed_batch(chunks)
         doc_id = db.insert_document(title, "pasted text", list(zip(chunks, vectors)))
         set_document_owner(title, (request.form.get("owner") or "").strip())
@@ -18506,7 +18524,7 @@ def admin_upload_text():
     except Exception as e:
         app.logger.error(f"[text] ingest failed: {e}")
         flash(f"Could not add that text: {str(e)[:160]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 def fetch_podcast_feed(url: str):
@@ -18645,14 +18663,14 @@ def fetch_url_metadata(url: str):
 def admin_upload_url():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot ingest URL: RAG not fully configured.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     url = (request.form.get("url") or "").strip()
     custom_title = (request.form.get("url_title") or "").strip()
     owner = (request.form.get("owner") or "").strip()
     result = ingest_url_content(url, custom_title=custom_title, owner=owner)
     flash(result["message"])
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 def ingest_url_content(url: str, custom_title: str = "", scope_slugs=None, owner: str = "") -> dict:
@@ -18774,7 +18792,7 @@ def admin_delete(doc_id):
         flash(f"Deleted document #{doc_id}.")
     except Exception as e:
         flash(f"Delete failed: {str(e)[:200]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 @app.route("/admin/document-advisors", methods=["POST"])
@@ -18786,19 +18804,19 @@ def admin_set_document_advisors():
     slugs = [s for s in request.form.getlist("advisors") if s]
     if not title:
         flash("Missing document title — could not update its assignment.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     ok = set_document_advisors(title, slugs)
     if not ok:
         flash(f"Could not update the knowledge-base assignment for '{title}'.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
 
     if slugs:
         names = [a["name"] for a in list_advisors() if a["slug"] in slugs]
         flash(f"✓ '{title}' assigned to {', '.join(names) if names else ', '.join(slugs)}.")
     else:
         flash(f"✓ '{title}' moved to the shared J3P base — available to every advisor.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 @app.route("/admin/biometric/upload", methods=["POST"])
@@ -18812,16 +18830,16 @@ def admin_upload_biometric():
 
     if not email:
         flash("A participant email is required to upload a biometric file.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="biometric"))
     if not file or not file.filename:
         flash("Choose a file to upload.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="biometric"))
 
     raw = file.read()
     if len(raw) > BIOMETRIC_FILE_MAX_BYTES:
         flash(f"That file is {len(raw) / 1048576:.1f} MB — the limit is "
               f"{BIOMETRIC_FILE_MAX_BYTES // 1048576} MB.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="biometric"))
 
     title = file.filename[:200]
     mime = file.mimetype or "application/octet-stream"
@@ -18829,7 +18847,7 @@ def admin_upload_biometric():
         flash(f"✓ Uploaded '{title}' for {email}.")
     else:
         flash("Upload failed — check the server logs.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="biometric"))
 
 
 @app.route("/admin/biometric/download/<int:file_id>")
@@ -18852,7 +18870,7 @@ def admin_delete_biometric(file_id):
         flash("Deleted.")
     else:
         flash("Delete failed — check the server logs.")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="biometric"))
 
 
 def _fmt_ts(value) -> str:
@@ -19093,14 +19111,14 @@ def admin_delete_selected_feedback():
     ids = request.form.getlist("feedback_ids")
     if not ids:
         flash("No feedback rows selected.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
     try:
         count = db.delete_feedback_ids(ids)
         flash(f"Deleted {count} feedback row{'s' if count != 1 else ''}.")
     except Exception as e:
         app.logger.error(f"Delete selected feedback failed: {e}")
         flash(f"Delete failed: {str(e)[:200]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/feedback/delete-all", methods=["POST"])
@@ -19110,14 +19128,14 @@ def admin_delete_all_feedback():
     confirm = (request.form.get("confirm") or "").strip()
     if confirm != "YES":
         flash("Clear-all cancelled — confirmation text did not match.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
     try:
         count = db.delete_all_feedback()
         flash(f"Cleared all feedback ({count} rows).")
     except Exception as e:
         app.logger.error(f"Delete all feedback failed: {e}")
         flash(f"Clear failed: {str(e)[:200]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/feedback/<int:feedback_id>/approve-lesson", methods=["POST"])
@@ -19131,18 +19149,18 @@ def admin_approve_lesson(feedback_id):
     """
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot approve lesson — database or embeddings not configured.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
 
     row = db.get_feedback(feedback_id)
     if not row:
         flash("Feedback row not found.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
     if row.get("rating") != "down":
         flash("Only thumbs-down feedback can be approved as a lesson.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
     if not (row.get("comment") or "").strip():
         flash("This feedback has no comment — nothing to learn from. Add a comment first.")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="activity"))
 
     try:
         question_embedding = emb.embed_text(row["user_message"] or "")
@@ -19154,7 +19172,7 @@ def admin_approve_lesson(feedback_id):
     except Exception as e:
         app.logger.error(f"Approve lesson failed: {e}")
         flash(f"Approve failed: {str(e)[:200]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/feedback/<int:feedback_id>/revoke-lesson", methods=["POST"])
@@ -19169,7 +19187,7 @@ def admin_revoke_lesson(feedback_id):
             flash(f"Feedback #{feedback_id} not found.")
     except Exception as e:
         flash(f"Revoke failed: {str(e)[:200]}")
-    return redirect(url_for("admin_dashboard"))
+    return redirect(url_for("admin_dashboard", tab="activity"))
 
 
 @app.route("/admin/users", methods=["POST"])
@@ -19186,7 +19204,7 @@ def admin_create_user():
         flash(f"✓ Created a {role} account for {name} ({email}).")
     else:
         flash(result["error"])
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/admin/users/role/<int:user_id>", methods=["POST"])
@@ -19198,12 +19216,12 @@ def admin_set_user_role(user_id):
             get_admin_user(user_id)["email"] == identity["email"] and role != "owner":
         flash("You can't demote your own account — have another owner do it, "
               "so there's always at least one owner who can undo a mistake.")
-        return redirect(url_for("admin_dashboard") + "#users")
+        return redirect(url_for("admin_dashboard", tab="users"))
     if set_admin_user_role(user_id, role):
         flash(f"✓ Role updated to {role}.")
     else:
         flash("Could not update that role.")
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/admin/users/enabled/<int:user_id>", methods=["POST"])
@@ -19212,12 +19230,12 @@ def admin_set_user_enabled(user_id):
     enable = request.form.get("enable") == "1"
     if not enable and session.get("admin_user_id") == user_id:
         flash("You can't disable the account you're currently logged in as.")
-        return redirect(url_for("admin_dashboard") + "#users")
+        return redirect(url_for("admin_dashboard", tab="users"))
     if set_admin_user_enabled(user_id, enable):
         flash("✓ Account enabled." if enable else "✓ Account disabled — access is blocked immediately.")
     else:
         flash("Could not update that account.")
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
@@ -19225,12 +19243,12 @@ def admin_set_user_enabled(user_id):
 def admin_delete_user(user_id):
     if session.get("admin_user_id") == user_id:
         flash("You can't delete the account you're currently logged in as.")
-        return redirect(url_for("admin_dashboard") + "#users")
+        return redirect(url_for("admin_dashboard", tab="users"))
     if delete_admin_user(user_id):
         flash("✓ Account removed.")
     else:
         flash("Could not remove that account.")
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/admin/users/password/<int:user_id>", methods=["POST"])
@@ -19244,7 +19262,7 @@ def admin_reset_user_password(user_id):
         flash("✓ Password updated. Share the new password with them directly and securely.")
     else:
         flash(result["error"])
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/admin/my-password", methods=["POST"])
@@ -19258,17 +19276,17 @@ def admin_change_my_password():
     if not uid:
         flash("Sign in with your individual account to change its password "
               "(the master key isn't tied to a single account).")
-        return redirect(url_for("admin_dashboard"))
+        return redirect(url_for("admin_dashboard", tab="users"))
     current_password = request.form.get("current_password") or ""
     new_password = request.form.get("new_password") or ""
     user = get_admin_user(uid)
     from werkzeug.security import check_password_hash
     if not user or not check_password_hash(user["password_hash"], current_password):
         flash("Current password is incorrect.")
-        return redirect(url_for("admin_dashboard") + "#users")
+        return redirect(url_for("admin_dashboard", tab="users"))
     result = set_admin_user_password(uid, new_password)
     flash("✓ Your password has been updated." if result["ok"] else result["error"])
-    return redirect(url_for("admin_dashboard") + "#users")
+    return redirect(url_for("admin_dashboard", tab="users"))
 
 
 @app.route("/webhook/email", methods=["POST"])
