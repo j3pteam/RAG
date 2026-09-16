@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-f"
-APP_BUILD_NOTES = "contact scrubber can no longer empty a reply; retry on failure"
+APP_VERSION = "2026-09-16-g"
+APP_BUILD_NOTES = "cloned voice no longer times out on long replies"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4020,7 +4020,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE !== "default") {
           try {
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const timeoutId = setTimeout(() => controller.abort(),
+                                         voiceTimeoutFor(previewText));
             const resp = await fetch("/advisor/speak", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -4051,6 +4052,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (e.key === "Escape") menu.classList.remove("open");
       });
     })();
+
+
+    // How long to wait for a cloned voice, scaled to the text.
+    // Synthesis time tracks length, so a fixed ceiling either cuts off long
+    // replies (the old 6s) or leaves a dead button on short ones. Floor of
+    // 12s covers a preview; the per-character allowance covers the rest.
+    function voiceTimeoutFor(text) {
+      return Math.min(60000, 12000 + (text || "").length * 30);
+    }
 
     // Auto-speak state — persists across visits
     const autoSpeakBtn = document.getElementById("autospeak-btn");
@@ -5522,8 +5532,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // just to be told to fall back — skip straight to it.
           if (!(PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE === "default")) {
           try {
+            // Long replies take real time to synthesise. Say so, rather
+            // than leaving the avatar looking inert for ten seconds.
+            Presence.set("thinking", "preparing their voice");
             const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), 6000);
+            const timeoutId = setTimeout(() => controller.abort(),
+                                         voiceTimeoutFor(cleanText));
             const resp = await fetch("/advisor/speak", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -5573,7 +5587,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
           } catch (e) {
             // Network error, timeout, or a rejected play() — fall through
             // to the browser's own voice below rather than surface this.
-            fallbackReason = "request failed: " + (e && e.message ? e.message : "unknown");
+            fallbackReason = (e && e.name === "AbortError")
+              ? "their voice took too long to generate"
+              : "request failed: " + (e && e.message ? e.message : "unknown");
             console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
           }
           } // end participant-chose-default-voice skip
@@ -9541,7 +9557,11 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
 
     body = _j.dumps({
         "text": text,
-        "model_id": "eleven_multilingual_v2",
+        # eleven_multilingual_v2 is the quality option and the slower one.
+        # Set ELEVENLABS_MODEL to a lower-latency model (their turbo/flash
+        # line) to trade a little fidelity for a much shorter wait. Left as
+        # the default because an unrecognised id fails synthesis outright.
+        "model_id": os.environ.get("ELEVENLABS_MODEL", "eleven_multilingual_v2"),
         "voice_settings": {
             "stability": stability,
             "similarity_boost": similarity_boost,
@@ -9570,6 +9590,23 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
             detail = ""
         raise RuntimeError(f"ElevenLabs text-to-speech HTTP {e.code}: {detail or e.reason}")
     return audio_bytes, "audio/mpeg"
+
+
+# Recently synthesised clips, keyed by advisor + settings + text. Synthesis
+# is the slow part of Speak, and replaying a reply or re-reading the opening
+# is common enough to be worth not paying for twice. Small and in-process:
+# it is a latency cache, not storage — a restart simply loses it.
+_VOICE_CACHE = {}
+_VOICE_CACHE_MAX = 24
+
+
+def _voice_cache_key(slug, meta, text):
+    import hashlib
+    shape = "|".join(str(meta.get(k)) for k in (
+        "provider_voice_id", "voice_stability", "voice_similarity_boost",
+        "voice_style", "voice_speaker_boost"))
+    digest = hashlib.sha256((slug + "|" + shape + "|" + text).encode("utf-8")).hexdigest()
+    return digest[:32]
 
 
 def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
@@ -9617,6 +9654,15 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
     api_key = os.environ.get("ELEVENLABS_API_KEY", "")
     if not api_key:
         return None, None, "no-api-key-configured"
+    cache_key = _voice_cache_key(slug, meta, text)
+    hit = _VOICE_CACHE.get(cache_key)
+    if hit:
+        app.logger.info(f"[advisor-voice] cache hit for {slug} "
+                        f"({len(text)} chars) — no synthesis needed")
+        return hit[0], hit[1], "ok (cached)"
+
+    import time as _t
+    _started = _t.perf_counter()
     try:
         voice_id = meta.get("provider_voice_id")
         if not voice_id:
@@ -9631,6 +9677,8 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
             voice_id = _elevenlabs_clone_voice(
                 api_key, f"J3P Advisor — {display_name}", audio_bytes, mime, filename)
             set_advisor_voice_provider(slug, "elevenlabs", voice_id)
+            app.logger.info(f"[advisor-voice] cloned {slug} in "
+                            f"{(_t.perf_counter() - _started) * 1000:.0f}ms")
         audio_bytes, mime = _elevenlabs_text_to_speech(
             api_key, voice_id, text,
             stability=meta.get("voice_stability", 0.5),
@@ -9639,6 +9687,14 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
             speaker_boost=meta.get("voice_speaker_boost", True),
             speed=meta.get("voice_speed", 1.0),
         )
+        # The number to look at if Speak still feels slow: this is what the
+        # browser is waiting on, and what the client timeout has to clear.
+        elapsed = (_t.perf_counter() - _started) * 1000
+        app.logger.info(f"[advisor-voice] synthesised {len(text)} chars for "
+                        f"{slug} in {elapsed:.0f}ms ({len(audio_bytes) // 1024}KB)")
+        _VOICE_CACHE[cache_key] = (audio_bytes, mime)
+        while len(_VOICE_CACHE) > _VOICE_CACHE_MAX:
+            _VOICE_CACHE.pop(next(iter(_VOICE_CACHE)))
         return audio_bytes, mime, "ok"
     except Exception as e:
         app.logger.error(f"[advisor-voice] synthesis failed for {slug}: {e}")
