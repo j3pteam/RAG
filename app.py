@@ -58,6 +58,11 @@ db = _LazyModule("database")
 emb = _LazyModule("embeddings")
 import paywall
 import exports
+# Everything that differs between clients. One deployment serves one client;
+# TENANT=<slug> selects tenants/<slug>.json, and anything it omits falls back
+# to J3P's values, so a missing file changes nothing. See WHITE_LABEL.md.
+from tenant import TENANT, release_body_html, staff_name_pattern
+import tenant as tenant_config
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
@@ -146,8 +151,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-g"
-APP_BUILD_NOTES = "cloned voice no longer times out on long replies"
+APP_VERSION = "2026-09-16-i"
+APP_BUILD_NOTES = "one feedback-learning control instead of two cards"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -158,49 +163,30 @@ MAX_IMAGE_MB = int(os.environ.get("MAX_IMAGE_MB", "5"))
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 
 CONFIG = {
-    "persona_name": os.environ.get("PERSONA_NAME", "J3P Advisor"),
-    "opening": os.environ.get(
-        "PERSONA_OPENING",
-        "Hello, welcome to your session with the J3P Advisor.",
-    ),
-    "placeholder": os.environ.get("PERSONA_PLACEHOLDER", "How can I help you?"),
+    "persona_name": os.environ.get("PERSONA_NAME", TENANT["persona_name"]),
+    "opening": os.environ.get("PERSONA_OPENING", TENANT["persona_opening"]),
+    "placeholder": os.environ.get("PERSONA_PLACEHOLDER", TENANT["persona_placeholder"]),
     "system_prompt": load_system_prompt(),
 
-    "logo_url": os.environ.get("BRAND_LOGO_URL", "/full_logo.png"),
-    "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
+    "logo_url": os.environ.get("BRAND_LOGO_URL", TENANT["assets"]["logo_url"]),
+    "favicon_url": os.environ.get("BRAND_FAVICON_URL", TENANT["assets"]["favicon_url"]),
     # Avatar shown beside advisor replies. Set ADVISOR_AVATAR_URL="" to hide it.
-    "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", "/advisor_avatar.jpg"),
+    "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", TENANT["assets"]["avatar_url"]),
     # Looping clip for the avatar's resting state. Empty string = still photo.
-    "avatar_loop_url": os.environ.get("ADVISOR_LOOP_URL", "/advisor_idle.mp4"),
+    "avatar_loop_url": os.environ.get("ADVISOR_LOOP_URL", TENANT["assets"]["avatar_loop_url"]),
     "talking_avatar": os.environ.get("TALKING_AVATAR", "off").lower(),
-    "navy": os.environ.get("BRAND_NAVY", "#27334A"),
-    "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
-    "paper": os.environ.get("BRAND_PAPER", "#FAF6F0"),
+    "navy": os.environ.get("BRAND_NAVY", TENANT["brand"]["navy"]),
+    "gold": os.environ.get("BRAND_GOLD", TENANT["brand"]["gold"]),
+    "paper": os.environ.get("BRAND_PAPER", TENANT["brand"]["paper"]),
 
-    "footer_disclaimer": os.environ.get(
-        "FOOTER_DISCLAIMER",
-        "For informational purposes only. Not official advice.",
-    ),
-    "footer_cta_text": os.environ.get(
-        "FOOTER_CTA_TEXT",
-        "To schedule time with a J3P Advisor, please",
-    ),
-    "contact_email": os.environ.get("CONTACT_EMAIL", "clientservices@j3p.health"),
+    "footer_disclaimer": os.environ.get("FOOTER_DISCLAIMER", TENANT["footer_disclaimer"]),
+    "footer_cta_text": os.environ.get("FOOTER_CTA_TEXT", TENANT["scheduling_cta_text"]),
+    "contact_email": os.environ.get("CONTACT_EMAIL", TENANT["contact_email"]),
     "max_upload_mb": MAX_UPLOAD_MB,
     "max_image_mb": MAX_IMAGE_MB,
-    "footer_ai_note": os.environ.get(
-        "FOOTER_AI_NOTE",
-        "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
-    ),
-    "footer_cta_label": os.environ.get(
-        "FOOTER_CTA_LABEL",
-        "Schedule Time With a J3P Advisor",
-    ),
-    "footer_cta_url": os.environ.get(
-        "FOOTER_CTA_URL",
-        "https://app.acuityscheduling.com/catalog.php"
-        "?owner=29987697&action=addCart&clear=1&id=2262965",
-    ),
+    "footer_ai_note": os.environ.get("FOOTER_AI_NOTE", TENANT["footer_ai_note"]),
+    "footer_cta_label": os.environ.get("FOOTER_CTA_LABEL", TENANT["scheduling_label"]),
+    "footer_cta_url": os.environ.get("FOOTER_CTA_URL", TENANT["scheduling_url"]),
 
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
     # 1024 truncated two-page documents mid-sentence ("...built with this
@@ -947,7 +933,7 @@ def locations_for(interaction_ids):
 # qualified professional, and an alert is emailed. This runs before any model
 # call so the response is deterministic rather than left to the model.
 
-SAFETY_ALERT_EMAIL = os.environ.get("SAFETY_ALERT_EMAIL", "afriedman@j3p.health")
+SAFETY_ALERT_EMAIL = os.environ.get("SAFETY_ALERT_EMAIL", TENANT["alert_email"])
 SAFETY_ALERT_FROM = os.environ.get("SAFETY_ALERT_FROM", "")
 
 # Explicit statements of intent or ideation. Deliberately specific — vague
@@ -1759,21 +1745,10 @@ def advisor_portal_onboarded_required(f):
 
 RELEASE_HEADING = "Release &amp; Acknowledgment"
 
-RELEASE_BODY_HTML = """
-  <p>
-    By checking the box below, I acknowledge that I am voluntarily using
-    the J3P Advisor and understand that the content, coaching and guidance
-    provided are for personal and professional development purposes only.
-    I understand that these activities are not medical, psychological,
-    legal, or other professional advice, and I am responsible for my own
-    decisions and actions.
-  </p>
-  <p>
-    To the extent permitted by law, I release Residency Select LLC dba
-    J3P Health, its coaches, employees, and representatives from liability
-    arising from my voluntary use of the J3P Advisor.
-  </p>
-"""
+# The client's own legal entity and persona name are substituted in. A new
+# client MUST have their counsel review tenants/<slug>.json's release_body —
+# it is the liability release every participant accepts.
+RELEASE_BODY_HTML = release_body_html()
 
 RELEASE_CHECKBOX_LABEL = "I have read, understood, and agree to the above."
 
@@ -11727,12 +11702,8 @@ def chat():
     scope_guard = (
         "\n\n---\n"
         "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
-        "1. You answer ONLY questions related to J3P's areas of expertise: "
-        "leadership development, organizational behavior, behavioral assessment, "
-        "physician/healthcare leadership, team dynamics, executive coaching, "
-        "communication, self-awareness, negotiation, career navigation, "
-        "and related professional development topics within healthcare and "
-        "high-stakes organizational settings.\n\n"
+        f"1. You answer ONLY questions related to {TENANT['org_short']}'s "
+        f"areas of expertise: {TENANT['expertise']}.\n\n"
         "1b. IN SCOPE — PRODUCING DOCUMENTS. Writing finished deliverables on "
         "those topics is squarely in scope and must never be declined: cover "
         "letters, letters of intent, CVs and bios, recommendation letters, "
@@ -12008,13 +11979,9 @@ def chat():
 
     # Defensive scrubber: replace any forbidden brand names if the model slips them through.
     # The system prompt instructs Claude not to use these, but we sanitize as backup.
-    FORBIDDEN_NAMES = [
-        ("J3P Healthcare Solutions", "J3P"),
-        ("J3P Healthcare", "J3P"),
-        ("J3Personica", "the assessment framework"),
-        ("J3 Personica", "the assessment framework"),
-        ("Residency Select", "the residency selection tool"),
-    ]
+    # Legacy or internal brand names this client must never print, with
+    # what to say instead. Configured per tenant.
+    FORBIDDEN_NAMES = [tuple(pair) for pair in TENANT["forbidden_names"]]
     import re as _re
 
     # ---------------------------------------------------------------
@@ -12026,10 +11993,10 @@ def chat():
     # with the client services address, rather than patched phrase by phrase.
     CONTACT = CONFIG["contact_email"]
 
-    _STAFF_NAME_RE = _re.compile(
-        r"\b(?:Alan(?:\s+Friedman)?|(?:Mr|Dr)\.?\s+Friedman|Friedman|"
-        r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Seader|"
-        r"Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b", _re.IGNORECASE)
+    # Built from the tenant's staff list rather than hand-written, so a new
+    # client never has to author a regex. Matches first name, full name,
+    # honorific plus surname, and surname alone.
+    _STAFF_NAME_RE = _re.compile(staff_name_pattern(), _re.IGNORECASE)
 
     # The advisor whose page this is speaks in the first person, so their own
     # name is not a referral to someone else. Without this, a participant who
@@ -12066,11 +12033,8 @@ def chat():
 
     _INTERNAL_EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
     _PHONE_RE = _re.compile(r"(?:\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
-    _INTERNAL_DOMAINS = ("j3p.health", "j3phealth.com", "j3personica.com",
-                         "residencyselect.com")
-    _STAFF_LOCALS = ("afriedman", "alanfriedman", "alan.friedman",
-                     "iseader", "ivy.seader", "ivyseader",
-                     "dblake", "diane.blake", "dianeblake")
+    _INTERNAL_DOMAINS = tuple(TENANT["internal_domains"])
+    _STAFF_LOCALS = tuple(TENANT["staff_email_locals"])
 
     def _is_internal_email(addr: str) -> bool:
         # The client services address is the approved destination, so a passage
@@ -12440,6 +12404,9 @@ def health():
     return jsonify({
         "status": "ok",
         "version": APP_VERSION,
+        # Which client this deployment is serving. The first thing to check
+        # when a new white-label instance looks like the wrong brand.
+        "tenant": tenant_config.summary(),
         "build": APP_BUILD_NOTES,
         "admin_sections": [
             "Display", "Advisors", "Access", "Scheduling", "Feedback",
@@ -16109,7 +16076,7 @@ tbody tr:hover td { background: var(--N10); }
   <h2 class="group-heading">Feedback</h2>
 
   <div class="section">
-    <h2>Feedback Overview</h2>
+    <h2>Ratings</h2>
     <div class="stats">
       <div class="stat">
         <div class="stat-value">{{ stats.up }}</div>
@@ -16130,28 +16097,6 @@ tbody tr:hover td { background: var(--N10); }
         <div class="stat-label">Helpful rate</div>
       </div>
     </div>
-    <form method="POST" action="/admin/settings"
-          style="margin-top: 1.4rem; padding-top: 1.1rem;
-                 border-top: 1px dashed var(--line);">
-      <input type="hidden" name="_fields" value="auto_learning" />
-      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
-                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
-        <input type="checkbox" name="auto_learning" value="1"
-               {% if settings.auto_learning %}checked{% endif %}
-               style="margin-top: 0.2rem; width: 17px; height: 17px;
-                      accent-color: var(--navy); cursor: pointer;" />
-        <span>
-          <strong>Learn from feedback automatically</strong><br />
-          <span class="muted">
-            Runs the Continuous Learning step below on a schedule (every
-            {{ learning_interval }}h), so commented thumbs-down feedback becomes
-            lessons without you doing anything. Sensitive exchanges are still
-            held back for manual review.
-          </span>
-        </span>
-      </label>
-      <button type="submit" class="btn" style="margin-top: 0.9rem;">Save</button>
-    </form>
   </div>
 
   <div class="section">
@@ -16163,6 +16108,27 @@ tbody tr:hover td { background: var(--N10); }
       teaches it what to avoid. This processes them in bulk instead of one at a
       time.
     </p>
+    <form method="POST" action="/admin/settings"
+          style="margin: 0 0 1.2rem; padding-bottom: 1.1rem;
+                 border-bottom: 1px dashed var(--line);">
+      <input type="hidden" name="_fields" value="auto_learning" />
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+        <input type="checkbox" name="auto_learning" value="1"
+               {% if settings.auto_learning %}checked{% endif %}
+               style="margin-top: 0.2rem; width: 17px; height: 17px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Run this automatically</strong><br />
+          <span class="muted">
+            Every {{ learning_interval }}h, so rated feedback becomes lessons
+            without you doing anything. The same rules apply either way:
+            sensitive exchanges are still held back for manual review.
+          </span>
+        </span>
+      </label>
+      <button type="submit" class="btn" style="margin-top: 0.9rem;">Save</button>
+    </form>
     <form method="POST" action="/admin/learning/run" style="display: inline;">
       <button type="submit" name="preview" value="1" class="btn"
               style="background: transparent; color: var(--navy);">Preview</button>
