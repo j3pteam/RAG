@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-15-e"
-APP_BUILD_NOTES = "advisor cards grouped, collapsed, with status at a glance"
+APP_VERSION = "2026-09-16-a"
+APP_BUILD_NOTES = "admin restyled on Atlassian Design System in J3P brand"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -14213,6 +14213,312 @@ input[type="file"], input[type="text"] {
       color: var(--muted);
       font-style: italic;
     }
+/* ===========================================================================
+   Atlassian Design System, in J3P Health brand
+   ---------------------------------------------------------------------------
+   Appended last so it overrides the rules above. Atlassian's language is
+   built for exactly this surface: dense configuration screens with
+   permissions, user management and long settings lists.
+
+   Brand mapping (ADS token -> J3P):
+     background.brand.bold   B400 #0052CC -> navy  #27334A
+     background.danger.bold  R400 #DE350B -> rust  #9D432C
+     background.selected     B50  #DEEBFF -> gold tint
+     neutrals N0-N800        cool grey    -> warmed toward paper #FAF6F0
+
+   The warming matters: Atlassian's greys are blue-leaning, and dropped in
+   beside this paper and gold they read as grubby. N10 IS the paper, and
+   N20/N30/N40 derive from it, so surfaces stay warm while structure stays
+   Atlassian.
+
+   !important appears throughout because the markup sets font-size and
+   text-transform as inline styles on hundreds of elements, and an inline
+   style beats a stylesheet rule without it.
+   =========================================================================== */
+
+:root {
+  --N0:   #FFFFFF;
+  --N10:  #FAF6F0;
+  --N20:  #F3F0E9;
+  --N30:  #EAE5DB;
+  --N40:  #DCD6C9;
+  --N200: #6E7689;
+  --N500: #4A5468;
+  --N800: #27334A;
+
+  --brand-bold:     #27334A;
+  --brand-hover:    #1C2537;
+  --brand-selected: rgba(210, 188, 141, 0.28);
+  --brand-subtlest: rgba(210, 188, 141, 0.14);
+  --danger-subtle:  rgba(157, 67, 44, 0.10);
+  --success:        #2D7D5F;
+  --success-subtle: rgba(45, 125, 95, 0.12);
+
+  --sp-050: 4px;  --sp-100: 8px;  --sp-150: 12px; --sp-200: 16px;
+  --sp-300: 24px; --sp-400: 32px; --sp-500: 40px;
+
+  --radius: 3px;
+  --radius-large: 8px;
+
+  --elev-raised: 0 1px 1px rgba(39, 51, 74, 0.20), 0 0 1px 1px rgba(39, 51, 74, 0.09);
+
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --brand-font: 'Jost', var(--ui);
+}
+
+body {
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--N800);
+  letter-spacing: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Sentence case everywhere except lozenges --------------------------- */
+.section h2, .group-heading, .advisor-section summary, .advisor-links h3,
+.advisor-section-group, .advisor-link-label, .stat-label, .btn, .copy-link,
+.share-link, .expand-btn, th, summary, label {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+/* --- Type scale: ADS headings, shifted up one step ---------------------- */
+.group-heading {
+  font-family: var(--brand-font);
+  font-size: 1.65rem !important;
+  font-weight: 600; line-height: 1.2;
+  color: var(--N800);
+  margin: var(--sp-500) 0 var(--sp-200);
+  padding: 0; border-bottom: none;
+}
+.tab-pane > .group-heading:first-child { margin-top: var(--sp-100); }
+
+.section h2 {
+  font-size: 1.12rem !important;
+  font-weight: 600; line-height: 1.25;
+  color: var(--N800);
+  margin: 0 0 var(--sp-200);
+  padding: 0; border-bottom: none;
+}
+.advisor-links h3 {
+  font-size: 0.88rem !important; font-weight: 600;
+  color: var(--N500); margin: var(--sp-300) 0 var(--sp-100);
+}
+.muted { color: var(--N500) !important; font-size: 0.94rem !important; line-height: 1.55; }
+p, label { font-size: 1rem; }
+
+/* --- Side navigation: ADS nav item with selected indicator -------------- */
+.admin-sidebar { padding: var(--sp-300) var(--sp-100); }
+.admin-sidebar-brand { border-bottom: none; padding-bottom: var(--sp-300); }
+.admin-brand-logo { height: 80px; }
+.admin-sidebar-brand .name {
+  font-family: var(--brand-font); font-size: 1rem; font-weight: 500;
+}
+.admin-sidebar-brand .build { font-size: 0.78rem; }
+.tab-btn {
+  font-size: 0.98rem !important; font-weight: 400;
+  padding: var(--sp-100) var(--sp-150);
+  border-radius: var(--radius);
+  gap: var(--sp-150);
+  border-left: 3px solid transparent;
+  transition: background 0.1s ease;
+}
+.tab-btn svg { width: 18px; height: 18px; }
+.tab-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.08); }
+.tab-btn.active {
+  background: var(--brand-selected);
+  border-left-color: var(--gold);
+  font-weight: 600;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.admin-sidebar-foot a { font-size: 0.94rem; }
+
+/* --- Surfaces: ADS elevation.surface.raised ----------------------------- */
+.section, .advisor-block {
+  background: var(--N0);
+  border: none;
+  border-radius: var(--radius-large);
+  box-shadow: var(--elev-raised);
+  padding: var(--sp-300);
+  margin-bottom: var(--sp-200);
+}
+.advisor-block { padding: var(--sp-200); }
+.advisor-head {
+  border-bottom: 1px solid var(--N40);
+  padding-bottom: var(--sp-200);
+  gap: var(--sp-200);
+}
+.advisor-head strong { font-size: 1.2rem !important; font-weight: 600; }
+.advisor-head img { width: 48px !important; height: 48px !important; }
+
+/* --- Lozenges: the one place ADS keeps uppercase ------------------------
+   .on / .off already exist in the markup, so the tones bind automatically:
+   a set-up state reads green, an unset one reads neutral.                */
+.advisor-chips { gap: var(--sp-100) !important; margin-top: var(--sp-150) !important; }
+.advisor-chip {
+  display: inline-block;
+  font-size: 0.69rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  line-height: 1;
+  padding: 4px 7px !important;
+  border-radius: var(--radius) !important;
+  background: var(--N20) !important;
+  color: var(--N500) !important;
+  border: none !important;
+}
+.advisor-chip.on {
+  background: var(--success-subtle) !important;
+  color: var(--success) !important;
+}
+.advisor-chip.off {
+  background: var(--N20) !important;
+  color: var(--N200) !important;
+  border: none !important;
+}
+
+/* --- Expandable sections: ADS leading chevron --------------------------- */
+.advisor-section { padding: 0; border-top: none; margin-bottom: 2px; }
+.advisor-section:first-of-type { padding-top: 0; }
+.advisor-section summary {
+  display: flex; align-items: center; gap: var(--sp-100);
+  padding: var(--sp-100) !important;
+  margin: 0 !important;
+  font-size: 1rem !important;
+  font-weight: 600 !important;
+  color: var(--N800) !important;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.advisor-section summary:hover { background: var(--N20) !important; color: var(--N800) !important; }
+.advisor-section summary::before {
+  content: "" !important;
+  width: 7px; height: 7px;
+  border-right: 2px solid var(--N500);
+  border-bottom: 2px solid var(--N500);
+  transform: rotate(-45deg) !important;
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  margin-right: var(--sp-050);
+}
+.advisor-section[open] summary::before { transform: rotate(45deg) !important; }
+.advisor-section[open] > summary { background: var(--N20); margin-bottom: var(--sp-050) !important; }
+.advisor-section > *:not(summary) {
+  margin-top: var(--sp-150);
+  padding: 0 var(--sp-150) var(--sp-200) calc(var(--sp-100) + 15px);
+}
+
+/* Profile / Links / Setup captions */
+.advisor-section-group {
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  letter-spacing: normal !important;
+  text-transform: none !important;
+  color: var(--N200);
+  opacity: 1;
+  margin: var(--sp-300) 0 var(--sp-050);
+  padding-top: var(--sp-150);
+  border-top: 1px solid var(--N40);
+}
+.advisor-section-group:first-of-type { margin-top: var(--sp-150); }
+
+/* --- Buttons: ADS 3px radius, one bold primary per group ---------------- */
+.btn {
+  font-family: var(--ui);
+  font-size: 0.94rem !important;
+  font-weight: 500; line-height: 1;
+  padding: 11px 14px !important;
+  border-radius: var(--radius);
+  background: var(--brand-bold);
+  color: var(--N0);
+  border: none;
+  transition: background 0.1s ease;
+}
+.btn:hover { background: var(--brand-hover); color: var(--N0); }
+.btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+form.upload .btn, button[type="submit"].btn { width: auto !important; }
+
+.copy-link, .share-link, .expand-btn {
+  font-size: 0.88rem !important;
+  font-weight: 500;
+  padding: 7px 12px !important;
+  border-radius: var(--radius);
+  background: var(--N20);
+  border: none;
+  color: var(--N500);
+}
+.copy-link:hover, .share-link:hover, .expand-btn:hover {
+  background: var(--N30); color: var(--N800);
+}
+
+.btn-danger {
+  background: transparent;
+  color: var(--rust) !important;
+  border: none;
+  font-weight: 500;
+  font-size: 0.9rem !important;
+  padding: 8px 12px !important;
+  border-radius: var(--radius);
+}
+.btn-danger:hover { background: var(--danger-subtle); color: var(--rust) !important; }
+
+/* --- Fields: ADS textfield, 2px focus border ---------------------------- */
+input[type="text"], input[type="email"], input[type="url"],
+input[type="password"], input[type="file"], select, textarea {
+  font-family: var(--ui);
+  font-size: 0.97rem !important;
+  padding: 9px 10px !important;
+  border: 2px solid var(--N40);
+  border-radius: var(--radius);
+  background: var(--N10);
+  color: var(--N800);
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+input:hover, select:hover, textarea:hover { background: var(--N20); }
+input:focus, select:focus, textarea:focus {
+  outline: none; background: var(--N0); border-color: var(--brand-bold);
+  box-shadow: none;
+}
+::placeholder { color: var(--N200); }
+
+/* --- Tables: ADS DynamicTable ------------------------------------------ */
+table { font-size: 0.94rem !important; }
+th {
+  font-size: 0.8rem !important; font-weight: 700;
+  color: var(--N500); background: transparent;
+  border-bottom: 2px solid var(--N40);
+  padding: var(--sp-100);
+}
+td { border-bottom: 1px solid var(--N40); padding: var(--sp-150) var(--sp-100); }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--N10); }
+
+/* --- Section messages --------------------------------------------------- */
+.flash {
+  background: var(--brand-subtlest); color: var(--N800);
+  border: none; border-radius: var(--radius);
+  padding: var(--sp-150) var(--sp-200); font-size: 0.97rem;
+}
+.warn {
+  background: var(--danger-subtle); border: none;
+  border-radius: var(--radius);
+  padding: var(--sp-150) var(--sp-200); font-size: 0.97rem;
+}
+
+/* --- Stats and links ---------------------------------------------------- */
+.stat-value { font-family: var(--brand-font); font-size: 2.1rem; font-weight: 600; }
+.stat-label { font-size: 0.85rem !important; font-weight: 600; color: var(--N500); }
+.adv-link { font-size: 0.9rem !important; border-bottom: none; color: var(--N500); }
+.adv-link:hover { color: var(--brand-bold); text-decoration: underline; }
+.advisor-link-label { font-size: 0.85rem !important; font-weight: 600; color: var(--N500); }
+.advisor-link-row { margin-bottom: var(--sp-150); }
+.initials-preview { border: 1px solid var(--N40); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .tab-btn, .advisor-section summary::before { transition: none; }
+}
 </style></head><body>
 <div class="admin-shell">
 <aside class="admin-sidebar">
