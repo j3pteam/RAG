@@ -1,119 +1,116 @@
 /* ===========================================================================
-   J3P Admin — visual refresh
+   J3P Admin — visual refresh  (v2: larger type)
    ---------------------------------------------------------------------------
-   Paste this at the END of the existing <style> block in ADMIN_HTML, after
-   every current rule. It is an override layer: it changes nothing structural,
-   so it survives whatever the markup looks like today.
+   Replaces v1 entirely. Paste this at the END of the existing <style> block
+   in ADMIN_HTML, after every current rule. Don't paste both versions.
 
-   The design reference is Apple's own settings UI — specifically iOS
-   "inset grouped" lists. Four principles, applied consistently:
+   v2 raises the whole type scale: base text 16px, buttons 1rem, body copy
+   0.95rem, and no interface text below 0.88rem anywhere. The old panel had
+   labels at 0.62–0.68rem — 10–11px, below what Apple ships for any
+   persistent UI text.
 
-     1. Sentence case, never all-caps. Hierarchy comes from weight and
-        colour, not from letter-spacing. All-caps at 0.68rem is the single
-        thing making this panel feel like a 2009 admin tool.
-     2. Whitespace separates, rules do not. Most horizontal lines get
-        removed; grouped rounded containers do the same job more quietly.
+   The !important declarations below aren't laziness: the markup sets
+   font-size, text-transform and letter-spacing as inline styles on hundreds
+   of elements, and an inline style beats any stylesheet rule without it.
+
+   Design reference is Apple's inset-grouped settings UI. Four principles:
+     1. Sentence case, never all-caps. Hierarchy from weight and colour.
+     2. Whitespace separates; horizontal rules mostly go away.
      3. One spacing scale (4pt grid), one radius scale, one hairline.
-     4. Controls are sized to their importance. A Save button is not a
-        full-width slab.
-
-   The brand face (Jost) is kept for brand moments — the logo lockup and
-   page titles — and the system UI face is used for interface text, which
-   is what Apple itself does with SF vs. its marketing faces.
+     4. Controls sized to importance — a Save button is not a full-width slab.
    =========================================================================== */
 
 :root {
-  /* Spacing — 4pt grid. Use these instead of ad-hoc rem values. */
   --s1: 4px;  --s2: 8px;  --s3: 12px; --s4: 16px;
   --s5: 24px; --s6: 32px; --s7: 48px;
 
-  /* Radii */
-  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --r-sm: 8px; --r-md: 12px; --r-lg: 16px;
 
-  /* One hairline, one shadow. */
   --hairline: rgba(39, 51, 74, 0.10);
   --lift: 0 1px 2px rgba(39, 51, 74, 0.04), 0 8px 24px rgba(39, 51, 74, 0.06);
 
-  /* Type */
   --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
   --brand: 'Jost', var(--ui);
 
   --ink: #27334A;
-  --ink-2: #5A6478;   /* secondary text — replaces the washed-out #6B7280 */
-  --ink-3: #8B94A6;   /* tertiary / captions */
-  --fill: #F2F2F4;    /* neutral fill for chips and quiet buttons */
+  --ink-2: #545E73;   /* secondary text — darker than the old #6B7280 */
+  --ink-3: #79839A;   /* tertiary / captions */
+  --fill: #F1F2F4;
 }
 
-body { font-family: var(--ui); font-size: 15px; letter-spacing: normal; }
+body {
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.55;
+  letter-spacing: normal;
+  -webkit-font-smoothing: antialiased;
+}
 
-/* --- Kill the uppercase treatment globally -------------------------------
-   Inline styles set text-transform throughout, so this needs !important.
-   The exceptions below opt a few brand elements back in.                  */
+/* --- Kill the uppercase treatment ---------------------------------------- */
 .section h2,
 .group-heading,
 .advisor-section summary,
+.advisor-links h3,
 .advisor-link-label,
 .stat-label,
-.btn, .copy-link, .share-link,
-th {
+.btn, .copy-link, .share-link, .expand-btn,
+th, summary {
   text-transform: none !important;
   letter-spacing: normal !important;
 }
 
-/* --- Page + group titles ------------------------------------------------- */
+/* --- Titles --------------------------------------------------------------- */
 .group-heading {
   font-family: var(--brand);
-  font-size: 1.6rem;
+  font-size: 1.75rem !important;
   font-weight: 600;
   color: var(--ink);
   margin: var(--s7) 0 var(--s4);
   padding: 0;
-  border-bottom: none;          /* the gold rule reads as a divider, not a title */
+  border-bottom: none;
 }
 .tab-pane > .group-heading:first-child { margin-top: var(--s2); }
 
-/* --- Cards --------------------------------------------------------------- */
+/* --- Cards ---------------------------------------------------------------- */
 .section {
   background: #fff;
   border: none;
   border-radius: var(--r-lg);
   box-shadow: var(--lift);
-  padding: var(--s5) var(--s5) var(--s5);
+  padding: var(--s5);
   margin-bottom: var(--s4);
 }
 .section h2 {
-  font-size: 1.02rem;
+  font-size: 1.15rem !important;
   font-weight: 600;
   color: var(--ink);
   margin: 0 0 var(--s4);
   padding: 0;
-  border-bottom: none;          /* whitespace separates instead */
+  border-bottom: none;
 }
 
-/* --- Sidebar ------------------------------------------------------------- */
+/* --- Sidebar -------------------------------------------------------------- */
 .admin-sidebar { padding: var(--s5) var(--s3); }
 .admin-sidebar-brand { border-bottom: none; padding-bottom: var(--s5); }
-.admin-brand-logo { height: 84px; }   /* 112px crowds the nav beneath it */
+.admin-brand-logo { height: 84px; }
 .admin-sidebar-brand .name {
-  font-family: var(--brand); font-size: 0.95rem; font-weight: 500;
+  font-family: var(--brand); font-size: 1.02rem; font-weight: 500;
 }
+.admin-sidebar-brand .build { font-size: 0.78rem; }
 .tab-btn {
-  font-size: 0.93rem;
+  font-size: 1rem !important;
   padding: var(--s2) var(--s3);
   border-radius: var(--r-sm);
   gap: var(--s3);
 }
-.tab-btn.active {
-  background: rgba(210, 188, 141, 0.16);
-  font-weight: 500;
-}
-.admin-sidebar-foot a { font-size: 0.88rem; }
+.tab-btn svg { width: 19px; height: 19px; }
+.tab-btn.active { background: rgba(210, 188, 141, 0.16); font-weight: 500; }
+.admin-sidebar-foot a { font-size: 0.95rem; }
 
-/* --- Disclosure rows ----------------------------------------------------
-   An advisor section becomes a full-width row with a trailing chevron,
-   the way an iOS settings row behaves — rather than a caps label with a
-   small triangle glued to its left.                                      */
-.advisor-section {
+/* --- Disclosure rows ------------------------------------------------------
+   Each section becomes a full-width row with a trailing chevron, the way an
+   iOS settings row behaves, instead of a caps label with a ▸ glued to it.  */
+.advisor-section, details.advisor-section {
   border-top: none;
   border-radius: var(--r-md);
   padding: 0;
@@ -124,34 +121,40 @@ th {
   align-items: center;
   justify-content: space-between;
   gap: var(--s3);
-  padding: var(--s3) var(--s3);
-  font-size: 0.97rem;
+  padding: var(--s3);
+  font-size: 1.05rem !important;
   font-weight: 450;
-  color: var(--ink);
+  color: var(--ink) !important;
   border-radius: var(--r-md);
+  cursor: pointer;
 }
 .advisor-section summary:hover { background: var(--fill); }
-.advisor-section summary::before { content: none; }   /* drop the ▸ */
+.advisor-section summary::before { content: none !important; }
 .advisor-section summary::after {
   content: "";
-  width: 7px; height: 7px;
-  border-right: 1.8px solid var(--ink-3);
-  border-bottom: 1.8px solid var(--ink-3);
+  width: 8px; height: 8px;
+  border-right: 2px solid var(--ink-3);
+  border-bottom: 2px solid var(--ink-3);
   transform: rotate(-45deg);
   transition: transform 0.18s ease;
   flex-shrink: 0;
 }
 .advisor-section[open] > summary::after { transform: rotate(45deg); }
 .advisor-section[open] > summary { background: var(--fill); }
-.advisor-section > *:not(summary) { padding: 0 var(--s3) var(--s4); margin-top: var(--s3); }
-
-/* Group captions (Profile / Links / Setup) — quiet labels, no rules. */
-.advisor-block .group-caption,
-.advisor-block > .muted:not(.advisor-link-label) {
-  font-size: 0.78rem; color: var(--ink-3); font-weight: 500;
+.advisor-section > *:not(summary) {
+  padding: 0 var(--s3) var(--s4);
+  margin-top: var(--s3);
 }
 
-/* --- Advisor cards ------------------------------------------------------- */
+/* Group captions — Profile / Links / Setup */
+.advisor-links h3 {
+  font-size: 0.88rem !important;
+  font-weight: 600;
+  color: var(--ink-3);
+  margin: var(--s5) 0 var(--s2);
+}
+
+/* --- Advisor cards -------------------------------------------------------- */
 .advisor-block {
   border: none;
   border-radius: var(--r-lg);
@@ -160,18 +163,18 @@ th {
   margin-bottom: var(--s3);
 }
 .advisor-head { border-bottom: none; padding-bottom: var(--s3); gap: var(--s4); }
-.advisor-head strong { font-size: 1.12rem !important; font-weight: 600; }
+.advisor-head strong { font-size: 1.25rem !important; font-weight: 600; }
+.advisor-head img { width: 56px !important; height: 56px !important; }
 
-/* --- Buttons -------------------------------------------------------------
-   Pills, sized to importance. The navy is the accent, used once per group;
-   everything else is a neutral fill, which is how Apple keeps a dense
-   settings screen from looking like a control panel.                      */
+/* --- Buttons --------------------------------------------------------------
+   Pills, sized to importance. Navy is the accent, used once per group;
+   everything else is a neutral fill.                                       */
 .btn {
   font-family: var(--ui);
-  font-size: 0.9rem !important;
+  font-size: 1rem !important;
   font-weight: 500;
-  padding: var(--s2) var(--s4) !important;
-  border-radius: 980px;              /* Apple's own pill radius */
+  padding: 10px 20px !important;
+  border-radius: 980px;
   background: var(--ink);
   color: #fff;
   border: none;
@@ -180,57 +183,60 @@ th {
 .btn:hover { background: var(--ink); color: #fff; opacity: 0.85; }
 .btn:active { transform: scale(0.97); }
 
-/* Full-width slab Save buttons become right-aligned pills. */
+/* Full-width slab Save buttons become ordinary pills. */
 form.upload .btn,
-.advisor-section form > .btn[type="submit"] {
+.advisor-section form > .btn[type="submit"],
+button[type="submit"].btn {
   width: auto !important;
-  justify-self: end;
+  justify-self: start;
 }
 
 .btn-danger, .btn-quiet-danger {
   background: transparent;
-  color: var(--rust);
+  color: var(--rust) !important;
   border: 1px solid var(--hairline);
   font-weight: 500;
+  font-size: 0.95rem !important;
+  padding: 8px 16px !important;
 }
 .btn-danger:hover, .btn-quiet-danger:hover {
   background: rgba(157, 67, 44, 0.08);
   border-color: rgba(157, 67, 44, 0.35);
-  color: var(--rust);
   opacity: 1;
 }
 
-.copy-link, .share-link {
-  font-size: 0.8rem !important;
+.copy-link, .share-link, .expand-btn {
+  font-size: 0.9rem !important;
   font-weight: 500;
-  padding: var(--s1) var(--s2) !important;
+  padding: 6px 12px !important;
   border-radius: var(--r-sm);
   background: var(--fill);
   border: none;
   color: var(--ink-2);
 }
-.copy-link:hover, .share-link:hover { background: #E6E6EA; color: var(--ink); }
+.copy-link:hover, .share-link:hover, .expand-btn:hover {
+  background: #E5E6EA; color: var(--ink);
+}
 
-/* --- Status chips --------------------------------------------------------
-   The badge row under each advisor name. If your chips carry a class other
+/* --- Status chips ---------------------------------------------------------
+   The badge row under each advisor name. If your chips use a class other
    than .chip, add it to this selector.                                     */
-.advisor-block .chip,
-.advisor-head + div > span {
-  font-size: 0.82rem;
+.advisor-block .chip {
+  font-size: 0.92rem !important;
   font-weight: 450;
   color: var(--ink-2);
   background: var(--fill);
   border: none;
   border-radius: 980px;
-  padding: var(--s1) var(--s3);
+  padding: 6px 14px;
 }
 
-/* --- Form controls -------------------------------------------------------- */
+/* --- Form controls --------------------------------------------------------- */
 input[type="text"], input[type="email"], input[type="url"],
 input[type="password"], input[type="file"], select, textarea {
   font-family: var(--ui);
-  font-size: 0.93rem;
-  padding: var(--s2) var(--s3);
+  font-size: 1rem !important;
+  padding: 10px 12px !important;
   border: 1px solid var(--hairline);
   border-radius: var(--r-sm);
   background: #fff;
@@ -243,36 +249,44 @@ input:focus, select:focus, textarea:focus {
   box-shadow: 0 0 0 3px rgba(210, 188, 141, 0.28);
 }
 ::placeholder { color: var(--ink-3); }
+label { font-size: 0.95rem; }
 
-/* --- Tables --------------------------------------------------------------- */
+/* --- Tables ----------------------------------------------------------------- */
+table { font-size: 0.95rem !important; }
 th {
-  font-size: 0.8rem;
-  font-weight: 500;
+  font-size: 0.88rem !important;
+  font-weight: 600;
   color: var(--ink-3);
   border-bottom: 1px solid var(--hairline);
-  padding: var(--s2) var(--s2);
+  padding: var(--s2);
 }
 td { border-bottom: 1px solid var(--hairline); padding: var(--s3) var(--s2); }
 tr:last-child td { border-bottom: none; }
 
-/* --- Stats ---------------------------------------------------------------- */
-.stat-value { font-family: var(--brand); font-size: 2.1rem; font-weight: 600; }
-.stat-label { font-size: 0.84rem; color: var(--ink-3); margin-top: var(--s1); }
+/* --- Stats ------------------------------------------------------------------ */
+.stat-value { font-family: var(--brand); font-size: 2.3rem; font-weight: 600; }
+.stat-label { font-size: 0.92rem !important; color: var(--ink-3); margin-top: var(--s1); }
 
-/* --- Misc ----------------------------------------------------------------- */
-.muted { color: var(--ink-2); font-size: 0.88rem; line-height: 1.55; }
+/* --- Body copy -------------------------------------------------------------- */
+.muted {
+  color: var(--ink-2) !important;
+  font-size: 0.95rem !important;
+  line-height: 1.6;
+}
 .flash {
   background: rgba(210, 188, 141, 0.18);
   color: var(--ink);
   border: none;
   border-radius: var(--r-md);
   padding: var(--s3) var(--s4);
-  font-size: 0.92rem;
+  font-size: 1rem;
 }
-.adv-link { font-size: 0.86rem; border-bottom: none; color: var(--ink-2); }
+.adv-link { font-size: 0.92rem !important; border-bottom: none; color: var(--ink-2); }
 .adv-link:hover { color: var(--ink); text-decoration: underline; }
-.advisor-link-label { font-size: 0.82rem; color: var(--ink-3); }
+.advisor-link-label { font-size: 0.9rem !important; color: var(--ink-3); }
+.advisor-link-row { margin-bottom: var(--s3); }
 .initials-preview { border: 1px solid var(--hairline); }
+p { font-size: 1rem; }
 
 @media (prefers-reduced-motion: reduce) {
   .btn, .advisor-section summary::after { transition: none; }
