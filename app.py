@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-c"
-APP_BUILD_NOTES = "status colour across chips, figures, flashes and nav"
+APP_VERSION = "2026-09-16-d"
+APP_BUILD_NOTES = "status palette derived from J3P brand, contrast checked"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -14438,6 +14438,10 @@ p, label { font-size: 1rem; }
 .btn:hover { background: var(--brand-hover); color: var(--N0); }
 .btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
 form.upload .btn, button[type="submit"].btn { width: auto !important; }
+/* Some submit buttons carry an inline flex: 1 1 100%, which no width rule
+   can override — the flex-basis is what stretches them, not the width. */
+.advisor-block form > .btn[type="submit"],
+.section form > .btn[type="submit"] { flex: 0 0 auto !important; }
 
 .copy-link, .share-link, .expand-btn {
   font-size: 0.88rem !important;
@@ -14533,11 +14537,28 @@ tbody tr:hover td { background: var(--N10); }
    =========================================================================== */
 
 :root {
-  --ok:        #2D7D5F;   --ok-bg:   rgba(45, 125, 95, 0.13);
-  --warn:      #A8762A;   --warn-bg: rgba(210, 188, 141, 0.38);
+  /* Done. The one hue the brand doesn't supply — "complete" reads as green
+     almost universally — so it is pulled toward navy until it sits with the
+     paper rather than glowing against it. 4.64:1 on its own tint. */
+  --ok:        #3F7358;   --ok-bg:   rgba(63, 115, 88, 0.13);
+
+  /* Partly done. The brand gold itself, darkened until it is legible as
+     text: #D2BC8D at label size is unreadable, and the #A8762A used before
+     only reached 3.2:1. This is 5.59:1 on the gold tint. */
+  --warn:      #6E5626;   --warn-bg: rgba(210, 188, 141, 0.38);
+
+  /* Needs attention. The brand rust, unchanged. 5.43:1. */
   --bad:       #9D432C;   --bad-bg:  rgba(157, 67, 44, 0.11);
-  --info:      #2C6E7F;   --info-bg: rgba(44, 110, 127, 0.12);
-  --accent-2:  #6B4E8F;   --accent-2-bg: rgba(107, 78, 143, 0.12);
+
+  /* Neutral fact — counts and quantities, which are not good or bad. The
+     brand navy, lifted just enough to read as a tone rather than as body
+     text. 7.34:1. */
+  --info:      #3D4A63;   --info-bg: rgba(39, 51, 74, 0.09);
+
+  /* Fourth key for the group captions. Deep bronze: the gold family again,
+     distinguishable from the gold bar beside it without introducing a hue
+     the brand does not own. */
+  --accent-2:  #8A6A3C;
 }
 
 /* --- Lozenge tones ------------------------------------------------------- */
@@ -14566,12 +14587,14 @@ tbody tr:hover td { background: var(--N10); }
   content: ""; width: 3px; height: 13px; border-radius: 2px;
   background: var(--N40); flex-shrink: 0;
 }
-.advisor-section-group.is-profile::before  { background: var(--info); }
+.advisor-section-group.is-profile::before  { background: var(--navy); }
 .advisor-section-group.is-links::before    { background: var(--gold); }
 .advisor-section-group.is-setup::before    { background: var(--accent-2); }
 .advisor-section-group.is-activity::before { background: var(--ok); }
 
 /* --- Sidebar: gold icons, brighter on the selected item ------------------ */
+.tab-btn { text-decoration: none !important; }
+.tab-btn:hover, .tab-btn:focus { text-decoration: none !important; }
 .tab-btn svg { color: rgba(210, 188, 141, 0.55); transition: color 0.1s ease; }
 .tab-btn:hover svg { color: rgba(210, 188, 141, 0.85); }
 .tab-btn.active svg { color: var(--gold); }
@@ -14581,7 +14604,8 @@ tbody tr:hover td { background: var(--N10); }
             font-weight: 700; letter-spacing: 0.04em; }
 .tag-down { background: var(--bad) !important; border-radius: var(--radius) !important;
             font-weight: 700; letter-spacing: 0.04em; }
-.tag-lesson { background: var(--accent-2) !important; border-radius: var(--radius) !important; }
+.tag-lesson { background: var(--accent-2) !important; color: #fff !important;
+              border-radius: var(--radius) !important; }
 .rate-btn.on-up   { background: var(--ok) !important;  border-color: var(--ok) !important; }
 .rate-btn.on-down { background: var(--bad) !important; border-color: var(--bad) !important; }
 
