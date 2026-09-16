@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-e"
-APP_BUILD_NOTES = "idle prompt waits for real inactivity; one feedback box per reply"
+APP_VERSION = "2026-09-16-f"
+APP_BUILD_NOTES = "contact scrubber can no longer empty a reply; retry on failure"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -6316,7 +6316,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
             offerExport(msgDiv, data.reply, data.export_format, null);
           }
         }
-        else addMessage("Error: " + (data.error || "Unknown error"), "assistant");
+        else {
+          // Anything that isn't a usable reply goes through the retry path,
+          // which puts their message back in the composer with a Try again
+          // button — rather than a dead "Error: Unknown error" bubble.
+          showRetry(data.error
+                    || "That didn't come back properly. Please try again.",
+                    text, paperclipFilesForRequest);
+        }
       } catch (err) {
         removeMessage(thinking);
         setAvatarThinking(false);
@@ -11968,6 +11975,29 @@ def chat():
         r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Seader|"
         r"Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b", _re.IGNORECASE)
 
+    # The advisor whose page this is speaks in the first person, so their own
+    # name is not a referral to someone else. Without this, a participant who
+    # opens with "Hi Alan" gets a reply that says "Alan" throughout, every
+    # paragraph trips the referral test, and the whole answer is deleted.
+    # The rule still holds for everyone else, and the email/phone redaction
+    # below still applies to this advisor too — what is dropped here is only
+    # the assumption that saying their name is a hand-off.
+    _self_names = set()
+    if active_advisor:
+        for _part in (active_advisor.get("name") or "").split():
+            _part = _re.sub(r"[^A-Za-z]", "", _part)
+            if len(_part) > 2:
+                _self_names.add(_part.lower())
+
+    def _names_a_third_party(text: str) -> bool:
+        found = {m.group(0).lower().strip() for m in _STAFF_NAME_RE.finditer(text)}
+        for hit in found:
+            words = {w for w in _re.split(r"[^A-Za-z]+", hit) if w}
+            if not words or words <= _self_names:
+                continue        # only this advisor's own name
+            return True
+        return False
+
     # Signals that a passage is telling the user how to reach a human
     _CONTACT_SIGNAL_RE = _re.compile(
         r"(@|\bemail\b|\bphone\b|\bcall\b|\breach\b|\bcontact\b|"
@@ -12001,7 +12031,7 @@ def chat():
     replaced_any = False
     cleaned_paras = []
     for para in assistant_text.split("\n\n"):
-        has_staff = bool(_STAFF_NAME_RE.search(para))
+        has_staff = _names_a_third_party(para)
         has_internal_email = any(_is_internal_email(a)
                                  for a in _INTERNAL_EMAIL_RE.findall(para))
         # A passage naming staff alongside contact language is a referral —
@@ -12014,7 +12044,22 @@ def chat():
             lambda m: CONTACT if _is_internal_email(m.group(0)) else m.group(0), para)
         cleaned_paras.append(para)
 
-    assistant_text = "\n\n".join(cleaned_paras).strip()
+    scrubbed_text = "\n\n".join(cleaned_paras).strip()
+
+    if not scrubbed_text and assistant_text.strip():
+        # Everything matched. Redact the identifiers in place instead of
+        # removing the prose: a reply with a contact detail swapped out is
+        # always better than no reply at all, and an empty one is
+        # indistinguishable from a server failure.
+        app.logger.warning(
+            "[contact] every paragraph matched the referral test — redacting "
+            "in place rather than returning an empty reply")
+        scrubbed_text = _INTERNAL_EMAIL_RE.sub(
+            lambda m: CONTACT if _is_internal_email(m.group(0)) else m.group(0),
+            assistant_text)
+        scrubbed_text = _PHONE_RE.sub("", scrubbed_text).strip()
+
+    assistant_text = scrubbed_text
 
     if replaced_any:
         # Strip any direct line that survived in a remaining paragraph
@@ -12191,6 +12236,17 @@ def chat():
             and not detect_export_format(user_input)
             and not all(d["suggested"] == "pptx" for d in documents)):
         export_format = "docx"
+
+    if not assistant_text.strip():
+        # Reached only if the model itself returned nothing. Say something
+        # the participant can act on rather than a bare 200 with no body,
+        # and leave a marker in the logs that points at this exact branch.
+        app.logger.error("[chat] empty reply after post-processing — "
+                         "returning an explicit error instead of a blank bubble")
+        return jsonify({
+            "error": "The advisor didn't manage to finish that one. "
+                     "Please try again — your message is still in the box."
+        }), 502
 
     return jsonify({
         "reply": assistant_text,
