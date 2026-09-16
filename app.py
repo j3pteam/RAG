@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-d"
-APP_BUILD_NOTES = "status palette derived from J3P brand, contrast checked"
+APP_VERSION = "2026-09-16-e"
+APP_BUILD_NOTES = "idle prompt waits for real inactivity; one feedback box per reply"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4319,6 +4319,39 @@ INDEX_HTML = r"""<!DOCTYPE html>
       idlePromptTimer = setTimeout(showIdlePrompt, IDLE_PROMPT_MS);
     }
 
+    // Someone mid-sentence is not idle. This covers every way a participant
+    // can be busy without having touched the composer: writing a feedback
+    // comment, recording a voice message, part-way through a message they
+    // haven't sent, or filling in anything in the materials dialog.
+    function participantIsBusy() {
+      const el = document.activeElement;
+      if (el && (el.tagName === "TEXTAREA" ||
+                 (el.tagName === "INPUT" &&
+                  ["text", "email", "url", "search", "password"].includes(el.type)))) {
+        return true;
+      }
+      // An open, unsubmitted feedback comment box — they are composing it
+      // even if focus has drifted.
+      if (document.querySelector(".feedback-comment textarea:not([disabled])")) return true;
+      if (document.querySelector(".mic-btn.recording")) return true;
+      const box = document.getElementById("message");
+      if (box && box.value.trim()) return true;     // a half-typed message
+      return false;
+    }
+
+    // Any interaction anywhere restarts both timers. Deliberately does not
+    // touch a prompt already on screen: removing it from under a tap would
+    // swallow the tap that was aimed at it.
+    function noteParticipantActivity() {
+      if (idlePromptShown) return;
+      armIdlePrompt();
+      if (typeof armIdleNudge === "function") armIdleNudge();
+    }
+    ["keydown", "pointerdown", "touchstart", "input", "focusin"].forEach(evt => {
+      document.addEventListener(evt, noteParticipantActivity,
+                                { passive: true, capture: true });
+    });
+
     function cancelIdlePrompt() {
       if (idlePromptTimer) clearTimeout(idlePromptTimer);
       document.querySelectorAll(".idle-prompt").forEach(el => el.remove());
@@ -4326,6 +4359,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     function showIdlePrompt() {
       if (idlePromptShown || awaitingReply) return;
+      // Busy, not idle — wait out another interval rather than dropping the
+      // offer altogether.
+      if (participantIsBusy()) { armIdlePrompt(); return; }
       const msgs = Array.from(document.querySelectorAll(".msg.assistant"))
         .filter(m => !m.className.includes("typing"));
       const last = msgs[msgs.length - 1];
@@ -4451,6 +4487,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
     function armIdleNudge() {
       if (idleNudgeTimer) clearTimeout(idleNudgeTimer);
       idleNudgeTimer = setTimeout(() => {
+        // Same rule as the idle prompt: asking someone to rate a reply
+        // while they are typing about that reply is the worst moment.
+        if (typeof participantIsBusy === "function" && participantIsBusy()) {
+          armIdleNudge();
+          return;
+        }
         showPlanOffer();
         showRatingNudge("idle");
       }, IDLE_NUDGE_MS);
@@ -5311,6 +5353,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
         btn.addEventListener("click", async () => {
           if (btn.disabled) return;
           const rating = btn.dataset.rating;
+          // A second tap that lands while the first is still in flight.
+          if (wrap.dataset.ratingBusy === "1") return;
+          // Re-tapping the rating already chosen would rebuild the comment
+          // box and throw away whatever they had started writing in it.
+          if (wrap.dataset.rating === rating) return;
+          wrap.dataset.ratingBusy = "1";
+          wrap.dataset.rating = rating;
           // Rated — retire the nudge for this reply
           wrap.dataset.rated = "1";
           wrap.classList.remove("nudged");
@@ -5331,20 +5380,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
           if (oldComment) oldComment.remove();
 
           if (rating === "up") {
-            // Thumbs up: simple submit, no comment needed
+            // Thumbs up: simple submit, no comment needed. The DOM update
+            // goes first so it can't race a second tap.
             btn.classList.add("selected-up");
-            await sendFeedback("up", "");
             const thanks = document.createElement("span");
             thanks.className = "feedback-thanks";
             thanks.textContent = "Thanks for the feedback \u2014 tap either thumb to change it";
             wrap.appendChild(thanks);
+            wrap.dataset.ratingBusy = "";
+            await sendFeedback("up", "");
           } else {
             // Thumbs down: record it straight away, then invite a comment.
             // Waiting for the comment meant a participant who switched from
             // up to down and didn't type anything left "up" on the server —
             // the opposite of what they meant.
             btn.classList.add("selected-down");
-            await sendFeedback("down", "");
 
             const commentBox = document.createElement("div");
             commentBox.className = "feedback-comment";
@@ -5357,9 +5407,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
               </div>
             `;
             wrap.appendChild(commentBox);
+            wrap.dataset.ratingBusy = "";
 
             const textarea = commentBox.querySelector("textarea");
             textarea.focus();
+
+            // Recorded only once the box is on screen, so a slow network
+            // can no longer leave a window for a second box to appear.
+            await sendFeedback("down", "");
 
             const submitBtn = commentBox.querySelector('[data-action="submit"]');
             const skipBtn = commentBox.querySelector('[data-action="skip"]');
