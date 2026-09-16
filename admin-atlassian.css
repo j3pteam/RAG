@@ -1,0 +1,336 @@
+/* ===========================================================================
+   J3P Admin — Atlassian Design System, in J3P Health brand
+   ---------------------------------------------------------------------------
+   Replaces admin-refresh.css. Paste at the END of the existing <style> block
+   in ADMIN_HTML, after every current rule. Use this sheet or the Apple one,
+   never both.
+
+   WHAT THIS IS
+   Atlassian's design language — the structure behind Jira and Confluence
+   admin — rebuilt on J3P's palette. ADS is built for exactly this problem:
+   dense configuration screens with permissions, user management and long
+   settings surfaces.
+
+   HOW IT DIFFERS FROM THE APPLE PASS
+   - Radius 3px, not 980px pills. ADS is square and businesslike.
+   - Buttons are 32/40px with a subtle grey default and one bold primary.
+   - Status chips become Lozenges: 11px, bold, UPPERCASE. This is the single
+     place ADS uses caps, and it's deliberate — a lozenge reads as a state
+     marker rather than a label. Everything else stays sentence case.
+   - Disclosure chevrons sit LEADING (left of the label), which is the
+     Atlassian convention, not trailing as on iOS.
+   - Body is 16px here rather than Atlassian's stock 14px, per your last
+     request. The rest of the scale is shifted up to match.
+
+   BRAND MAPPING (ADS token -> J3P)
+     color.background.brand.bold   B400 #0052CC -> navy  #27334A
+     color.background.danger.bold  R400 #DE350B -> rust  #9D432C
+     color.background.selected     B50  #DEEBFF -> gold tint
+     neutral N0-N800                            -> warm navy-tinted neutrals
+                                                   derived from paper #FAF6F0
+   The !important declarations are required: the markup sets font-size and
+   text-transform inline on hundreds of elements, and inline styles win
+   otherwise.
+   =========================================================================== */
+
+:root {
+  /* --- Neutrals: Atlassian's N-scale, warmed toward J3P paper --- */
+  --N0:   #FFFFFF;
+  --N10:  #FAF6F0;   /* your paper */
+  --N20:  #F3F0E9;   /* subtle backgrounds, table headers, default buttons */
+  --N30:  #EAE5DB;   /* hover on subtle surfaces */
+  --N40:  #DCD6C9;   /* borders */
+  --N200: #6E7689;   /* tertiary text */
+  --N500: #4A5468;   /* secondary text */
+  --N800: #27334A;   /* primary text — your navy */
+
+  /* --- Brand + status --- */
+  --brand-bold:     #27334A;
+  --brand-hover:    #1C2537;
+  --brand-subtle:   rgba(210, 188, 141, 0.28);  /* gold tint = ADS selected */
+  --brand-subtlest: rgba(210, 188, 141, 0.14);
+  --gold:           #D2BC8D;
+  --danger:         #9D432C;
+  --danger-subtle:  rgba(157, 67, 44, 0.10);
+  --success:        #2D7D5F;
+  --success-subtle: rgba(45, 125, 95, 0.12);
+
+  /* --- Space: ADS 4px grid --- */
+  --sp-050: 4px;  --sp-100: 8px;  --sp-150: 12px; --sp-200: 16px;
+  --sp-300: 24px; --sp-400: 32px; --sp-500: 40px; --sp-600: 48px;
+
+  /* --- Radius: ADS is 3px small, 8px for surfaces --- */
+  --radius:       3px;
+  --radius-large: 8px;
+
+  /* --- Elevation: ADS shadow.raised, recoloured to navy --- */
+  --elev-raised: 0 1px 1px rgba(39, 51, 74, 0.22), 0 0 1px 1px rgba(39, 51, 74, 0.10);
+  --elev-overlay: 0 4px 8px -2px rgba(39, 51, 74, 0.22), 0 0 1px rgba(39, 51, 74, 0.16);
+
+  --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --brand-font: 'Jost', var(--ui);
+}
+
+body {
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.5;
+  color: var(--N800);
+  letter-spacing: normal;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* --- Sentence case everywhere except lozenges ---------------------------- */
+.section h2, .group-heading, .advisor-section summary, .advisor-links h3,
+.advisor-link-label, .stat-label, .btn, .copy-link, .share-link,
+.expand-btn, th, summary, label {
+  text-transform: none !important;
+  letter-spacing: normal !important;
+}
+
+/* --- Typography: ADS heading scale, shifted up one step ------------------ */
+.group-heading {                       /* heading.large */
+  font-family: var(--brand-font);
+  font-size: 1.65rem !important;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--N800);
+  margin: var(--sp-500) 0 var(--sp-200);
+  padding: 0;
+  border-bottom: none;
+}
+.tab-pane > .group-heading:first-child { margin-top: var(--sp-100); }
+
+.section h2 {                          /* heading.small */
+  font-size: 1.12rem !important;
+  font-weight: 600;
+  line-height: 1.25;
+  color: var(--N800);
+  margin: 0 0 var(--sp-200);
+  padding: 0;
+  border-bottom: none;
+}
+
+.advisor-links h3 {                    /* heading.xxsmall */
+  font-size: 0.88rem !important;
+  font-weight: 600;
+  color: var(--N500);
+  margin: var(--sp-300) 0 var(--sp-100);
+}
+
+.muted { color: var(--N500) !important; font-size: 0.94rem !important; line-height: 1.55; }
+p, label { font-size: 1rem; }
+
+/* --- Side navigation: ADS nav item + 3px selected indicator -------------- */
+.admin-sidebar { padding: var(--sp-300) var(--sp-100); }
+.admin-sidebar-brand { border-bottom: none; padding-bottom: var(--sp-300); }
+.admin-brand-logo { height: 80px; }
+.admin-sidebar-brand .name {
+  font-family: var(--brand-font); font-size: 1rem; font-weight: 500;
+}
+.admin-sidebar-brand .build { font-size: 0.78rem; }
+.tab-btn {
+  font-size: 0.98rem !important;
+  font-weight: 400;
+  padding: var(--sp-100) var(--sp-150);
+  border-radius: var(--radius);
+  gap: var(--sp-150);
+  border-left: 3px solid transparent;
+  transition: background 0.1s ease;
+}
+.tab-btn svg { width: 18px; height: 18px; }
+.tab-btn:hover:not(.active) { background: rgba(255, 255, 255, 0.08); }
+.tab-btn.active {
+  background: var(--brand-subtle);
+  border-left-color: var(--gold);
+  font-weight: 600;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+.admin-sidebar-foot a { font-size: 0.94rem; }
+
+/* --- Cards: ADS elevation.surface.raised -------------------------------- */
+.section, .advisor-block {
+  background: var(--N0);
+  border: none;
+  border-radius: var(--radius-large);
+  box-shadow: var(--elev-raised);
+  padding: var(--sp-300);
+  margin-bottom: var(--sp-200);
+}
+.advisor-block { padding: var(--sp-200); }
+.advisor-head {
+  border-bottom: 1px solid var(--N40);
+  padding-bottom: var(--sp-200);
+  gap: var(--sp-200);
+}
+.advisor-head strong { font-size: 1.2rem !important; font-weight: 600; }
+.advisor-head img { width: 48px !important; height: 48px !important; }
+
+/* --- Expandable sections: ADS leading chevron --------------------------- */
+.advisor-section, details.advisor-section {
+  border-top: none;
+  border-radius: var(--radius);
+  padding: 0;
+  margin-bottom: 2px;
+}
+.advisor-section summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-100);
+  padding: var(--sp-100) var(--sp-100);
+  font-size: 1rem !important;
+  font-weight: 600;
+  color: var(--N800) !important;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.advisor-section summary:hover { background: var(--N20); }
+.advisor-section summary::before {
+  content: "" !important;
+  width: 7px; height: 7px;
+  border-right: 2px solid var(--N500);
+  border-bottom: 2px solid var(--N500);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+  flex-shrink: 0;
+  margin-right: var(--sp-050);
+}
+.advisor-section[open] > summary::before { transform: rotate(45deg); }
+.advisor-section > *:not(summary) {
+  padding: 0 var(--sp-150) var(--sp-300) calc(var(--sp-150) + 15px);
+  margin-top: var(--sp-150);
+}
+
+/* --- Buttons: ADS 32px default / 40px large, radius 3px ------------------
+   One bold primary per group; everything else is the subtle N20 default.  */
+.btn {
+  font-family: var(--ui);
+  font-size: 0.94rem !important;
+  font-weight: 500;
+  line-height: 1;
+  padding: 11px 14px !important;
+  border-radius: var(--radius);
+  background: var(--brand-bold);
+  color: var(--N0);
+  border: none;
+  transition: background 0.1s ease;
+}
+.btn:hover { background: var(--brand-hover); color: var(--N0); }
+.btn:active { background: var(--brand-hover); }
+.btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+
+/* Secondary actions — ADS "default" button */
+.copy-link, .share-link, .expand-btn {
+  font-size: 0.88rem !important;
+  font-weight: 500;
+  padding: 7px 12px !important;
+  border-radius: var(--radius);
+  background: var(--N20);
+  border: none;
+  color: var(--N500);
+}
+.copy-link:hover, .share-link:hover, .expand-btn:hover {
+  background: var(--N30); color: var(--N800);
+}
+
+/* Destructive — ADS subtle danger, bold only on hover */
+.btn-danger, .btn-quiet-danger {
+  background: transparent;
+  color: var(--danger) !important;
+  border: none;
+  font-weight: 500;
+  font-size: 0.9rem !important;
+  padding: 8px 12px !important;
+  border-radius: var(--radius);
+}
+.btn-danger:hover, .btn-quiet-danger:hover {
+  background: var(--danger-subtle); color: var(--danger) !important;
+}
+
+/* Full-width slabs back to normal width */
+form.upload .btn, button[type="submit"].btn { width: auto !important; }
+
+/* --- Lozenges: the one place ADS uses uppercase -------------------------
+   If your status chips use a class other than .chip, add it here.        */
+.advisor-block .chip {
+  display: inline-block;
+  font-size: 0.69rem !important;
+  font-weight: 700;
+  letter-spacing: 0.04em !important;
+  text-transform: uppercase !important;
+  line-height: 1;
+  padding: 4px 7px;
+  border-radius: var(--radius);
+  background: var(--N20);
+  color: var(--N500);
+  border: none;
+}
+.advisor-block .chip.is-success { background: var(--success-subtle); color: var(--success); }
+.advisor-block .chip.is-warning { background: var(--brand-subtle);  color: #7A6535; }
+.advisor-block .chip.is-danger  { background: var(--danger-subtle); color: var(--danger); }
+
+/* --- Fields: ADS textfield, 2px focus ring ------------------------------ */
+input[type="text"], input[type="email"], input[type="url"],
+input[type="password"], input[type="file"], select, textarea {
+  font-family: var(--ui);
+  font-size: 0.97rem !important;
+  padding: 9px 10px !important;
+  border: 2px solid var(--N40);
+  border-radius: var(--radius);
+  background: var(--N10);
+  color: var(--N800);
+  transition: background 0.1s ease, border-color 0.1s ease;
+}
+input:hover, select:hover, textarea:hover { background: var(--N20); }
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  background: var(--N0);
+  border-color: var(--brand-bold);
+}
+::placeholder { color: var(--N200); }
+
+/* --- Tables: ADS DynamicTable ------------------------------------------- */
+table { font-size: 0.94rem !important; }
+th {
+  font-size: 0.8rem !important;
+  font-weight: 700;
+  color: var(--N500);
+  background: transparent;
+  border-bottom: 2px solid var(--N40);
+  padding: var(--sp-100);
+}
+td { border-bottom: 1px solid var(--N40); padding: var(--sp-150) var(--sp-100); }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--N10); }
+
+/* --- Section message: ADS tinted panel, no left rule -------------------- */
+.flash {
+  background: var(--brand-subtlest);
+  color: var(--N800);
+  border: none;
+  border-radius: var(--radius);
+  padding: var(--sp-150) var(--sp-200);
+  font-size: 0.97rem;
+}
+.warn {
+  background: var(--danger-subtle);
+  border: none;
+  border-radius: var(--radius);
+  padding: var(--sp-150) var(--sp-200);
+  font-size: 0.97rem;
+}
+
+/* --- Stats -------------------------------------------------------------- */
+.stat-value { font-family: var(--brand-font); font-size: 2.1rem; font-weight: 600; }
+.stat-label { font-size: 0.85rem !important; font-weight: 600; color: var(--N500); }
+
+/* --- Links -------------------------------------------------------------- */
+.adv-link { font-size: 0.9rem !important; border-bottom: none; color: var(--N500); }
+.adv-link:hover { color: var(--brand-bold); text-decoration: underline; }
+.advisor-link-label { font-size: 0.85rem !important; font-weight: 600; color: var(--N500); }
+.advisor-link-row { margin-bottom: var(--sp-150); }
+.initials-preview { border: 1px solid var(--N40); }
+
+@media (prefers-reduced-motion: reduce) {
+  .btn, .tab-btn, .advisor-section summary::before { transition: none; }
+}
