@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-b"
-APP_BUILD_NOTES = "admin renders one tab per request instead of all seven"
+APP_VERSION = "2026-09-16-c"
+APP_BUILD_NOTES = "status colour across chips, figures, flashes and nav"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -14518,6 +14518,82 @@ tbody tr:hover td { background: var(--N10); }
 @media (prefers-reduced-motion: reduce) {
   .btn, .tab-btn, .advisor-section summary::before { transition: none; }
 }
+/* ===========================================================================
+   Colour layer
+   ---------------------------------------------------------------------------
+   The palette was navy, gold and warm grey, which is correct for the brand
+   but leaves every state looking the same. These are Atlassian's status
+   colours, pulled warm so they sit with the paper rather than fighting it:
+   each hue is desaturated toward the J3P neutrals instead of using ADS's
+   own cooler greens and blues.
+
+   Colour is applied only where it carries information. A figure that is
+   always green tells you nothing; the helpful rate is green above 80%,
+   amber above 60%, rust below.
+   =========================================================================== */
+
+:root {
+  --ok:        #2D7D5F;   --ok-bg:   rgba(45, 125, 95, 0.13);
+  --warn:      #A8762A;   --warn-bg: rgba(210, 188, 141, 0.38);
+  --bad:       #9D432C;   --bad-bg:  rgba(157, 67, 44, 0.11);
+  --info:      #2C6E7F;   --info-bg: rgba(44, 110, 127, 0.12);
+  --accent-2:  #6B4E8F;   --accent-2-bg: rgba(107, 78, 143, 0.12);
+}
+
+/* --- Lozenge tones ------------------------------------------------------- */
+.advisor-chip.on   { background: var(--ok-bg) !important;   color: var(--ok) !important; }
+.advisor-chip.info { background: var(--info-bg) !important; color: var(--info) !important; }
+.advisor-chip.warn { background: var(--warn-bg) !important; color: var(--warn) !important; }
+.advisor-chip.off  { background: var(--N20) !important;     color: var(--N200) !important; }
+
+/* --- Section messages ---------------------------------------------------- */
+.flash.is-ok   { background: var(--ok-bg);   color: var(--ok);   box-shadow: inset 3px 0 0 var(--ok); }
+.flash.is-warn { background: var(--warn-bg); color: var(--warn); box-shadow: inset 3px 0 0 var(--warn); }
+.flash.is-info { background: var(--info-bg); color: var(--info); box-shadow: inset 3px 0 0 var(--info); }
+.flash.is-ok, .flash.is-warn, .flash.is-info { font-weight: 500; padding-left: var(--sp-200); }
+
+/* --- Overview figures ---------------------------------------------------- */
+.stat-value.is-good { color: var(--ok); }
+.stat-value.is-warn { color: var(--warn); }
+.stat-value.is-bad  { color: var(--bad); }
+.stat-value.is-info { color: var(--info); }
+
+/* --- Group captions: a colour key down the left of each card ------------- */
+.advisor-section-group {
+  display: flex; align-items: center; gap: var(--sp-100);
+}
+.advisor-section-group::before {
+  content: ""; width: 3px; height: 13px; border-radius: 2px;
+  background: var(--N40); flex-shrink: 0;
+}
+.advisor-section-group.is-profile::before  { background: var(--info); }
+.advisor-section-group.is-links::before    { background: var(--gold); }
+.advisor-section-group.is-setup::before    { background: var(--accent-2); }
+.advisor-section-group.is-activity::before { background: var(--ok); }
+
+/* --- Sidebar: gold icons, brighter on the selected item ------------------ */
+.tab-btn svg { color: rgba(210, 188, 141, 0.55); transition: color 0.1s ease; }
+.tab-btn:hover svg { color: rgba(210, 188, 141, 0.85); }
+.tab-btn.active svg { color: var(--gold); }
+
+/* --- Ratings in the conversation log ------------------------------------- */
+.tag-up   { background: var(--ok) !important;  border-radius: var(--radius) !important;
+            font-weight: 700; letter-spacing: 0.04em; }
+.tag-down { background: var(--bad) !important; border-radius: var(--radius) !important;
+            font-weight: 700; letter-spacing: 0.04em; }
+.tag-lesson { background: var(--accent-2) !important; border-radius: var(--radius) !important; }
+.rate-btn.on-up   { background: var(--ok) !important;  border-color: var(--ok) !important; }
+.rate-btn.on-down { background: var(--bad) !important; border-color: var(--bad) !important; }
+
+/* --- Knowledge: the per-document owner label, so shared and assigned
+       documents are distinguishable while scanning the table -------------- */
+.kb-owner summary {
+  color: var(--info) !important;
+  border-bottom-color: rgba(44, 110, 127, 0.4) !important;
+}
+
+/* --- Destructive stays rust; primary stays navy. Both already carry
+       meaning, so they are left alone. ---------------------------------- */
 </style></head><body>
 <div class="admin-shell">
 <aside class="admin-sidebar">
@@ -14572,7 +14648,10 @@ tbody tr:hover td { background: var(--N10); }
 <main class="admin-main">
 
   {% with messages = get_flashed_messages() %}
-    {% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}
+    {% for m in messages %}
+      <div class="flash {{ 'is-ok' if m.startswith('✓')
+                           else ('is-warn' if '⚠' in m else 'is-info') }}">{{ m }}</div>
+    {% endfor %}
   {% endwith %}
 
   {% if not rag_ready %}
@@ -14750,29 +14829,35 @@ tbody tr:hover td { background: var(--N10); }
       <h2>At a Glance</h2>
       <div class="stats">
         <div class="stat">
-          <div class="stat-value">{{ stats.up }}</div>
+          <div class="stat-value is-good">{{ stats.up }}</div>
           <div class="stat-label">Thumbs up</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{{ stats.down }}</div>
+          <div class="stat-value {{ 'is-bad' if stats.down else '' }}">{{ stats.down }}</div>
           <div class="stat-label">Thumbs down</div>
         </div>
+        {# Colour the rate by what it actually says: 80%+ is healthy, under
+           60% wants looking at. A figure that is always green says nothing. #}
+        {% set rate = (100 * stats.up / stats.total)|round(0)|int if stats.total else None %}
         <div class="stat">
-          <div class="stat-value">
-            {% if stats.total > 0 %}{{ (100 * stats.up / stats.total)|round(0)|int }}%{% else %}—{% endif %}
+          <div class="stat-value {{ '' if rate is none
+                                    else ('is-good' if rate >= 80
+                                          else ('is-warn' if rate >= 60 else 'is-bad')) }}">
+            {% if rate is not none %}{{ rate }}%{% else %}—{% endif %}
           </div>
           <div class="stat-label">Helpful rate</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{{ docs|length if rag_ready else '—' }}</div>
+          <div class="stat-value is-info">{{ docs|length if rag_ready else '—' }}</div>
           <div class="stat-label">Documents</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{{ advisors|length + 1 }}</div>
+          <div class="stat-value is-info">{{ advisors|length + 1 }}</div>
           <div class="stat-label">Advisors</div>
         </div>
         <div class="stat">
-          <div class="stat-value">{{ 'Required' if settings.require_login else 'Open' }}</div>
+          <div class="stat-value {{ 'is-good' if settings.require_login else 'is-warn' }}"
+               style="font-size: 1.5rem;">{{ 'Required' if settings.require_login else 'Open' }}</div>
           <div class="stat-label">Sign-in</div>
         </div>
       </div>
@@ -15203,7 +15288,7 @@ tbody tr:hover td { background: var(--N10); }
         </div>
         {% set default_links = participant_links_by_advisor.get("", []) %}
         <div class="advisor-chips">
-          <span class="advisor-chip {{ 'on' if default_links else 'off' }}">
+          <span class="advisor-chip {{ 'info' if default_links else 'off' }}">
             {{ default_links|length }} participant link{{ '' if default_links|length == 1 else 's' }}
           </span>
           <span class="advisor-chip {{ 'on' if default_persona_voice_sample else 'off' }}">
@@ -15212,7 +15297,7 @@ tbody tr:hover td { background: var(--N10); }
         </div>
       </div>
 
-      <div class="advisor-section-group">Profile</div>
+      <div class="advisor-section-group is-profile">Profile</div>
 
       <details class="advisor-section">
         <summary>Photo, name &amp; scheduling link</summary>
@@ -15265,7 +15350,7 @@ tbody tr:hover td { background: var(--N10); }
         </p>
       </details>
 
-      <div class="advisor-section-group">Links</div>
+      <div class="advisor-section-group is-links">Links</div>
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -15288,7 +15373,7 @@ tbody tr:hover td { background: var(--N10); }
                                    participant_links_by_advisor.get("", []),
                                    admin_perms.edit_participant_links) }}
 
-      <div class="advisor-section-group">Setup</div>
+      <div class="advisor-section-group is-setup">Setup</div>
 
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
@@ -15317,13 +15402,16 @@ tbody tr:hover td { background: var(--N10); }
         {% set adv_kb = advisor_docs.get(adv.slug, []) %}
         {% set onboarding_done = (1 if adv.personality else 0) + (1 if adv.behavioral else 0) %}
         <div class="advisor-chips">
-          <span class="advisor-chip {{ 'on' if adv_links else 'off' }}">
+          <span class="advisor-chip {{ 'info' if adv_links else 'off' }}">
             {{ adv_links|length }} participant link{{ '' if adv_links|length == 1 else 's' }}
           </span>
-          <span class="advisor-chip {{ 'on' if adv_kb else 'off' }}">
+          <span class="advisor-chip {{ 'info' if adv_kb else 'off' }}">
             {{ adv_kb|length }} document{{ '' if adv_kb|length == 1 else 's' }}
           </span>
-          <span class="advisor-chip {{ 'on' if onboarding_done == 2 else 'off' }}">
+          {# Started but unfinished is its own state, and the one worth
+             spotting from across the page. #}
+          <span class="advisor-chip {{ 'on' if onboarding_done == 2
+                                       else ('warn' if onboarding_done else 'off') }}">
             Onboarding {{ onboarding_done }}/2
           </span>
           <span class="advisor-chip {{ 'on' if adv.voice_sample else 'off' }}">
@@ -15335,7 +15423,7 @@ tbody tr:hover td { background: var(--N10); }
         </div>
       </div>
 
-      <div class="advisor-section-group">Profile</div>
+      <div class="advisor-section-group is-profile">Profile</div>
 
       <details class="advisor-section">
         <summary>Photo, name &amp; display settings</summary>
@@ -15406,7 +15494,7 @@ tbody tr:hover td { background: var(--N10); }
         </form>
       </details>
 
-      <div class="advisor-section-group">Links</div>
+      <div class="advisor-section-group is-links">Links</div>
 
       <details class="advisor-section">
         <summary>Scheduling Links</summary>
@@ -15432,7 +15520,7 @@ tbody tr:hover td { background: var(--N10); }
                                    participant_links_by_advisor.get(adv.slug, []),
                                    admin_perms.edit_participant_links) }}
 
-      <div class="advisor-section-group">Setup</div>
+      <div class="advisor-section-group is-setup">Setup</div>
 
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
@@ -15608,7 +15696,7 @@ tbody tr:hover td { background: var(--N10); }
         {% endif %}
       </details>
 
-      <div class="advisor-section-group">Activity</div>
+      <div class="advisor-section-group is-activity">Activity</div>
 
       <details class="advisor-section">
         <summary>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</summary>
