@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-e"
-APP_BUILD_NOTES = "the advisor on the page answers, not one held in the session"
+APP_VERSION = "2026-09-17-f"
+APP_BUILD_NOTES = "advisors list collapses to one card at a time"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -15137,6 +15137,71 @@ tbody tr:hover td { background: var(--N10); }
 
 /* --- Destructive stays rust; primary stays navy. Both already carry
        meaning, so they are left alone. ---------------------------------- */
+/* ===========================================================================
+   Advisors: one card open at a time
+   ---------------------------------------------------------------------------
+   Five advisors x seven expandable sections x three group captions was a
+   page of scaffolding with very little on it. Collapsed, an advisor is a
+   photo, a name and their status chips — which is the job the chips were
+   added for. The shared name= on the <details> makes them exclusive, so
+   opening one closes the rest.
+   =========================================================================== */
+
+.advisor-block > summary {
+  list-style: none;
+  cursor: pointer;
+  border-bottom: none !important;
+  padding: var(--sp-050) 0 !important;
+  border-radius: var(--radius);
+}
+.advisor-block > summary::-webkit-details-marker,
+.advisor-block > summary::marker { display: none; content: ""; }
+.advisor-block > summary:hover { background: var(--N10); }
+.advisor-block[open] > summary {
+  border-bottom: 1px solid var(--N40) !important;
+  padding-bottom: var(--sp-200) !important;
+  margin-bottom: var(--sp-100);
+}
+
+/* A chevron on the trailing edge, so a collapsed card reads as openable. */
+.advisor-block > summary::after {
+  content: "";
+  width: 8px; height: 8px; flex-shrink: 0; margin-left: var(--sp-100);
+  border-right: 2px solid var(--N200);
+  border-bottom: 2px solid var(--N200);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+.advisor-block[open] > summary::after { transform: rotate(45deg); }
+
+/* Closed cards sit tight to each other; an open one gets room. */
+.advisor-block { margin-bottom: var(--sp-100); padding: var(--sp-150) var(--sp-200); }
+.advisor-block[open] { margin-bottom: var(--sp-300); padding-bottom: var(--sp-200); }
+
+/* Chips wrap under the name on a narrow card rather than squeezing it. */
+.advisor-chips { flex-wrap: wrap; }
+
+/* Group captions label one to four rows each, so they were carrying more
+   vertical space than the rows they introduced. */
+.advisor-section-group {
+  margin: var(--sp-200) 0 var(--sp-050) !important;
+  padding-top: var(--sp-100) !important;
+  font-size: 0.74rem !important;
+}
+.advisor-section-group:first-of-type {
+  margin-top: var(--sp-100) !important;
+  padding-top: 0 !important;
+  border-top: none !important;
+}
+
+/* Rows themselves: less air between them. */
+.advisor-section { margin-bottom: 0 !important; }
+.advisor-section summary { padding: var(--sp-100) var(--sp-100) !important; }
+.advisor-section > *:not(summary) { margin-top: var(--sp-100) !important; }
+
+@media (prefers-reduced-motion: reduce) {
+  .advisor-block > summary::after { transition: none; }
+}
 </style></head><body>
 <div class="admin-shell">
 <aside class="admin-sidebar">
@@ -15858,10 +15923,12 @@ tbody tr:hover td { background: var(--N10); }
       across all of them.
     </p>
 
-    <div style="padding-bottom: 1.1rem; margin-bottom: 1.1rem; border-bottom: 1px dashed var(--line);">
-      <p style="margin: 0 0 0.6rem 0; font-size: 0.9rem;">
-        <strong>Add or update an advisor</strong>
-      </p>
+    <details style="padding-bottom: 1.1rem; margin-bottom: 1.1rem;
+                    border-bottom: 1px dashed var(--line);">
+      <summary style="font-size: 0.95rem; font-weight: 600; cursor: pointer;
+                      color: var(--navy); margin-bottom: 0.6rem;">
+        Add or update an advisor
+      </summary>
       <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
         Re-using an existing name updates that profile. Leave the photo blank to
         keep the current one.
@@ -15884,10 +15951,10 @@ tbody tr:hover td { background: var(--N10); }
         </div>
         <button type="submit" class="btn" style="flex: 1 1 100%;">Save advisor</button>
       </form>
-    </div>
+    </details>
 
-    <div class="advisor-block">
-      <div class="advisor-head">
+    <details class="advisor-block" name="advisor-cards">
+      <summary class="advisor-head">
         <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
              onerror="this.style.display='none'"
              style="width: 48px; height: 48px; border-radius: 50%;
@@ -15907,7 +15974,7 @@ tbody tr:hover td { background: var(--N10); }
             {{ 'Voice sample on file' if default_persona_voice_sample else 'No voice sample' }}
           </span>
         </div>
-      </div>
+      </summary>
 
       <div class="advisor-section-group is-profile">Profile</div>
 
@@ -15989,13 +16056,13 @@ tbody tr:hover td { background: var(--N10); }
 
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
-    </div>
+    </details>
 
 
     {% if advisors %}
     {% for adv in advisors %}
-    <div class="advisor-block">
-      <div class="advisor-head">
+    <details class="advisor-block" name="advisor-cards">
+      <summary class="advisor-head">
         <img src="/a/{{ adv.slug }}/photo.jpg" alt=""
              onerror="this.style.display='none'"
              style="width: 48px; height: 48px; border-radius: 50%;
@@ -16006,8 +16073,11 @@ tbody tr:hover td { background: var(--N10); }
             {{ adv.slug }}{% if adv.no_photo %} · initials, no photo{% elif not adv.has_photo %} · using the default photo{% endif %}
           </span>
         </div>
+        {# Inside a <summary>, so the click has to be stopped from also
+           toggling the card open or shut underneath the confirm dialog. #}
         <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
-              style="display:inline;" data-doc-title="{{ adv.name }}">
+              style="display:inline;" data-doc-title="{{ adv.name }}"
+              onclick="event.stopPropagation();">
           <button type="submit" class="btn btn-danger">Delete</button>
         </form>
         {% set adv_links = participant_links_by_advisor.get(adv.slug, []) %}
@@ -16033,7 +16103,7 @@ tbody tr:hover td { background: var(--N10); }
             {{ 'Portal link active' if adv.portal_token else 'No portal link' }}
           </span>
         </div>
-      </div>
+      </summary>
 
       <div class="advisor-section-group is-profile">Profile</div>
 
@@ -16341,7 +16411,7 @@ tbody tr:hover td { background: var(--N10); }
         </p>
         {% endif %}
       </details>
-    </div>
+    </details>
     {% endfor %}
     {% else %}
     <p class="muted">

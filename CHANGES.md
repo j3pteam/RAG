@@ -1,69 +1,54 @@
-# J3P Advisor — build 2026-09-17-e
+# J3P Advisor — build 2026-09-17-f
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## The voice bug: the page said one advisor, the server used another
+## Advisors page: one card open at a time
 
-Working in incognito but not in a normal browser was the tell. Incognito has
-no session; the normal browser had one.
+Five advisors, each with seven expandable sections and three group captions
+between them, produced a page that was mostly scaffolding. Every advisor was
+fully expanded whether or not you were working on them.
 
-Opening a participant link (`/p/<token>`) stored that link's advisor in the
-session, and that stored advisor **overrode the page** on every later
-request in the same browser. Visit `/a/alan-friedman` afterwards and the
-page renders Alan — name, photo, greeting — while `/advisor/speak` looks up
-the *linked* advisor's voice sample. That advisor has none, so it reported
-"no voice sample has been uploaded for them yet" about an advisor who
-plainly had one in the admin panel.
+**Each advisor is now a single collapsed row** — photo, name, slug, status
+chips. That is the job the chips were added for, and it is enough to scan a
+roster at a glance. Clicking one opens it; opening another closes the first,
+so only one advisor's detail is ever on screen. A chevron on the right
+shows a card can be opened, and the row highlights on hover.
 
-Nothing on screen disagreed with itself, which is why this took so long to
-find. The sample was never deleted and was never on the wrong slug.
+**"Add or update an advisor" collapses too.** It is a rare action that was
+permanently occupying the top of the page. One line until you need it.
 
-**The same precedence applied to `/chat`**, so replies were being generated
-as the linked advisor — their knowledge base, their expertise, their
-coaching style — while the page showed Alan. That is the more serious half
-of this bug, and it is fixed by the same change.
+**Tighter spacing throughout.** The Profile / Links / Setup captions were
+carrying more vertical space than the one-to-four rows they introduce, and
+the rows themselves had a lot of air between them. Both pulled in.
 
-### What changed
+Delete stays on the collapsed row, where it is reachable without opening a
+card, and it no longer toggles the card when clicked — inside a `<summary>`
+that needed stopping explicitly, or the confirm dialog would appear over a
+card that had just opened underneath it.
 
-The advisor the page rendered is now the advisor that answers. The page
-sends its slug with every request; that wins.
-
-The link's own pages are unaffected: `/p/<token>` renders with the link's
-advisor, so the slug it sends already *is* the linked advisor. The only
-case that changes is the one where the two genuinely differ — someone
-navigating to a different advisor on purpose. Identity and conversation
-history still follow the participant link; only "who answers" moves.
-
-Verified across six scenarios, including a participant on their own link, a
-cached page that sends no slug, and a page naming an advisor that has since
-been deleted.
-
-### Clearing it on your own browser
-
-The fix applies from the next request — no need to clear anything. If you
-want to be certain you are seeing current behaviour, click NEW CONVERSATION
-or use a private window.
+Nothing moved between sections and nothing was removed. This is layout
+only.
 
 ---
 
-## Also in this build
+## From build 2026-09-17-e
 
-**Voice samples show which advisor they belong to** (2026-09-17-d). Each
-Voice Sample section states its slug, and where a sample exists there is a
-"Wrong advisor? Copy this recording to another" control. The default
-persona and a named advisor can share a display name, which made their two
-sections indistinguishable.
+**The advisor on the page is the advisor that answers.** Opening a
+participant link stored that link's advisor in the session, and it
+overrode the page on every later request in the same browser — so
+`/a/alan-friedman` rendered Alan while `/advisor/speak` looked up a
+different advisor's voice sample and `/chat` answered from their knowledge
+base. This was the cause of the "no voice sample has been uploaded"
+message on an advisor who plainly had one.
 
-**Voice samples are no longer destroyed on save** (2026-09-17-c). The save
-path ran `DELETE` then `INSERT`, so the recording existed only in memory in
-between. It is an upsert now. Replacements and removals are archived, last
-five per advisor, restorable from a "Previous recordings" panel.
-
-**`/health` reports advisor voice state** (2026-09-17-b).
-
-**Preview Voice reports which voice it used and why** (2026-09-17-a).
+**Voice samples show which advisor they belong to** (`-d`), with a "Wrong
+advisor? Copy this recording to another" control. **Voice samples are no
+longer destroyed on save** (`-c`) — the old path ran `DELETE` then
+`INSERT`; it is an upsert now, with replacements archived and restorable.
+**`/health` reports advisor voice state** (`-b`). **Preview Voice reports
+which voice it used and why** (`-a`).
 
 ---
 
@@ -85,7 +70,7 @@ duplicate feedback box.
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-e"`.
+`/health` reports `"version": "2026-09-17-f"`.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
 files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.
