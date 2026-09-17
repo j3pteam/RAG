@@ -124,6 +124,17 @@ def _phase_total_ms():
     return (time.perf_counter() - phases.t0) * 1000
 
 
+SLOW_PAGE_MS = 1000
+
+
+def _phase_breakdown():
+    """The per-phase timings, slowest first. Only the ones worth reading."""
+    phases = getattr(g, "_phases", None)
+    if phases is None:
+        return []
+    return sorted(phases.marks, key=lambda m: -m[1])
+
+
 def _with_render_time(html: str) -> str:
     """Show the server render time beside the build number.
 
@@ -139,9 +150,20 @@ def _with_render_time(html: str) -> str:
     cold = ""
     if FIRST_REQUEST_BOOT_MS:
         cold = f", cold start {FIRST_REQUEST_BOOT_MS / 1000:.1f}s"
+    detail = ""
+    if total >= SLOW_PAGE_MS:
+        # Slow enough to be worth explaining on the spot. Anything under a
+        # second is noise and stays hidden.
+        top = _phase_breakdown()[:4]
+        rows = "".join(
+            f'<div style="display:flex;justify-content:space-between;gap:0.5rem;">'
+            f'<span>{n}</span><span>{ms:.0f} ms</span></div>'
+            for n, ms in top if ms >= 1)
+        detail = (f'<div style="margin-top:0.35rem;font-size:0.7rem;'
+                  f'line-height:1.5;opacity:0.75;">{rows}</div>')
     return html.replace("<!--RENDER_MS-->",
                         f' · <span title="server render time{cold}">'
-                        f'{total:.0f} ms{cold}</span>')
+                        f'{total:.0f} ms{cold}</span>{detail}')
 
 
 # Cold-start cost lands on whichever request arrives first after a deploy or
@@ -174,8 +196,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-g"
-APP_BUILD_NOTES = "chevron on the row edge; render time shown in the sidebar"
+APP_VERSION = "2026-09-17-h"
+APP_BUILD_NOTES = "a slow admin page shows which phase was slow"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -18360,6 +18382,7 @@ def admin_dashboard():
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
     docs = db.list_documents() if db_ok else []
+    _phase_mark("list_documents")
     # Filter for the conversation log — default shows everything.
     # Accepted values: all | rated | up | down | unrated
     log_filter = (request.args.get("filter") or "all").lower()
@@ -18393,10 +18416,12 @@ def admin_dashboard():
         persona=(log_persona or None),
     ) if (db_ok and want_activity) else []
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
-    _phase_mark("documents + conversation log")
+    _phase_mark("feedback stats + log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
     _advisor_map = document_advisor_map()
+    _phase_mark("document_advisor_map")
     _advisor_rows = list_advisors()
+    _phase_mark("list_advisors")
     _advisor_names = {a["slug"]: a["name"] for a in _advisor_rows}
     _advisor_docs = {}
     for d in docs:
@@ -18405,6 +18430,7 @@ def admin_dashboard():
     # Grouped once here rather than filtered per card in the template.
     # "" is the default persona, which has no row in the advisors table.
     _participant_links = list_participant_links() if want_advisors else []
+    _phase_mark("participant links")
     _links_by_advisor = {}
     for _l in _participant_links:
         _links_by_advisor.setdefault(_l["advisor_slug"] or "", []).append(_l)
@@ -18414,15 +18440,21 @@ def admin_dashboard():
     # unless the Advisors tab is the one being rendered.
     if want_advisors:
         _personality_map = advisor_personality_map()
+        _phase_mark("personality map")
         _behavioral_map = advisor_behavioral_map()
+        _phase_mark("behavioral map")
         _meta_360_map = advisor_360_meta_map()
+        _phase_mark("360 map")
         _voice_map = advisor_voice_meta_map()
+        _phase_mark("voice meta map")
         _voice_archive_map = advisor_voice_archive_map()
+        _phase_mark("voice archive map")
         _briefings_map = briefings_by_advisor(limit_per=10)
+        _phase_mark("briefings map")
     else:
         _personality_map = _behavioral_map = _meta_360_map = {}
         _voice_map = _briefings_map = _voice_archive_map = {}
-    _phase_mark("advisor detail (5 bulk reads)")
+    _phase_mark("advisor detail assembly")
 
     # Sections a viewer never sees should not cost a query to build. Each of
     # these is gated on the same permission the template gates the markup on.

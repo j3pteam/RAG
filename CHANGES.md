@@ -1,66 +1,59 @@
-# J3P Advisor — build 2026-09-17-g
+# J3P Advisor — build 2026-09-17-h
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## Two fixes
+## Where the four seconds go
 
-**The chevron is on the row edge.** It was dropping below the status chips
-and sitting under the photo. `.advisor-head` is a wrapping flex container
-and the chips take a full row, so a flex-positioned marker followed them
-down. It is positioned rather than laid out now, pinned to the right of the
-row regardless of how many chips an advisor has, and it darkens on hover.
+The Advisors tab reported **3928 ms, cold start 1.4s**. That settles two
+things: it is not the container waking up, and it is not the browser. The
+server takes four seconds.
 
-**The render time is on the page**, beside the build number:
-
-```
-Admin   build 2026-09-17-g · 180 ms
-```
-
-After a deploy or a scale-down the first load also shows what the cold
-start cost:
+What it does not yet say is *which part*. The phase marks were too coarse —
+one of them covered four separate queries. This build splits them so each
+significant call is timed on its own, and makes a slow page show its own
+breakdown:
 
 ```
-Admin   build 2026-09-17-g · 420 ms, cold start 6.8s
+Admin   build 2026-09-17-h · 3928 ms, cold start 1.4s
+        voice archive map        2600 ms
+        template render           480 ms
+        list_documents            120 ms
+        list_advisors              95 ms
 ```
+
+The four slowest phases appear under the build line whenever a page takes
+over a second. Below that they stay hidden — under a second is noise.
+
+Newly timed separately: `list_documents`, `document_advisor_map`,
+`list_advisors`, participant links, and each of the six per-advisor bulk
+reads (personality, behavioural, 360, voice meta, voice archive, briefings)
+rather than one lump.
+
+**My guess, to be clear that it is one:** the voice archive map is the
+newest query and the only one reading a table with audio in it. It selects
+metadata only, so it should be cheap — but if Postgres is fetching the
+BYTEA column to satisfy the row scan, that table holds several megabytes of
+audio per row. The next screenshot will confirm or kill that in one glance,
+and if it is something else the breakdown names it instead.
+
+Load the Advisors tab and send me the four lines.
 
 ---
 
-## Why that number matters for the slowness
+## From build 2026-09-17-g
 
-It has been measured since the first report — logged as `[timing]` on every
-admin request, and written into an HTML comment at the foot of the page —
-and neither form survives a screenshot, which is how the reports arrive. So
-four rounds of work on this have been informed guesses.
-
-The number distinguishes two completely different problems:
-
-- **A high figure (over ~800 ms)** means the server. The `[timing]` log line
-  breaks it into phases, and I can act on that directly.
-- **A low figure (under ~300 ms) with a page that still feels slow** means
-  the server finished quickly and the time is going somewhere else: the
-  browser rendering, the network, or a cold container. That would redirect
-  the work entirely — nothing further in the query layer would help.
-
-**Cold start is the one I would bet on now.** Railway containers scale down
-when idle, and the first request afterwards pays for importing psycopg,
-voyageai, trafilatura, tokenizers and numpy, plus the schema check, before
-it answers. That is several seconds, it only happens on the first load, and
-it looks exactly like "the admin panel is very slow" — while the second
-load is fast and the logs look healthy. The cold-start figure now appears
-on that first page, which confirms or rules it out in one glance.
-
-So: open the admin panel and read the line under "Admin". Send me that.
+Chevron pinned to the trailing edge of each advisor row — it had been
+dropping below the status chips. Render time shown beside the build number.
 
 ---
 
 ## From build 2026-09-17-f
 
-**Advisors page: one card open at a time.** Each advisor is a collapsed
-row — photo, name, slug, status chips — and opening one closes the others.
-"Add or update an advisor" collapses too. Tighter spacing on the group
-captions and section rows.
+Advisors page collapses to one card at a time: photo, name, slug and status
+chips per row, opening one closes the others. "Add or update an advisor"
+collapses too.
 
 ---
 
@@ -81,9 +74,9 @@ Voice reports which voice it used and why (`-a`).
 
 **Admin panel.** Atlassian design language in J3P colours; sentence case
 and larger type; contrast-checked status colour. One tab per request —
-Overview 553 KB → 71 KB. Advisor detail in five bulk queries rather than
-five per advisor. Per-advisor participant links with bulk CSV/XLSX upload
-and export. Copied links are https.
+Overview 553 KB → 71 KB. Advisor detail in bulk queries rather than per
+advisor. Per-advisor participant links with bulk CSV/XLSX upload and
+export. Copied links are https.
 
 **Participant chat.** The "Error: Unknown error" bug. The cloned voice
 timing out on long replies. The idle prompt interrupting typing. The
@@ -94,7 +87,7 @@ duplicate feedback box.
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-g"`.
+`/health` reports `"version": "2026-09-17-h"`.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
 files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.
