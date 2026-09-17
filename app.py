@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-a"
-APP_BUILD_NOTES = "Preview Voice says which voice it used and why"
+APP_VERSION = "2026-09-17-b"
+APP_BUILD_NOTES = "advisor voice state visible at /health"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9697,6 +9697,12 @@ def synthesize_advisor_voice(slug: str, text: str, force_browser: bool = False):
     """
     meta = get_advisor_voice_meta(slug)
     if not meta:
+        # Name the slug. A sample filed under a different slug than the page
+        # requests looks identical to no sample at all, and the two need
+        # opposite fixes — re-record, versus correct the advisor record.
+        app.logger.warning(
+            f"[advisor-voice] no sample row for slug {slug!r}; "
+            f"slugs that do have one: {sorted(advisor_voice_meta_map().keys())}")
         return None, None, "no-sample-uploaded"
     if force_browser:
         return None, None, "participant-chose-default-voice"
@@ -12488,11 +12494,46 @@ def feedback():
     return jsonify({"ok": True})
 
 
+def _voice_health():
+    """Non-secret summary of advisor voice readiness, for /health.
+
+    Deliberately reports the slugs rather than a count: the common failure
+    is a sample saved against one slug while the participant page asks for
+    another, and only the actual names show that.
+    """
+    try:
+        samples = advisor_voice_meta_map()
+    except Exception as e:
+        return {"error": str(e)[:120]}
+    advisors = {a["slug"]: a["name"] for a in list_advisors()}
+    out = {
+        "elevenlabs_key_set": bool(os.environ.get("ELEVENLABS_API_KEY")),
+        "advisors": sorted(advisors.keys()),
+        "with_sample": {},
+    }
+    for slug, meta in samples.items():
+        out["with_sample"][slug] = {
+            "name": advisors.get(slug, "(no advisor with this slug)"),
+            "consent_given": meta.get("consent_given"),
+            "cloned": bool(meta.get("provider_voice_id")),
+            "voice_mode": meta.get("voice_mode"),
+            "size_kb": (meta.get("size_bytes") or 0) // 1024,
+        }
+    out["advisors_without_sample"] = sorted(
+        set(advisors) - set(samples) - {DEFAULT_PERSONA_SLUG})
+    return out
+
+
 @app.route("/health")
 def health():
     return jsonify({
         "status": "ok",
         "version": APP_VERSION,
+        # Everything the advisor voice needs, in one place. Checked when
+        # Speak or Preview falls back to the browser voice: it distinguishes
+        # "no sample saved" from "saved under a different slug" from
+        # "sample fine, provider not configured".
+        "advisor_voice": _voice_health(),
         "build": APP_BUILD_NOTES,
         "admin_sections": [
             "Display", "Advisors", "Access", "Scheduling", "Feedback",
