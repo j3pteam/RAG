@@ -145,29 +145,26 @@ def _with_render_time(html: str) -> str:
     far could not.
     """
     total = _phase_total_ms()
-    # Diagnostic, not furniture. It belongs on screen only when someone is
-    # actually looking for it: add ?timing=1 to the URL. Otherwise the
-    # measurement still goes to the logs on every request, where it can be
-    # read without putting internals in front of anyone using the panel.
-    if total is None or not request.args.get("timing"):
+    if total is None:
         return html.replace("<!--RENDER_MS-->", "")
-    cold = ""
-    if FIRST_REQUEST_BOOT_MS:
-        cold = f", cold start {FIRST_REQUEST_BOOT_MS / 1000:.1f}s"
-    detail = ""
-    if total >= SLOW_PAGE_MS:
-        # Slow enough to be worth explaining on the spot. Anything under a
-        # second is noise and stays hidden.
-        top = _phase_breakdown()[:4]
-        rows = "".join(
-            f'<div style="display:flex;justify-content:space-between;gap:0.5rem;">'
-            f'<span>{n}</span><span>{ms:.0f} ms</span></div>'
-            for n, ms in top if ms >= 1)
-        detail = (f'<div style="margin-top:0.35rem;font-size:0.7rem;'
-                  f'line-height:1.5;opacity:0.75;">{rows}</div>')
-    return html.replace("<!--RENDER_MS-->",
-                        f' · <span title="server render time{cold}">'
-                        f'{total:.0f} ms{cold}</span>{detail}')
+    # The placeholder now lives in the Diagnostics pane rather than the
+    # sidebar, so this renders a table rather than a caption. Every phase is
+    # listed, in the order it ran, because "which step" is the question this
+    # answers and a top-four list hides the tail.
+    rows = "".join(
+        f'<tr><td>{n}</td><td style="text-align:right;">{ms:.0f} ms</td></tr>'
+        for n, ms in getattr(getattr(g, "_phases", None), "marks", []) if ms >= 1)
+    verdict = ("fast" if total < 500 else
+               "acceptable" if total < 1000 else
+               "slow — the largest phase below is where to look")
+    colour = ("var(--ok)" if total < 500 else
+              "var(--warn)" if total < 1000 else "var(--bad)")
+    block = (f'<p style="margin:0 0 1rem;font-size:1.4rem;font-weight:600;'
+             f'color:{colour};">{total:.0f} ms '
+             f'<span style="font-size:0.9rem;font-weight:400;" class="muted">'
+             f'— {verdict}</span></p>'
+             f'<table>{rows}</table>')
+    return html.replace("<!--RENDER_MS-->", block)
 
 
 # Cold-start cost lands on whichever request arrives first after a deploy or
@@ -200,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-k"
-APP_BUILD_NOTES = "timing panel hidden unless ?timing=1"
+APP_VERSION = "2026-09-17-l"
+APP_BUILD_NOTES = "Diagnostics tab collects build, services and timing"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -15382,7 +15379,6 @@ tbody tr:hover td { background: var(--N10); }
     <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="admin-brand-logo" />
     <div class="admin-brand-text">
       <span class="name">Admin</span>
-      <span class="build">build {{ app_version }}<!--RENDER_MS--></span>
     </div>
   </div>
   <nav class="admin-sidebar-nav">
@@ -15412,6 +15408,12 @@ tbody tr:hover td { background: var(--N10); }
     <a class="tab-btn {{ 'active' if active_tab == 'users' else '' }}" href="{{ url_for('admin_dashboard', tab='users') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       Manage users
+    </a>
+    {% endif %}
+    {% if admin_perms.edit_settings %}
+    <a class="tab-btn {{ 'active' if active_tab == 'diagnostics' else '' }}" href="{{ url_for('admin_dashboard', tab='diagnostics') }}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      Diagnostics
     </a>
     {% endif %}
     {% if admin_perms.edit_settings %}
@@ -16595,6 +16597,128 @@ tbody tr:hover td { background: var(--N10); }
   </div>
   </div>
 
+  {% endif %}
+
+
+  {% if admin_perms.edit_settings %}
+  {% if active_tab == "diagnostics" %}
+  <div class="tab-pane" data-tab="diagnostics">
+  <h2 class="group-heading">Diagnostics</h2>
+
+  <div class="section">
+    <h2>This page load</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      Server-side time for the request that rendered this page, broken down
+      by phase. Anything over roughly a second is worth looking at; the same
+      line is written to the deploy logs on every request as
+      <code>[timing]</code>.
+    </p>
+    <!--RENDER_MS-->
+  </div>
+
+  <div class="section">
+    <h2>Build</h2>
+    <table>
+      <tr><th style="width: 30%;">Version</th><td><code>{{ app_version }}</code></td></tr>
+      <tr><th>Notes</th><td>{{ app_build_notes }}</td></tr>
+      <tr><th>Cold start</th>
+          <td>{% if first_request_boot_ms %}
+                {{ "%.1f"|format(first_request_boot_ms / 1000) }}s on the first request after
+                this worker started
+              {% else %}<span class="muted">not recorded yet</span>{% endif %}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Services</h2>
+    <table>
+      <tr><th style="width: 30%;">Database</th>
+          <td>{% if db_ok %}<span style="color: var(--ok);">connected</span>
+              {% else %}<span style="color: var(--bad);">not configured</span>{% endif %}</td></tr>
+      <tr><th>Embeddings</th>
+          <td>{% if emb_ok %}<span style="color: var(--ok);">connected</span>
+              {% else %}<span style="color: var(--bad);">not configured</span>{% endif %}</td></tr>
+      <tr><th>Knowledge base</th>
+          <td>{% if rag_ready %}<span style="color: var(--ok);">ready</span>
+              {% else %}<span style="color: var(--bad);">unavailable — uploads and retrieval are off</span>{% endif %}</td></tr>
+      <tr><th>Voice cloning</th>
+          <td>{% if diag.voice.elevenlabs_key_set %}<span style="color: var(--ok);">API key configured</span>
+              {% else %}<span class="muted">no API key — Speak uses the browser voice</span>{% endif %}</td></tr>
+      <tr><th>Email</th>
+          <td>{% if mail_ready %}<span style="color: var(--ok);">configured</span>
+              {% else %}<span class="muted">none — sign-in links and safety alerts cannot be sent</span>{% endif %}</td></tr>
+    </table>
+  </div>
+
+  <div class="section">
+    <h2>Database connections</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      Opening a connection to a remote Postgres costs close to a second.
+      Reuse keeps one alive for the life of the worker instead of rebuilding
+      it on every request.
+    </p>
+    <table>
+      <tr><th style="width: 45%;">Reuse this app's own connection</th>
+          <td>{% if diag.persistent_conns %}<span style="color: var(--ok);">on</span>
+              {% else %}<span class="muted">off — set DB_PERSISTENT_CONN=on</span>{% endif %}</td></tr>
+      <tr><th>Share it with database.py</th>
+          <td>{% if diag.reuse_shared_conn %}<span style="color: var(--warn);">on</span>
+              {% else %}<span class="muted">off — DB_REUSE_SHARED_CONN=on enables it</span>{% endif %}</td></tr>
+    </table>
+    {% if not diag.reuse_shared_conn %}
+    <p class="muted" style="margin: 1rem 0 0;">
+      The second is off deliberately: an earlier attempt to hand
+      <code>database.py</code> a connection it had not opened took the admin
+      panel down. It is worth roughly another second per page once that
+      module's connection handling is confirmed to tolerate it.
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h2>Advisor voice</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      Which advisor each voice recording is attached to. A sample filed
+      against one slug is invisible to a page asking for another — that is
+      the disconnect behind "no voice sample has been uploaded".
+    </p>
+    {% if diag.voice.with_sample %}
+    <table>
+      <tr><th>Slug</th><th>Advisor</th><th>Consent</th><th>Cloned</th><th>Mode</th><th style="text-align:right;">Size</th></tr>
+      {% for slug, v in diag.voice.with_sample.items() %}
+      <tr>
+        <td><code>{{ slug }}</code></td>
+        <td>{{ v.name }}</td>
+        <td>{% if v.consent_given %}<span style="color: var(--ok);">yes</span>
+            {% else %}<span style="color: var(--bad);">no</span>{% endif %}</td>
+        <td>{% if v.cloned %}<span style="color: var(--ok);">yes</span>
+            {% else %}<span class="muted">not yet</span>{% endif %}</td>
+        <td class="muted">{{ v.voice_mode }}</td>
+        <td style="text-align:right;" class="muted">{{ v.size_kb }} KB</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted" style="margin: 0;">No voice samples on file.</p>
+    {% endif %}
+    {% if diag.voice.advisors_without_sample %}
+    <p class="muted" style="margin: 1rem 0 0;">
+      No sample yet:
+      {% for slug in diag.voice.advisors_without_sample %}<code>{{ slug }}</code>{{ ", " if not loop.last }}{% endfor %}
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="section">
+    <h2>Content</h2>
+    <table>
+      <tr><th style="width: 45%;">Documents in the knowledge base</th><td>{{ docs|length }}</td></tr>
+      <tr><th>Advisors</th><td>{{ advisors|length }} named, plus the default persona</td></tr>
+      <tr><th>Rated exchanges</th><td>{{ stats.total }}</td></tr>
+    </table>
+  </div>
+  </div>
+  {% endif %}
   {% endif %}
 
   {% if admin_perms.edit_settings %}
@@ -18471,7 +18595,7 @@ def advisor_portal_logout():
 
 
 ADMIN_TABS = ("overview", "activity", "advisors", "biometric",
-              "knowledge", "users", "settings")
+              "knowledge", "users", "settings", "diagnostics")
 
 
 @app.route("/admin")
@@ -18585,6 +18709,15 @@ def admin_dashboard():
 
     html = _cached_render(
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
+        app_build_notes=APP_BUILD_NOTES,
+        first_request_boot_ms=FIRST_REQUEST_BOOT_MS,
+        diag={
+            "persistent_conns": _PERSISTENT_CONNS_ENABLED,
+            "reuse_shared_conn": _REUSE_DB_SHARED_CONN,
+            "voice": _voice_health() if active_tab == "diagnostics" else {
+                "elevenlabs_key_set": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                "with_sample": {}, "advisors_without_sample": []},
+        },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=load_settings(force=True),
         mail_ready=mail_transport_configured(),
