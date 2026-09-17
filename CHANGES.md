@@ -1,102 +1,95 @@
-# J3P Advisor — build 2026-09-17-c
+# J3P Advisor — build 2026-09-17-d
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## Why the voice sample disappeared
+## The voice disconnect
 
-`save_advisor_voice_sample` did this:
+The admin panel shows Alan Friedman's sample present, consented, cloned,
+"Everything needed is in place". `/a/alan-friedman` says no sample exists.
+Both are telling the truth about different records.
 
-```
-DELETE FROM advisor_voice_samples WHERE advisor_slug = ...
-INSERT INTO advisor_voice_samples ...
-```
+Every advisor's voice sample is keyed by **slug**. The default persona —
+the one on the main link — has its own slug and its own Voice Sample
+section. Its heading uses whatever display name you gave the default
+advisor. Set that to "Alan Friedman" and two different records produce two
+sections that read identically:
 
-Between those two statements the recording existed only in memory. Anything
-going wrong in that window — and the exception handler caught errors,
-logged a line, and returned `False` without rolling back — destroyed a
-sample that took minutes to record and had already been cloned. Every
-re-record ran that risk. The error message it printed, "write failed", was
-also indistinguishable from a failure that had changed nothing.
+- `__default_persona__` — used by `/` and `/scheduling`
+- `alan-friedman` — used by `/a/alan-friedman/...`
 
-### What now happens instead
+A recording saved against the first looks completely healthy in the admin
+panel and is invisible to the second. Nothing was erased.
 
-**Nothing is deleted on save.** It's an upsert: the row is written over in
-place, so there is no moment where the advisor has no sample. If the write
-fails, the existing recording is untouched, and the log says so explicitly.
+### Confirming it
 
-**Every replacement is archived first.** Re-recording copies the current
-sample — audio included — into `advisor_voice_archive` before writing the
-new one. Removing a sample archives it too. The last five per advisor are
-kept; audio is large, and the point is undoing a recent mistake rather than
-keeping everything forever.
+`/health` → `advisor_voice` → `with_sample`. The slug carrying the
+recording is named there, and the default persona now identifies itself as
+"the default persona (main link)" rather than as an unknown slug.
 
-**You can put one back.** Each advisor's Voice Sample section now has a
-"Previous recordings (N)" panel listing what was archived, when, and why —
-"replaced by a new recording", "removed by an admin". One click restores
-it. The sample it displaces is archived in turn, so restoring is itself
-undoable. `provider_voice_id` is cleared on restore, because the cloned
-voice at ElevenLabs was built from whichever sample was live at the time
-and has to be rebuilt from this one.
+### Fixing it without re-recording
 
-**The archive works retroactively from now on, not backwards.** It cannot
-recover the sample already lost — that one has to be re-recorded. It means
-this can't happen again.
+Each Voice Sample section now states which record you are looking at:
 
-### Re-recording Alan's sample
+> Attached to `alan-friedman` — used by sessions at `/a/alan-friedman`.
 
-Admin → Advisors → Alan Friedman → Voice Sample. Tick the consent box
-before saving; without it nothing is written at all. Aim for one to two
-minutes of natural speech — a clip under a minute clones poorly, and that
-is the usual cause of a cloned voice that plays but doesn't sound like the
-person. There's a suggested script in that section.
+or
 
-Afterwards the section's four-line checklist should read ✓ on all of
-sample uploaded, consent given, API key configured, voice cloned. The last
-one ticks over on the first use of Speak.
+> Attached to `__default_persona__` — the default persona, used on the main
+> link. Sessions at `/a/<advisor>` do not use this recording.
+
+And where a sample exists there is a **"Wrong advisor? Copy this recording
+to another"** control. Pick the destination, and consent, tuning and voice
+mode travel with it. `provider_voice_id` does not — the cloned voice at
+ElevenLabs is registered against the advisor it was built for, so it
+re-clones on next use.
+
+It copies rather than moves. The original stays put; removing it is a
+separate deliberate act. Whatever the destination already had is archived
+first.
+
+So: if the recording is on `__default_persona__` and you want it on
+`alan-friedman`, open the default persona's Voice Sample section, copy it
+to Alan Friedman, and Preview should then play his voice.
 
 ---
 
 ## Also in this build
 
-**`/health` reports advisor voice state** (2026-09-17-b). An
-`advisor_voice` block lists every advisor, every slug that actually has a
-sample, and for each: consent, whether it's cloned, voice mode, size. A
-sample filed against a stale slug shows as `"name": "(no advisor with this
-slug)"`. `/advisor/speak` also logs the slug it searched and every slug
-that does have a sample.
+**Voice samples are no longer destroyed on save** (2026-09-17-c). The save
+path ran `DELETE` then `INSERT`, so the recording existed only in memory in
+between, and a failure there — silently swallowed — lost it. It is an
+upsert now, with no moment where the advisor has no sample. Replacements
+and removals are archived, last five per advisor, restorable from a
+"Previous recordings" panel.
+
+**`/health` reports advisor voice state** (2026-09-17-b) — every advisor,
+every slug with a sample, consent, cloned, mode, size.
 
 **Preview Voice reports which voice it used and why** (2026-09-17-a).
-Every fallback in that handler was previously silent, so a preview that
-fell back to the browser voice looked identical to one that worked.
 
 ---
 
 ## From build 2026-09-16-j
 
 **Admin panel.** Atlassian design language in J3P colours; sentence case
-and larger type; contrast-checked status colour on chips and figures. One
-tab per request instead of all seven — Overview 553 KB → 71 KB, Advisors →
-246 KB. Advisor detail in five bulk queries rather than five per advisor.
-Per-advisor participant links with bulk CSV/XLSX upload and export. The
-automatic learning toggle merged into Continuous Learning. Copied links are
-https.
+and larger type; contrast-checked status colour. One tab per request —
+Overview 553 KB → 71 KB. Advisor detail in five bulk queries rather than
+five per advisor. Per-advisor participant links with bulk CSV/XLSX upload
+and export. Automatic learning toggle merged into Continuous Learning.
+Copied links are https.
 
-**Participant chat.** The "Error: Unknown error" bug — the contact scrubber
-could delete an entire reply on an advisor's own page, because that
-advisor's name was on the staff list. The cloned voice timing out after six
-seconds on long replies. The idle prompt interrupting while someone was
-typing. The feedback comment box duplicating on a double-tap.
+**Participant chat.** The "Error: Unknown error" bug. The cloned voice
+timing out on long replies. The idle prompt interrupting typing. The
+duplicate feedback box.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-c"`.
-
-The archive table is created on first use — no migration step.
+`/health` reports `"version": "2026-09-17-d"`.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
 files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.

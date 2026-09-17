@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-c"
-APP_BUILD_NOTES = "voice samples archived on replace or removal, restorable"
+APP_VERSION = "2026-09-17-d"
+APP_BUILD_NOTES = "voice samples show their slug and can be moved between advisors"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9352,6 +9352,62 @@ def advisor_voice_archive_map() -> dict:
     return out
 
 
+def move_voice_sample(from_slug: str, to_slug: str) -> bool:
+    """Reattach an existing recording to a different advisor.
+
+    Consent, tuning and voice_mode travel with it; provider_voice_id does
+    not, because the cloned voice at the provider is registered against
+    whichever advisor it was built for and has to be rebuilt.
+
+    Whatever the destination already had is archived first, and the source
+    row is left in place — copy, not cut. Deleting the original is a
+    separate, deliberate act, and doing it implicitly here would make a
+    mis-click destructive again.
+    """
+    if not from_slug or not to_slug or from_slug == to_slug:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        _advisor_voice_archive_ensure_table(conn)
+        _archive_current_voice_sample(conn, to_slug, f"replaced by a sample moved from {from_slug}")
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO advisor_voice_samples
+                    (advisor_slug, filename, mime, content, size_bytes,
+                     consent_given, consent_note, voice_mode, voice_stability,
+                     voice_similarity_boost, voice_style, voice_speaker_boost)
+                SELECT %s, filename, mime, content, size_bytes,
+                       consent_given, consent_note, COALESCE(voice_mode, 'auto'),
+                       voice_stability, voice_similarity_boost, voice_style,
+                       voice_speaker_boost
+                FROM advisor_voice_samples WHERE advisor_slug = %s
+                ON CONFLICT (advisor_slug) DO UPDATE SET
+                    filename = EXCLUDED.filename, mime = EXCLUDED.mime,
+                    content = EXCLUDED.content, size_bytes = EXCLUDED.size_bytes,
+                    consent_given = EXCLUDED.consent_given,
+                    consent_note = EXCLUDED.consent_note,
+                    voice_mode = EXCLUDED.voice_mode,
+                    voice_stability = EXCLUDED.voice_stability,
+                    voice_similarity_boost = EXCLUDED.voice_similarity_boost,
+                    voice_style = EXCLUDED.voice_style,
+                    voice_speaker_boost = EXCLUDED.voice_speaker_boost,
+                    provider = NULL, provider_voice_id = NULL,
+                    uploaded_at = NOW()
+            """, (to_slug, from_slug))
+            moved = cur.rowcount
+        conn.commit()
+        app.logger.info(f"[advisor-voice] copied sample {from_slug!r} -> {to_slug!r}")
+        return moved > 0
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] move failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def restore_voice_sample(slug: str, archive_id: int) -> bool:
     """Put an archived recording back as the live sample.
 
@@ -12706,7 +12762,9 @@ def _voice_health():
     }
     for slug, meta in samples.items():
         out["with_sample"][slug] = {
-            "name": advisors.get(slug, "(no advisor with this slug)"),
+            "name": ("the default persona (main link)"
+                     if slug == DEFAULT_PERSONA_SLUG
+                     else advisors.get(slug, "(no advisor with this slug)")),
             "consent_given": meta.get("consent_given"),
             "cloned": bool(meta.get("provider_voice_id")),
             "voice_mode": meta.get("voice_mode"),
@@ -15352,6 +15410,15 @@ tbody tr:hover td { background: var(--N10); }
       {% if can_edit_voice %}
       <details class="advisor-section">
         <summary>Voice Sample</summary>
+        {# The default persona and a named advisor can share a display name,
+           which made their two Voice Sample sections indistinguishable. The
+           slug is what the participant page actually asks for, so show it. #}
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          Attached to <code>{{ t_slug }}</code>{% if t_slug == default_persona_slug %}
+          — the default persona, used on the main link. Sessions at
+          <code>/a/&lt;advisor&gt;</code> do not use this recording.{% else %}
+          — used by sessions at <code>/a/{{ t_slug }}</code>.{% endif %}
+        </p>
         <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.78rem;">
           A recording of {{ t_name }}'s own voice, used to clone a custom
           voice via ElevenLabs so "Speak" sounds like {{ t_name }} instead
@@ -15582,6 +15649,34 @@ tbody tr:hover td { background: var(--N10); }
                         border-radius: 2px; font-family: inherit; font-size: 0.78rem; margin-bottom: 0.6rem;" />
           <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
         </form>
+        {% endif %}
+        {% if t_voice_sample and can_edit_voice %}
+        <details style="margin-top: 0.9rem;">
+          <summary style="font-size: 0.82rem; cursor: pointer; color: var(--navy);">
+            Wrong advisor? Copy this recording to another
+          </summary>
+          <p class="muted" style="margin: 0.5rem 0 0.6rem; font-size: 0.78rem; line-height: 1.6;">
+            Use this when a recording was saved against the default persona
+            but belongs to a named advisor, or the other way round — the two
+            sections look the same when they share a name. Consent and tuning
+            travel with it; the original stays where it is.
+          </p>
+          <form method="POST" action="{{ url_for('admin_move_advisor_voice', slug=t_slug) }}"
+                style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+            <select name="to_slug" required
+                    style="flex: 1 1 220px; padding: 0.45rem; border: 1px solid var(--line);
+                           border-radius: 2px; font-family: inherit; font-size: 0.85rem;">
+              <option value="">Copy to…</option>
+              {% if t_slug != default_persona_slug %}
+              <option value="{{ default_persona_slug }}">The default persona (main link)</option>
+              {% endif %}
+              {% for a in advisors %}{% if a.slug != t_slug %}
+              <option value="{{ a.slug }}">{{ a.name }} ({{ a.slug }})</option>
+              {% endif %}{% endfor %}
+            </select>
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Copy recording</button>
+          </form>
+        </details>
         {% endif %}
         {% set archived = (voice_archives or {}).get(t_slug) or [] %}
         {% if archived %}
@@ -18588,6 +18683,26 @@ def admin_play_advisor_voice(slug):
         return ("No voice sample on record.", 404)
     content, mime, filename = result
     return Response(content, mimetype=mime)
+
+
+@app.route("/admin/advisors/voice/move/<slug>", methods=["POST"])
+@require_permission("edit_voice")
+def admin_move_advisor_voice(slug):
+    """Copy this advisor's recording to another advisor — the fix for a
+    sample saved against the wrong one."""
+    source = _resolve_voice_target(slug)
+    target_slug = (request.form.get("to_slug") or "").strip()
+    target = _resolve_voice_target(target_slug) if target_slug else None
+    if not source or not target:
+        flash("Pick an advisor to copy the recording to.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    if move_voice_sample(slug, target_slug):
+        flash(f"✓ Copied {source['name']}'s recording to {target['name']}. "
+              f"The original is still in place; remove it separately if it "
+              f"shouldn't be there. The voice re-clones on next use.")
+    else:
+        flash("Could not copy that recording — check the server logs.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/restore/<slug>/<int:archive_id>", methods=["POST"])
