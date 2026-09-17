@@ -1,71 +1,67 @@
-# J3P Advisor — build 2026-09-17-d
+# J3P Advisor — build 2026-09-17-e
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## The voice disconnect
+## The voice bug: the page said one advisor, the server used another
 
-The admin panel shows Alan Friedman's sample present, consented, cloned,
-"Everything needed is in place". `/a/alan-friedman` says no sample exists.
-Both are telling the truth about different records.
+Working in incognito but not in a normal browser was the tell. Incognito has
+no session; the normal browser had one.
 
-Every advisor's voice sample is keyed by **slug**. The default persona —
-the one on the main link — has its own slug and its own Voice Sample
-section. Its heading uses whatever display name you gave the default
-advisor. Set that to "Alan Friedman" and two different records produce two
-sections that read identically:
+Opening a participant link (`/p/<token>`) stored that link's advisor in the
+session, and that stored advisor **overrode the page** on every later
+request in the same browser. Visit `/a/alan-friedman` afterwards and the
+page renders Alan — name, photo, greeting — while `/advisor/speak` looks up
+the *linked* advisor's voice sample. That advisor has none, so it reported
+"no voice sample has been uploaded for them yet" about an advisor who
+plainly had one in the admin panel.
 
-- `__default_persona__` — used by `/` and `/scheduling`
-- `alan-friedman` — used by `/a/alan-friedman/...`
+Nothing on screen disagreed with itself, which is why this took so long to
+find. The sample was never deleted and was never on the wrong slug.
 
-A recording saved against the first looks completely healthy in the admin
-panel and is invisible to the second. Nothing was erased.
+**The same precedence applied to `/chat`**, so replies were being generated
+as the linked advisor — their knowledge base, their expertise, their
+coaching style — while the page showed Alan. That is the more serious half
+of this bug, and it is fixed by the same change.
 
-### Confirming it
+### What changed
 
-`/health` → `advisor_voice` → `with_sample`. The slug carrying the
-recording is named there, and the default persona now identifies itself as
-"the default persona (main link)" rather than as an unknown slug.
+The advisor the page rendered is now the advisor that answers. The page
+sends its slug with every request; that wins.
 
-### Fixing it without re-recording
+The link's own pages are unaffected: `/p/<token>` renders with the link's
+advisor, so the slug it sends already *is* the linked advisor. The only
+case that changes is the one where the two genuinely differ — someone
+navigating to a different advisor on purpose. Identity and conversation
+history still follow the participant link; only "who answers" moves.
 
-Each Voice Sample section now states which record you are looking at:
+Verified across six scenarios, including a participant on their own link, a
+cached page that sends no slug, and a page naming an advisor that has since
+been deleted.
 
-> Attached to `alan-friedman` — used by sessions at `/a/alan-friedman`.
+### Clearing it on your own browser
 
-or
-
-> Attached to `__default_persona__` — the default persona, used on the main
-> link. Sessions at `/a/<advisor>` do not use this recording.
-
-And where a sample exists there is a **"Wrong advisor? Copy this recording
-to another"** control. Pick the destination, and consent, tuning and voice
-mode travel with it. `provider_voice_id` does not — the cloned voice at
-ElevenLabs is registered against the advisor it was built for, so it
-re-clones on next use.
-
-It copies rather than moves. The original stays put; removing it is a
-separate deliberate act. Whatever the destination already had is archived
-first.
-
-So: if the recording is on `__default_persona__` and you want it on
-`alan-friedman`, open the default persona's Voice Sample section, copy it
-to Alan Friedman, and Preview should then play his voice.
+The fix applies from the next request — no need to clear anything. If you
+want to be certain you are seeing current behaviour, click NEW CONVERSATION
+or use a private window.
 
 ---
 
 ## Also in this build
 
+**Voice samples show which advisor they belong to** (2026-09-17-d). Each
+Voice Sample section states its slug, and where a sample exists there is a
+"Wrong advisor? Copy this recording to another" control. The default
+persona and a named advisor can share a display name, which made their two
+sections indistinguishable.
+
 **Voice samples are no longer destroyed on save** (2026-09-17-c). The save
 path ran `DELETE` then `INSERT`, so the recording existed only in memory in
-between, and a failure there — silently swallowed — lost it. It is an
-upsert now, with no moment where the advisor has no sample. Replacements
-and removals are archived, last five per advisor, restorable from a
-"Previous recordings" panel.
+between. It is an upsert now. Replacements and removals are archived, last
+five per advisor, restorable from a "Previous recordings" panel.
 
-**`/health` reports advisor voice state** (2026-09-17-b) — every advisor,
-every slug with a sample, consent, cloned, mode, size.
+**`/health` reports advisor voice state** (2026-09-17-b).
 
 **Preview Voice reports which voice it used and why** (2026-09-17-a).
 
@@ -89,7 +85,7 @@ duplicate feedback box.
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-d"`.
+`/health` reports `"version": "2026-09-17-e"`.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
 files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.

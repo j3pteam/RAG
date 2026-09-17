@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-d"
-APP_BUILD_NOTES = "voice samples show their slug and can be moved between advisors"
+APP_VERSION = "2026-09-17-e"
+APP_BUILD_NOTES = "the advisor on the page answers, not one held in the session"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -11569,27 +11569,31 @@ def chat():
     # until cookies are cleared. So a dead token gets discarded here
     # rather than remembered, falling through to the same client-hint
     # handling used when there was never a participant link at all.
-    participant_link_token = session.get("participant_link_token", "")
-    if participant_link_token:
-        link = get_participant_link(participant_link_token)
-        linked_slug = link["advisor_slug"] if link else ""
-        if linked_slug:
-            session["advisor_slug"] = linked_slug
-        else:
-            # Dead token — stop trusting it, and fall through to treat
-            # this request the same as if there had never been one.
-            session.pop("participant_link_token", None)
-            session.pop("advisor_slug", None)
-            if advisor_slug_hint is not None:
-                if advisor_slug_hint and get_advisor(advisor_slug_hint):
-                    session["advisor_slug"] = advisor_slug_hint
-                else:
-                    session.pop("advisor_slug", None)
-    elif advisor_slug_hint is not None:
+    # The page states which advisor it rendered. That wins, because it is
+    # what the participant can actually see: the name in the header, the
+    # photo, the greeting. A stored participant link used to override it,
+    # which meant the page said one advisor and the reply came from another.
+    if advisor_slug_hint is not None:
         if advisor_slug_hint and get_advisor(advisor_slug_hint):
+            if session.get("advisor_slug") != advisor_slug_hint:
+                app.logger.info(
+                    f"[chat] advisor from the page: {advisor_slug_hint!r} "
+                    f"(session held {session.get('advisor_slug')!r})")
             session["advisor_slug"] = advisor_slug_hint
         else:
             session.pop("advisor_slug", None)
+    else:
+        # A cached page from before the hint existed. Fall back to the
+        # participant link's advisor, as before.
+        participant_link_token = session.get("participant_link_token", "")
+        if participant_link_token:
+            link = get_participant_link(participant_link_token)
+            linked_slug = link["advisor_slug"] if link else ""
+            if linked_slug:
+                session["advisor_slug"] = linked_slug
+            else:
+                session.pop("participant_link_token", None)
+                session.pop("advisor_slug", None)
 
     # Extension-based routing between document vs image
     DOC_EXTS = ('.pdf', '.docx', '.xlsx', '.xlsm', '.pptx',
@@ -13018,20 +13022,23 @@ def advisor_speak():
     if not text:
         return Response(status=204, headers={"X-Voice-Status": "no-text"})
 
-    participant_link_token = session.get("participant_link_token", "")
-    slug = ""
-    if participant_link_token:
-        link = get_participant_link(participant_link_token)
-        linked_slug = (link["advisor_slug"] if link else "") or ""
-        if linked_slug:
-            slug = linked_slug
-        else:
-            # Dead token — stop trusting it for the rest of this
-            # session, and fall through to the client-hint below exactly
-            # as if there had never been a participant link involved.
-            session.pop("participant_link_token", None)
+    # Same rule as /chat: the advisor the page rendered is the advisor whose
+    # voice should play. A stored participant link used to win here, so a
+    # page showing one advisor could ask for a different advisor's voice
+    # sample — and report "no sample uploaded" for an advisor who plainly
+    # had one in the admin panel.
+    slug = (data.get("advisor_slug") or "").strip()
+    if slug and not _resolve_voice_target(slug):
+        slug = ""
     if not slug:
-        slug = (data.get("advisor_slug") or session.get("advisor_slug") or "")
+        participant_link_token = session.get("participant_link_token", "")
+        if participant_link_token:
+            link = get_participant_link(participant_link_token)
+            slug = (link["advisor_slug"] if link else "") or ""
+            if not slug:
+                session.pop("participant_link_token", None)
+    if not slug:
+        slug = session.get("advisor_slug") or ""
 
     # An empty slug here means the base/default persona, not "nobody" —
     # it has its own voice sample slot under DEFAULT_PERSONA_SLUG, same
