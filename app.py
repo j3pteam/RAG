@@ -196,8 +196,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-i"
-APP_BUILD_NOTES = "database connections live across requests"
+APP_VERSION = "2026-09-17-j"
+APP_BUILD_NOTES = "connection reuse degrades safely; shared-conn reuse is opt-in"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -442,6 +442,14 @@ class _NonClosingConnProxy:
 # Set DB_PERSISTENT_CONN=off to fall back to per-request connections.
 _PERSISTENT_CONNS_ENABLED = os.environ.get(
     "DB_PERSISTENT_CONN", "on").lower() not in ("off", "0", "false")
+
+# Handing database.py a connection this file opened is a separate, riskier
+# thing: that module has its own idea of when a connection begins and ends,
+# and a shared one broke the admin panel outright. Off by default. Turn it
+# on with DB_REUSE_SHARED_CONN=on only once database.py is known to tolerate
+# it — the win is roughly a second per page, so it is worth confirming.
+_REUSE_DB_SHARED_CONN = os.environ.get(
+    "DB_REUSE_SHARED_CONN", "off").lower() in ("on", "1", "true")
 _conn_store = threading.local()
 
 
@@ -484,7 +492,7 @@ def _reuse_database_connection():
     instead of opening its own on every request. Done without touching
     database.py, which owns its own connection handling.
     """
-    if not _PERSISTENT_CONNS_ENABLED:
+    if not (_PERSISTENT_CONNS_ENABLED and _REUSE_DB_SHARED_CONN):
         return
     url = os.environ.get("DATABASE_URL")
     if not url or "db_shared_conn" in g:
@@ -513,10 +521,18 @@ def _settings_db_conn():
         g.settings_db_conn = None
         return None
     try:
+        import psycopg
+        real_conn = None
         if _PERSISTENT_CONNS_ENABLED:
-            real_conn = _persistent_conn("settings", url)
-        else:
-            import psycopg
+            try:
+                real_conn = _persistent_conn("settings", url)
+            except Exception as e:
+                # Reuse is an optimisation. If it fails for any reason, open
+                # a connection the old way rather than failing the request.
+                app.logger.warning(f"[db] persistent connection unavailable, "
+                                   f"opening a fresh one: {e}")
+                real_conn = None
+        if real_conn is None:
             real_conn = psycopg.connect(url)
         g.settings_db_conn = _NonClosingConnProxy(real_conn)
     except Exception as e:
@@ -536,27 +552,28 @@ def _close_settings_db_conn(exception=None):
     """
     conn = g.pop("settings_db_conn", None)
     db_conn = g.pop("db_shared_conn", None)
+    held_conns = getattr(_conn_store, "conns", None) or {}
     for real in (getattr(conn, "_real", None), db_conn):
         if real is None:
             continue
-        if _PERSISTENT_CONNS_ENABLED:
-            try:
+        # Only connections this file is holding on to get handed back; one
+        # opened elsewhere, or opened fresh as a fallback, is closed as it
+        # always was.
+        persistent = any(held is real for held in held_conns.values())
+        try:
+            if persistent:
                 real.rollback()
-            except Exception:
-                # Broken — drop it so the next use reconnects.
-                try:
-                    real.close()
-                except Exception:
-                    pass
-                for store_key, held in list(
-                        getattr(_conn_store, "conns", {}).items()):
-                    if held is real:
-                        _conn_store.conns.pop(store_key, None)
-        else:
+            else:
+                real.close()
+        except Exception as e:
+            app.logger.warning(f"[db] releasing a connection failed: {e}")
             try:
                 real.close()
             except Exception:
                 pass
+            for store_key, held in list(held_conns.items()):
+                if held is real:
+                    held_conns.pop(store_key, None)
 
 
 def _settings_ensure_table(conn):
