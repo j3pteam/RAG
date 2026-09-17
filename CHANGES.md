@@ -1,82 +1,103 @@
-# J3P Advisor — build 2026-09-17-l
+# J3P Advisor — build 2026-09-17-m
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## Diagnostics tab
+## "template render" was not rendering
 
-New item in the sidebar, below Settings, visible to Owner and Admin. It
-collects everything that has been chased across this week's debugging into
-one place, so the next question starts from data instead of a screenshot.
+The Diagnostics reading was:
 
-**This page load** — server time for the request that rendered the page,
-with every phase listed in the order it ran. A headline figure coloured by
-how bad it is, and a verdict: fast, acceptable, or "slow — the largest
-phase below is where to look". Load the tab, read the table.
+```
+1629 ms
+  template render        841 ms
+  list_documents         488 ms
+  document_advisor_map   179 ms
+  feedback stats + log    61 ms
+  list_advisors           60 ms
+```
 
-**Build** — version, what changed in it, and the cold-start cost if this
-worker has paid one. A slow first load after a deploy looks identical to a
-slow app otherwise.
+841 ms to render is implausible — the template compiles once per worker and
+is cached after that. It turned out that phase was not measuring rendering.
+Six database calls sat in the *argument list* of the render call:
 
-**Services** — database, embeddings, knowledge base, voice cloning, email.
-Each either connected or explicitly not, with the consequence stated
-(no API key means Speak uses the browser voice; no email means sign-in
-links can't be sent).
+```python
+html = _cached_render(
+    ADMIN_HTML,
+    settings=load_settings(force=True),        # a query
+    avatar_custom=avatar_exists(),             # a query
+    briefings=list_briefings(...),             # a query
+    admin_identity=current_admin_identity(),   # a query
+    diag={"voice": _voice_health()},           # two queries
+    ...
+```
 
-**Database connections** — whether connection reuse is on, and whether the
-`database.py` sharing that broke build `-i` is enabled. Off by default,
-with a note on what it would be worth.
+Python evaluates those before the call runs, so they were counted as
+render. The measurement was honest about the total and wrong about the
+cause, which is exactly the failure mode of a coarse phase mark.
 
-**Advisor voice** — every slug holding a recording, the advisor it belongs
-to, consent, whether it has been cloned, mode and size; then the advisors
-with no sample. This is the table that would have found the voice
-disconnect in one look rather than four rounds.
+They are hoisted out now and timed separately. More importantly, hoisting
+them made obvious that most are not needed on most tabs.
 
-**Content** — documents, advisors, rated exchanges.
+## Queries gated by tab
 
-The build number is out of the sidebar. It reads `Admin` and nothing else.
+| Tab | Before | After |
+|---|---|---|
+| Settings | 15 | 3 |
+| Overview | 15 | 4 |
+| Biometric | 15 | 4 |
+| Users | 15 | 5 |
+| Knowledge | 15 | 5 |
+| Diagnostics | 15 | 6 |
+| Advisors | 15 | 8 |
+| Activity | 15 | 9 |
+
+What changed:
+
+- **`list_documents` — the 488 ms one — now runs only on tabs that show or
+  count documents.** Activity, Settings, Users and Biometric never looked at
+  it and were paying for it on every load.
+- **`document_advisor_map`** (179 ms) runs only for Knowledge and Advisors.
+- **`avatar_exists`** only for Advisors, **`list_briefings`** only for
+  Activity, **`current_admin_identity`** only for Users and Diagnostics.
+- **`_voice_health`** re-queried the advisor list the route had already
+  loaded; it takes it as an argument now.
+
+At roughly 60–180 ms per round trip against this database, Overview should
+land near 400–500 ms and Settings lower still. Advisors and Activity stay
+heaviest because they genuinely need the data.
+
+Reload Diagnostics after deploying and the table will show where it
+actually stands.
 
 ---
 
-## On the speed
+## What is left after this
 
-Diagnostics will now show the breakdown directly, so the next reading does
-not need a screenshot of a sidebar. The last measurements were:
+If the remaining figure is still higher than you want, two things are
+known and neither is guesswork:
 
-```
-2105 ms total
-  template render        843 ms
-  list_documents         606 ms
-  document_advisor_map   536 ms
-```
-
-Down from 2606 ms, and still slow. Two things stand between here and fast,
-and neither is guesswork any more:
-
-1. **`list_documents` runs through `database.py`**, whose connection is
-   still rebuilt on every request. That is most of its 606 ms.
-2. **`template render` at 843 ms** is CPU, not database — one large
-   template being walked on a small instance.
-
-The first needs `database.py`. I asked for it because guessing at its
-connection handling is precisely what took the panel down in `-i`, and I
-would rather read it than guess twice.
+1. **Each query costs 60–180 ms.** That is round-trip latency to Postgres,
+   not query cost — the tables are small. Reducing it further means fewer
+   round trips, or a database closer to the app.
+2. **`list_documents` goes through `database.py`**, whose connection is
+   still rebuilt per request. That file is the one piece of this I have
+   never seen; guessing at its connection handling is what took the panel
+   down in build `-i`.
 
 ---
 
 ## From earlier today
 
-Timing made opt-in then given a home (`-k`, this build). Connection reuse
-made fail-safe after `-i` broke the panel (`-j`). Per-phase timing (`-h`).
+Diagnostics tab (`-l`). Timing made opt-in (`-k`). Connection reuse made
+fail-safe (`-j`) after it broke the panel (`-i`). Per-phase timing (`-h`).
 Chevron on the advisor row edge (`-g`). Advisors collapsing to one card at a
 time (`-f`). The advisor on the page being the advisor that answers, plus
-the voice-sample archive, slug labelling and copy-between-advisors work
-(`-e` through `-a`).
+the voice-sample archive and slug work (`-e` through `-a`).
 
 ---
 
 ## Installing
 
-Replace `app.py`, commit to `main`. Check the Diagnostics tab reports
-version `2026-09-17-l`.
+Replace `app.py`, commit to `main`. Diagnostics should report version
+`2026-09-17-m`.

@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-l"
-APP_BUILD_NOTES = "Diagnostics tab collects build, services and timing"
+APP_VERSION = "2026-09-17-m"
+APP_BUILD_NOTES = "queries hoisted out of the render call and gated by tab"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -12908,7 +12908,7 @@ def feedback():
     return jsonify({"ok": True})
 
 
-def _voice_health():
+def _voice_health(advisors=None):
     """Non-secret summary of advisor voice readiness, for /health.
 
     Deliberately reports the slugs rather than a count: the common failure
@@ -12919,7 +12919,10 @@ def _voice_health():
         samples = advisor_voice_meta_map()
     except Exception as e:
         return {"error": str(e)[:120]}
-    advisors = {a["slug"]: a["name"] for a in list_advisors()}
+    # The caller usually has this already; re-fetching it was a second
+    # round trip for data sitting in a local variable.
+    rows = list_advisors() if advisors is None else advisors
+    advisors = {a["slug"]: a["name"] for a in rows}
     out = {
         "elevenlabs_key_set": bool(os.environ.get("ELEVENLABS_API_KEY")),
         "advisors": sorted(advisors.keys()),
@@ -18619,7 +18622,9 @@ def admin_dashboard():
     db_ok = db.is_enabled()
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
-    docs = db.list_documents() if db_ok else []
+    # 488ms, and Activity, Settings, Users and Biometric never look at it.
+    _wants_docs = active_tab in ("overview", "knowledge", "advisors", "diagnostics")
+    docs = db.list_documents() if (db_ok and _wants_docs) else []
     _phase_mark("list_documents")
     # Filter for the conversation log — default shows everything.
     # Accepted values: all | rated | up | down | unrated
@@ -18656,7 +18661,8 @@ def admin_dashboard():
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _phase_mark("feedback stats + log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
-    _advisor_map = document_advisor_map()
+    _advisor_map = (document_advisor_map()
+                    if active_tab in ("knowledge", "advisors") else {})
     _phase_mark("document_advisor_map")
     _advisor_rows = list_advisors()
     _phase_mark("list_advisors")
@@ -18707,6 +18713,22 @@ def admin_dashboard():
                       if _perms.get("edit_learning") and want_activity else 0)
     _phase_mark("permission-gated sections")
 
+    # Only the tabs that display these pay for them.
+    _settings = load_settings(force=True)
+    _phase_mark("settings")
+
+    _avatar_custom = avatar_exists() if want_advisors else False
+    _default_voice = _voice_map.get(DEFAULT_PERSONA_SLUG)
+    _unassigned_briefings = (list_briefings(unassigned_only=True)
+                             if want_activity else [])
+    _identity = (current_admin_identity()
+                 if active_tab in ("users", "diagnostics") else {})
+    _voice_diag = (_voice_health(advisors=_advisor_rows)
+                   if active_tab == "diagnostics"
+                   else {"elevenlabs_key_set": bool(os.environ.get("ELEVENLABS_API_KEY")),
+                         "with_sample": {}, "advisors_without_sample": []})
+    _phase_mark("page-specific lookups")
+
     html = _cached_render(
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
         app_build_notes=APP_BUILD_NOTES,
@@ -18714,17 +18736,15 @@ def admin_dashboard():
         diag={
             "persistent_conns": _PERSISTENT_CONNS_ENABLED,
             "reuse_shared_conn": _REUSE_DB_SHARED_CONN,
-            "voice": _voice_health() if active_tab == "diagnostics" else {
-                "elevenlabs_key_set": bool(os.environ.get("ELEVENLABS_API_KEY")),
-                "with_sample": {}, "advisors_without_sample": []},
+            "voice": _voice_diag,
         },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
-        settings=load_settings(force=True),
+        settings=_settings,
         mail_ready=mail_transport_configured(),
-        avatar_custom=avatar_exists(),
+        avatar_custom=_avatar_custom,
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
         voice_archives=_voice_archive_map,
-        default_persona_voice_sample=_voice_map.get(DEFAULT_PERSONA_SLUG),
+        default_persona_voice_sample=_default_voice,
         default_persona_slug=DEFAULT_PERSONA_SLUG,
         advisors=advisors_with_detail(
             advisor_rows=_advisor_rows, doc_map=_advisor_map,
@@ -18745,7 +18765,7 @@ def admin_dashboard():
         avatar_version=int(datetime.now().timestamp()),
         avatar_max_mb=AVATAR_MAX_BYTES // 1048576,
         learning_runs=_learning_runs,
-        briefings=list_briefings(unassigned_only=True),
+        briefings=_unassigned_briefings,
         archived_runs=_archived_runs,
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
@@ -18769,7 +18789,7 @@ def admin_dashboard():
         log_personas=log_personas,
         log_persona=log_persona,
         log_limit=log_limit,
-        admin_identity=current_admin_identity(),
+        admin_identity=_identity,
         admin_perms=_perms,
         admin_users=_admin_users,
     )
