@@ -58,11 +58,6 @@ db = _LazyModule("database")
 emb = _LazyModule("embeddings")
 import paywall
 import exports
-# Everything that differs between clients. One deployment serves one client;
-# TENANT=<slug> selects tenants/<slug>.json, and anything it omits falls back
-# to J3P's values, so a missing file changes nothing. See WHITE_LABEL.md.
-from tenant import TENANT, release_body_html, staff_name_pattern
-import tenant as tenant_config
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
@@ -151,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-16-i"
-APP_BUILD_NOTES = "one feedback-learning control instead of two cards"
+APP_VERSION = "2026-09-17-a"
+APP_BUILD_NOTES = "Preview Voice says which voice it used and why"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -163,30 +158,49 @@ MAX_IMAGE_MB = int(os.environ.get("MAX_IMAGE_MB", "5"))
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 
 CONFIG = {
-    "persona_name": os.environ.get("PERSONA_NAME", TENANT["persona_name"]),
-    "opening": os.environ.get("PERSONA_OPENING", TENANT["persona_opening"]),
-    "placeholder": os.environ.get("PERSONA_PLACEHOLDER", TENANT["persona_placeholder"]),
+    "persona_name": os.environ.get("PERSONA_NAME", "J3P Advisor"),
+    "opening": os.environ.get(
+        "PERSONA_OPENING",
+        "Hello, welcome to your session with the J3P Advisor.",
+    ),
+    "placeholder": os.environ.get("PERSONA_PLACEHOLDER", "How can I help you?"),
     "system_prompt": load_system_prompt(),
 
-    "logo_url": os.environ.get("BRAND_LOGO_URL", TENANT["assets"]["logo_url"]),
-    "favicon_url": os.environ.get("BRAND_FAVICON_URL", TENANT["assets"]["favicon_url"]),
+    "logo_url": os.environ.get("BRAND_LOGO_URL", "/full_logo.png"),
+    "favicon_url": os.environ.get("BRAND_FAVICON_URL", "/monogram.jpg"),
     # Avatar shown beside advisor replies. Set ADVISOR_AVATAR_URL="" to hide it.
-    "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", TENANT["assets"]["avatar_url"]),
+    "avatar_url": os.environ.get("ADVISOR_AVATAR_URL", "/advisor_avatar.jpg"),
     # Looping clip for the avatar's resting state. Empty string = still photo.
-    "avatar_loop_url": os.environ.get("ADVISOR_LOOP_URL", TENANT["assets"]["avatar_loop_url"]),
+    "avatar_loop_url": os.environ.get("ADVISOR_LOOP_URL", "/advisor_idle.mp4"),
     "talking_avatar": os.environ.get("TALKING_AVATAR", "off").lower(),
-    "navy": os.environ.get("BRAND_NAVY", TENANT["brand"]["navy"]),
-    "gold": os.environ.get("BRAND_GOLD", TENANT["brand"]["gold"]),
-    "paper": os.environ.get("BRAND_PAPER", TENANT["brand"]["paper"]),
+    "navy": os.environ.get("BRAND_NAVY", "#27334A"),
+    "gold": os.environ.get("BRAND_GOLD", "#D2BC8D"),
+    "paper": os.environ.get("BRAND_PAPER", "#FAF6F0"),
 
-    "footer_disclaimer": os.environ.get("FOOTER_DISCLAIMER", TENANT["footer_disclaimer"]),
-    "footer_cta_text": os.environ.get("FOOTER_CTA_TEXT", TENANT["scheduling_cta_text"]),
-    "contact_email": os.environ.get("CONTACT_EMAIL", TENANT["contact_email"]),
+    "footer_disclaimer": os.environ.get(
+        "FOOTER_DISCLAIMER",
+        "For informational purposes only. Not official advice.",
+    ),
+    "footer_cta_text": os.environ.get(
+        "FOOTER_CTA_TEXT",
+        "To schedule time with a J3P Advisor, please",
+    ),
+    "contact_email": os.environ.get("CONTACT_EMAIL", "clientservices@j3p.health"),
     "max_upload_mb": MAX_UPLOAD_MB,
     "max_image_mb": MAX_IMAGE_MB,
-    "footer_ai_note": os.environ.get("FOOTER_AI_NOTE", TENANT["footer_ai_note"]),
-    "footer_cta_label": os.environ.get("FOOTER_CTA_LABEL", TENANT["scheduling_label"]),
-    "footer_cta_url": os.environ.get("FOOTER_CTA_URL", TENANT["scheduling_url"]),
+    "footer_ai_note": os.environ.get(
+        "FOOTER_AI_NOTE",
+        "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
+    ),
+    "footer_cta_label": os.environ.get(
+        "FOOTER_CTA_LABEL",
+        "Schedule Time With a J3P Advisor",
+    ),
+    "footer_cta_url": os.environ.get(
+        "FOOTER_CTA_URL",
+        "https://app.acuityscheduling.com/catalog.php"
+        "?owner=29987697&action=addCart&clear=1&id=2262965",
+    ),
 
     "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
     # 1024 truncated two-page documents mid-sentence ("...built with this
@@ -933,7 +947,7 @@ def locations_for(interaction_ids):
 # qualified professional, and an alert is emailed. This runs before any model
 # call so the response is deterministic rather than left to the model.
 
-SAFETY_ALERT_EMAIL = os.environ.get("SAFETY_ALERT_EMAIL", TENANT["alert_email"])
+SAFETY_ALERT_EMAIL = os.environ.get("SAFETY_ALERT_EMAIL", "afriedman@j3p.health")
 SAFETY_ALERT_FROM = os.environ.get("SAFETY_ALERT_FROM", "")
 
 # Explicit statements of intent or ideation. Deliberately specific — vague
@@ -1745,10 +1759,21 @@ def advisor_portal_onboarded_required(f):
 
 RELEASE_HEADING = "Release &amp; Acknowledgment"
 
-# The client's own legal entity and persona name are substituted in. A new
-# client MUST have their counsel review tenants/<slug>.json's release_body —
-# it is the liability release every participant accepts.
-RELEASE_BODY_HTML = release_body_html()
+RELEASE_BODY_HTML = """
+  <p>
+    By checking the box below, I acknowledge that I am voluntarily using
+    the J3P Advisor and understand that the content, coaching and guidance
+    provided are for personal and professional development purposes only.
+    I understand that these activities are not medical, psychological,
+    legal, or other professional advice, and I am responsible for my own
+    decisions and actions.
+  </p>
+  <p>
+    To the extent permitted by law, I release Residency Select LLC dba
+    J3P Health, its coaches, employees, and representatives from liability
+    arising from my voluntary use of the J3P Advisor.
+  </p>
+"""
 
 RELEASE_CHECKBOX_LABEL = "I have read, understood, and agree to the above."
 
@@ -3983,16 +4008,45 @@ INDEX_HTML = r"""<!DOCTYPE html>
         J3PSpeech.setRate(range.value);
       });
 
+      // The menu's footnote doubles as the preview's status line. Every
+      // failure path below used to be silent — a bare catch, and a 204
+      // carrying an X-Voice-Status header that nothing read — so a preview
+      // that fell back to the browser voice was indistinguishable from one
+      // that worked, and there was no way to tell which of half a dozen
+      // reasons applied.
+      const voiceNote = menu.querySelector(".voice-note");
+      const VOICE_NOTE_DEFAULT = voiceNote ? voiceNote.textContent : "";
+      function setVoiceNote(text, tone) {
+        if (!voiceNote) return;
+        voiceNote.textContent = text;
+        voiceNote.style.color = tone === "bad" ? "var(--rust)"
+                              : tone === "good" ? "#2D7D5F" : "";
+      }
+
+      // Why the server declined, in words rather than a status slug.
+      function voiceStatusReason(status) {
+        const map = {
+          "no-sample-uploaded": "no voice sample has been uploaded for them yet",
+          "consent-not-given": "their voice sample has no consent on record",
+          "no-api-key-configured": "voice cloning isn't configured on the server",
+          "advisor-set-to-browser-only": "they're set to the default voice in the admin panel",
+          "sample-content-missing": "their stored sample couldn't be read",
+          "no-advisor-slug": "this page didn't identify which advisor to use",
+          "participant-chose-default-voice": "the default reading voice is selected",
+        };
+        if (map[status]) return map[status];
+        if (status && status.indexOf("synthesis-error") === 0) {
+          return "the voice service returned an error — " + status.slice(17, 90);
+        }
+        return status || "no reason given";
+      }
+
       preview.addEventListener("click", async () => {
         const previewText = "Naming the hard thing early is usually the work. This is the voice you'll hear.";
-        // "Preview voice" sat right next to the new advisor-voice choice
-        // but never actually reflected it — it always tested the plain
-        // browser voice regardless of which one was selected, which
-        // meant clicking it while "their own voice" was chosen played
-        // something that wasn't what Speak would actually use. Route
-        // through the same cloned-voice attempt Speak itself uses so
-        // this preview is honest about which voice will really play.
+        const who = PERSONA_NAME || "their";
         if (PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE !== "default") {
+          preview.disabled = true;
+          setVoiceNote("Preparing " + who + "\u2019s voice\u2026", "");
           try {
             const controller = new AbortController();
             const timeoutId = setTimeout(() => controller.abort(),
@@ -4004,18 +4058,42 @@ INDEX_HTML = r"""<!DOCTYPE html>
               signal: controller.signal,
             });
             clearTimeout(timeoutId);
+            const status = resp.headers.get("X-Voice-Status") || "";
             if (resp.ok && resp.status === 200) {
               const blob = await resp.blob();
               if (blob.size > 0) {
                 const audio = new Audio(URL.createObjectURL(blob));
                 audio.playbackRate = J3PSpeech.getRate();
-                await audio.play();
-                return;
+                try {
+                  await audio.play();
+                  setVoiceNote("Playing " + who + "\u2019s own voice.", "good");
+                  preview.disabled = false;
+                  return;
+                } catch (playErr) {
+                  // The click's user-gesture allowance can expire across the
+                  // await on a slow synthesis, and the browser then refuses
+                  // to start audio. Worth naming: it is the one failure the
+                  // participant can fix themselves by clicking again.
+                  setVoiceNote("The browser blocked playback \u2014 click Preview again.", "bad");
+                  preview.disabled = false;
+                  return;
+                }
               }
+              setVoiceNote("Using the default reading voice \u2014 the server "
+                           + "returned no audio.", "bad");
+            } else {
+              setVoiceNote("Using the default reading voice \u2014 "
+                           + voiceStatusReason(status) + ".", "bad");
             }
           } catch (e) {
-            // Falls through to the browser voice below, same as Speak does.
+            setVoiceNote(e && e.name === "AbortError"
+              ? "Using the default reading voice \u2014 their voice took too long to generate."
+              : "Using the default reading voice \u2014 the request failed.", "bad");
+          } finally {
+            preview.disabled = false;
           }
+        } else {
+          setVoiceNote(VOICE_NOTE_DEFAULT, "");
         }
         J3PSpeech.play(previewText, {}, { fromGesture: true });
       });
@@ -11702,8 +11780,12 @@ def chat():
     scope_guard = (
         "\n\n---\n"
         "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
-        f"1. You answer ONLY questions related to {TENANT['org_short']}'s "
-        f"areas of expertise: {TENANT['expertise']}.\n\n"
+        "1. You answer ONLY questions related to J3P's areas of expertise: "
+        "leadership development, organizational behavior, behavioral assessment, "
+        "physician/healthcare leadership, team dynamics, executive coaching, "
+        "communication, self-awareness, negotiation, career navigation, "
+        "and related professional development topics within healthcare and "
+        "high-stakes organizational settings.\n\n"
         "1b. IN SCOPE — PRODUCING DOCUMENTS. Writing finished deliverables on "
         "those topics is squarely in scope and must never be declined: cover "
         "letters, letters of intent, CVs and bios, recommendation letters, "
@@ -11979,9 +12061,13 @@ def chat():
 
     # Defensive scrubber: replace any forbidden brand names if the model slips them through.
     # The system prompt instructs Claude not to use these, but we sanitize as backup.
-    # Legacy or internal brand names this client must never print, with
-    # what to say instead. Configured per tenant.
-    FORBIDDEN_NAMES = [tuple(pair) for pair in TENANT["forbidden_names"]]
+    FORBIDDEN_NAMES = [
+        ("J3P Healthcare Solutions", "J3P"),
+        ("J3P Healthcare", "J3P"),
+        ("J3Personica", "the assessment framework"),
+        ("J3 Personica", "the assessment framework"),
+        ("Residency Select", "the residency selection tool"),
+    ]
     import re as _re
 
     # ---------------------------------------------------------------
@@ -11993,10 +12079,10 @@ def chat():
     # with the client services address, rather than patched phrase by phrase.
     CONTACT = CONFIG["contact_email"]
 
-    # Built from the tenant's staff list rather than hand-written, so a new
-    # client never has to author a regex. Matches first name, full name,
-    # honorific plus surname, and surname alone.
-    _STAFF_NAME_RE = _re.compile(staff_name_pattern(), _re.IGNORECASE)
+    _STAFF_NAME_RE = _re.compile(
+        r"\b(?:Alan(?:\s+Friedman)?|(?:Mr|Dr)\.?\s+Friedman|Friedman|"
+        r"Ivy(?:\s+Seader)?|Ms\.?\s+Seader|Seader|"
+        r"Diane(?:\s+Blake)?|Ms\.?\s+Blake)\b", _re.IGNORECASE)
 
     # The advisor whose page this is speaks in the first person, so their own
     # name is not a referral to someone else. Without this, a participant who
@@ -12033,8 +12119,11 @@ def chat():
 
     _INTERNAL_EMAIL_RE = _re.compile(r"\b[\w.+-]+@[\w-]+\.[\w.-]+\b")
     _PHONE_RE = _re.compile(r"(?:\+?1[-.\s])?\(?\d{3}\)?[-.\s]\d{3}[-.\s]\d{4}\b")
-    _INTERNAL_DOMAINS = tuple(TENANT["internal_domains"])
-    _STAFF_LOCALS = tuple(TENANT["staff_email_locals"])
+    _INTERNAL_DOMAINS = ("j3p.health", "j3phealth.com", "j3personica.com",
+                         "residencyselect.com")
+    _STAFF_LOCALS = ("afriedman", "alanfriedman", "alan.friedman",
+                     "iseader", "ivy.seader", "ivyseader",
+                     "dblake", "diane.blake", "dianeblake")
 
     def _is_internal_email(addr: str) -> bool:
         # The client services address is the approved destination, so a passage
@@ -12404,9 +12493,6 @@ def health():
     return jsonify({
         "status": "ok",
         "version": APP_VERSION,
-        # Which client this deployment is serving. The first thing to check
-        # when a new white-label instance looks like the wrong brand.
-        "tenant": tenant_config.summary(),
         "build": APP_BUILD_NOTES,
         "admin_sections": [
             "Display", "Advisors", "Access", "Scheduling", "Feedback",
