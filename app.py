@@ -116,6 +116,34 @@ def _phase_finish():
     return f"\n<!-- {line} -->\n"
 
 
+def _phase_total_ms():
+    """Milliseconds since _phase_start, or None on a route without a timer."""
+    phases = getattr(g, "_phases", None)
+    if phases is None:
+        return None
+    return (time.perf_counter() - phases.t0) * 1000
+
+
+def _with_render_time(html: str) -> str:
+    """Show the server render time beside the build number.
+
+    It has been in the logs and in an HTML comment since this first came up,
+    and neither survives a screenshot. On screen it costs a few characters
+    and means any report of slowness arrives with its own measurement — and
+    distinguishes a slow server from a slow browser, which the reports so
+    far could not.
+    """
+    total = _phase_total_ms()
+    if total is None:
+        return html.replace("<!--RENDER_MS-->", "")
+    cold = ""
+    if FIRST_REQUEST_BOOT_MS:
+        cold = f", cold start {FIRST_REQUEST_BOOT_MS / 1000:.1f}s"
+    return html.replace("<!--RENDER_MS-->",
+                        f' · <span title="server render time{cold}">'
+                        f'{total:.0f} ms{cold}</span>')
+
+
 # Cold-start cost lands on whichever request arrives first after a deploy or
 # a scale-down: psycopg, voyageai, trafilatura, tokenizers and numpy all
 # import lazily, and the schema check runs, before that request is answered.
@@ -146,8 +174,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-f"
-APP_BUILD_NOTES = "advisors list collapses to one card at a time"
+APP_VERSION = "2026-09-17-g"
+APP_BUILD_NOTES = "chevron on the row edge; render time shown in the sidebar"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -11339,7 +11367,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     _phase_mark("template render")
     if FIRST_REQUEST_BOOT_MS is not None:
         _phase_mark(f"[cold start on an earlier request: {FIRST_REQUEST_BOOT_MS:.0f}ms]")
-    return html + _phase_finish()
+    return _with_render_time(html) + _phase_finish()
 
 
 @app.route("/")
@@ -15151,8 +15179,9 @@ tbody tr:hover td { background: var(--N10); }
   list-style: none;
   cursor: pointer;
   border-bottom: none !important;
-  padding: var(--sp-050) 0 !important;
+  padding: var(--sp-050) var(--sp-400) var(--sp-050) 0 !important;
   border-radius: var(--radius);
+  position: relative;          /* anchor for the chevron */
 }
 .advisor-block > summary::-webkit-details-marker,
 .advisor-block > summary::marker { display: none; content: ""; }
@@ -15163,16 +15192,24 @@ tbody tr:hover td { background: var(--N10); }
   margin-bottom: var(--sp-100);
 }
 
-/* A chevron on the trailing edge, so a collapsed card reads as openable. */
+/* A chevron on the trailing edge, so a collapsed card reads as openable.
+   Positioned rather than laid out: the chips wrap onto their own row, and
+   a flex item would follow them down and sit under the photo. */
 .advisor-block > summary::after {
   content: "";
-  width: 8px; height: 8px; flex-shrink: 0; margin-left: var(--sp-100);
+  position: absolute;
+  right: var(--sp-150);
+  top: 50%;
+  width: 9px; height: 9px;
   border-right: 2px solid var(--N200);
   border-bottom: 2px solid var(--N200);
-  transform: rotate(-45deg);
+  transform: translateY(-70%) rotate(-45deg);
   transition: transform 0.15s ease;
 }
-.advisor-block[open] > summary::after { transform: rotate(45deg); }
+.advisor-block[open] > summary::after {
+  transform: translateY(-30%) rotate(45deg);
+}
+.advisor-block > summary:hover::after { border-color: var(--N800); }
 
 /* Closed cards sit tight to each other; an open one gets room. */
 .advisor-block { margin-bottom: var(--sp-100); padding: var(--sp-150) var(--sp-200); }
@@ -15209,7 +15246,7 @@ tbody tr:hover td { background: var(--N10); }
     <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="admin-brand-logo" />
     <div class="admin-brand-text">
       <span class="name">Admin</span>
-      <span class="build">build {{ app_version }}</span>
+      <span class="build">build {{ app_version }}<!--RENDER_MS--></span>
     </div>
   </div>
   <nav class="admin-sidebar-nav">
@@ -18460,7 +18497,7 @@ def admin_dashboard():
     _phase_mark("template render")
     if FIRST_REQUEST_BOOT_MS is not None:
         _phase_mark(f"[cold start on an earlier request: {FIRST_REQUEST_BOOT_MS:.0f}ms]")
-    return html + _phase_finish()
+    return _with_render_time(html) + _phase_finish()
 
 
 @app.route("/admin/feedback/<int:feedback_id>/rating", methods=["POST"])
