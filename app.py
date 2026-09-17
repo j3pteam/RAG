@@ -145,7 +145,11 @@ def _with_render_time(html: str) -> str:
     far could not.
     """
     total = _phase_total_ms()
-    if total is None:
+    # Diagnostic, not furniture. It belongs on screen only when someone is
+    # actually looking for it: add ?timing=1 to the URL. Otherwise the
+    # measurement still goes to the logs on every request, where it can be
+    # read without putting internals in front of anyone using the panel.
+    if total is None or not request.args.get("timing"):
         return html.replace("<!--RENDER_MS-->", "")
     cold = ""
     if FIRST_REQUEST_BOOT_MS:
@@ -196,8 +200,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-j"
-APP_BUILD_NOTES = "connection reuse degrades safely; shared-conn reuse is opt-in"
+APP_VERSION = "2026-09-17-k"
+APP_BUILD_NOTES = "timing panel hidden unless ?timing=1"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024

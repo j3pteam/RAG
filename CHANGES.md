@@ -1,86 +1,79 @@
-# J3P Advisor — build 2026-09-17-j
+# J3P Advisor — build 2026-09-17-k
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## Read this first
+## The timing panel is gone from the page
 
-Build `-i` broke the admin panel with a 500. If you have not already:
+It was a diagnostic and it had no business sitting in the sidebar
+permanently. The sidebar now reads `build 2026-09-17-k` and nothing else.
 
-**Railway → your service → Variables → add `DB_PERSISTENT_CONN=off`.**
+It still exists when it is wanted: add `?timing=1` to any admin URL, e.g.
 
-The service restarts and the panel comes back on the old connection
-behaviour. No deploy needed. Do that before anything else.
+```
+web-production-901d85.up.railway.app/admin?tab=overview&timing=1
+```
 
----
-
-## What broke, and what this build changes
-
-`-i` did two separate things and shipped them as one. The first was safe;
-the second was not, and I should have separated them at the time.
-
-**Safe:** reusing the connection this file opens for its own tables. It is
-opened, used and released entirely in `app.py`, so keeping it alive across
-requests is this file's business.
-
-**Not safe:** handing `database.py` a connection it did not open, by
-pre-populating `g.db_shared_conn`. That module has its own idea of when a
-connection begins and ends — it enters and exits the same connection many
-times per request — and a connection that arrives already open, from a
-different lifecycle, broke it.
-
-I did not have `database.py` when I wrote that, and assumed its contract
-from a comment in `app.py`. That was the mistake.
-
-### In this build
-
-- **The `database.py` hook is off by default.** It only runs with
-  `DB_REUSE_SHARED_CONN=on`. Leave it off.
-- **Reuse never fails a request.** If a persistent connection can't be
-  obtained for any reason, the request opens a fresh one — exactly the
-  behaviour before `-i` — and logs a warning.
-- **Teardown can't raise.** A connection that won't roll back is closed and
-  dropped from the store so the next use reconnects, instead of propagating
-  out of the teardown handler.
-
-Verified on all three paths: a failed acquisition still serves the request,
-a broken connection is closed and dropped without raising, and a fallback
-connection is closed rather than retained.
-
-### What you get
-
-About half the win. `document_advisor_map` and the other `app.py`-side
-queries stop paying a handshake per request; `list_documents` and the rest
-of `database.py`'s work still do. Overview should land somewhere around
-1.5–1.8 s rather than 2.6 s.
-
-The rest needs `database.py`. Send me that file and I can either make it
-hold its connection the same way, or confirm the hook is safe to switch on
-— it is worth roughly another second per page.
+and the breakdown appears under the build number for that load only. The
+measurement also continues to go to the Railway logs on every request as a
+`[timing]` line, so nothing was lost by hiding it.
 
 ---
 
-## Safe to deploy over a broken -i
+## Where the numbers stand
 
-If `-i` is currently deployed and erroring, this build fixes it whether or
-not you set the environment variable. If you did set
-`DB_PERSISTENT_CONN=off`, you can remove it after deploying this, or leave
-it — with it set, connections behave exactly as they did in `-h`.
+Overview went from 2606 ms to **2105 ms** with the safe half of the
+connection reuse. Latest breakdown:
+
+```
+template render        843 ms
+list_documents         606 ms
+document_advisor_map   536 ms
+feedback stats + log    60 ms
+```
+
+Two observations worth recording:
+
+**`template render` is now the largest single item.** The template compiles
+once per worker and is cached, so 843 ms is the render itself walking a
+large template. That is a CPU cost on a small instance, not a database one,
+and it would need a different fix from everything done so far — most
+likely splitting `ADMIN_HTML` so a tab's markup is not parsed when another
+tab is being served.
+
+**`list_documents` and `document_advisor_map` are still 500–600 ms each.**
+They were ~1000 and ~800 before, so connection reuse helped, but not as
+much as it should have. `list_documents` goes through `database.py`, whose
+connection is still rebuilt per request — that part is expected. That
+`document_advisor_map` is still 536 ms is not, since it uses the reused
+connection, and it suggests the per-query cost against this database is
+genuinely high rather than being handshake alone.
+
+Both point at the same next step: send me `database.py` and I can stop
+guessing at its connection handling, which is what broke build `-i`.
 
 ---
 
-## From earlier builds today
+## From build 2026-09-17-j
 
-Per-phase timing with an on-page breakdown when a page exceeds a second
-(`-h`). Chevron on the advisor row edge, render time in the sidebar (`-g`).
-Advisors page collapsing to one card at a time (`-f`). The advisor on the
-page being the advisor that answers, and the voice-sample archive and slug
-fixes (`-e` through `-a`).
+Connection reuse made fail-safe. The `database.py` hook that broke `-i` is
+off unless `DB_REUSE_SHARED_CONN=on`; reuse failures fall back to opening a
+fresh connection; teardown cannot raise.
+
+## From earlier today
+
+Per-phase timing (`-h`). Chevron on the advisor row edge (`-g`). Advisors
+page collapsing to one card at a time (`-f`). The advisor on the page being
+the advisor that answers, plus the voice-sample archive, slug labelling and
+copy-between-advisors work (`-e` through `-a`).
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Check `/health` reports
-`"version": "2026-09-17-j"`.
+`"version": "2026-09-17-k"`.
+
+If you set `DB_PERSISTENT_CONN=off` while `-i` was broken, it is safe to
+remove now — but leaving it costs only the connection reuse, nothing else.
