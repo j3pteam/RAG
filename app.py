@@ -146,8 +146,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-b"
-APP_BUILD_NOTES = "advisor voice state visible at /health"
+APP_VERSION = "2026-09-17-c"
+APP_BUILD_NOTES = "voice samples archived on replace or removal, restorable"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -9233,6 +9233,169 @@ def _advisor_voice_ensure_table(conn):
     conn.commit()
 
 
+def _advisor_voice_archive_ensure_table(conn):
+    if _already_ensured("advisor_voice_archive"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_voice_archive (
+                id            SERIAL PRIMARY KEY,
+                advisor_slug  TEXT NOT NULL,
+                filename      TEXT,
+                mime          TEXT,
+                content       BYTEA NOT NULL,
+                size_bytes    INTEGER,
+                consent_given BOOLEAN,
+                consent_note  TEXT,
+                voice_mode    TEXT,
+                reason        TEXT,
+                archived_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS advisor_voice_archive_slug_idx
+            ON advisor_voice_archive (advisor_slug, id DESC)
+        """)
+    conn.commit()
+
+
+VOICE_ARCHIVE_KEEP = 5
+
+
+def _archive_current_voice_sample(conn, slug: str, reason: str) -> bool:
+    """Copy the advisor's current sample into the archive before anything
+    overwrites or removes it.
+
+    A voice sample is minutes of someone's time and, once cloned, the thing
+    the whole feature rests on. It was previously deleted outright on every
+    re-record and every removal, so a failed upload — or a mis-click — left
+    nothing to go back to. Runs on the caller's connection and inside the
+    caller's transaction, so the copy and the change that follows it either
+    both happen or neither does.
+    """
+    _advisor_voice_archive_ensure_table(conn)
+    with conn.cursor() as cur:
+        cur.execute("""
+            INSERT INTO advisor_voice_archive
+                (advisor_slug, filename, mime, content, size_bytes,
+                 consent_given, consent_note, voice_mode, reason)
+            SELECT advisor_slug, filename, mime, content, size_bytes,
+                   consent_given, consent_note, voice_mode, %s
+            FROM advisor_voice_samples WHERE advisor_slug = %s
+        """, (reason[:120], slug))
+        archived = cur.rowcount
+        # Keep the last few per advisor. Audio is large, and the value of an
+        # archive is being able to undo a recent mistake, not keeping
+        # everything forever.
+        cur.execute("""
+            DELETE FROM advisor_voice_archive
+            WHERE advisor_slug = %s AND id NOT IN (
+                SELECT id FROM advisor_voice_archive
+                WHERE advisor_slug = %s ORDER BY id DESC LIMIT %s
+            )
+        """, (slug, slug, VOICE_ARCHIVE_KEEP))
+    return archived > 0
+
+
+def list_archived_voice_samples(slug: str):
+    """Previous recordings for one advisor, newest first. Metadata only."""
+    if not slug:
+        return []
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        _advisor_voice_archive_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT id, filename, size_bytes, consent_given, reason, archived_at
+                FROM advisor_voice_archive
+                WHERE advisor_slug = %s ORDER BY id DESC
+            """, (slug,))
+            for row in cur.fetchall():
+                out.append({"id": row[0], "filename": row[1],
+                            "size_bytes": row[2] or 0,
+                            "consent_given": bool(row[3]),
+                            "reason": row[4] or "", "archived_at": row[5]})
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] archive read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def advisor_voice_archive_map() -> dict:
+    """{slug: [previous recording, ...]} for the admin panel, in one query
+    rather than one per advisor."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_voice_archive_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_slug, id, filename, size_bytes, consent_given,
+                       reason, archived_at
+                FROM advisor_voice_archive ORDER BY advisor_slug, id DESC
+            """)
+            for slug, aid, filename, size_bytes, consent, reason, when in cur.fetchall():
+                out.setdefault(slug, []).append({
+                    "id": aid, "filename": filename, "size_bytes": size_bytes or 0,
+                    "consent_given": bool(consent), "reason": reason or "",
+                    "archived_at": when})
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] archive map failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def restore_voice_sample(slug: str, archive_id: int) -> bool:
+    """Put an archived recording back as the live sample.
+
+    The one being replaced is itself archived first, so restoring is as
+    undoable as the thing it undoes. provider_voice_id is cleared: the
+    cloned voice at the provider was built from whichever sample was live
+    at the time, so it has to be rebuilt from this one on next use.
+    """
+    if not slug or not archive_id:
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisor_voice_ensure_table(conn)
+        _advisor_voice_archive_ensure_table(conn)
+        _archive_current_voice_sample(conn, slug, "replaced by a restore")
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO advisor_voice_samples
+                    (advisor_slug, filename, mime, content, size_bytes,
+                     consent_given, consent_note, voice_mode)
+                SELECT advisor_slug, filename, mime, content, size_bytes,
+                       consent_given, consent_note, COALESCE(voice_mode, 'auto')
+                FROM advisor_voice_archive WHERE id = %s AND advisor_slug = %s
+                ON CONFLICT (advisor_slug) DO UPDATE SET
+                    filename = EXCLUDED.filename, mime = EXCLUDED.mime,
+                    content = EXCLUDED.content, size_bytes = EXCLUDED.size_bytes,
+                    consent_given = EXCLUDED.consent_given,
+                    consent_note = EXCLUDED.consent_note,
+                    provider = NULL, provider_voice_id = NULL,
+                    uploaded_at = NOW()
+            """, (archive_id, slug))
+            restored = cur.rowcount
+        conn.commit()
+        app.logger.info(f"[advisor-voice] restored archive #{archive_id} for {slug}")
+        return restored > 0
+    except Exception as e:
+        app.logger.error(f"[advisor-voice] restore failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
 def save_advisor_voice_sample(slug: str, filename: str, mime: str, content: bytes,
                                consent_given: bool, consent_note: str = "") -> bool:
     """One voice sample per advisor — a fresh recording/upload replaces
@@ -9251,22 +9414,47 @@ def save_advisor_voice_sample(slug: str, filename: str, mime: str, content: byte
         return False
     try:
         _advisor_voice_ensure_table(conn)
+        # Keep a copy of what is being replaced before replacing it.
+        _archive_current_voice_sample(conn, slug, "replaced by a new recording")
         with conn.cursor() as cur:
             cur.execute("SELECT voice_mode FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
             existing = cur.fetchone()
             prior_mode = existing[0] if existing else "auto"
-            cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
+            # Upsert rather than DELETE-then-INSERT. The old shape removed
+            # the existing sample and then tried to write the new one, so
+            # anything going wrong between the two — and the handler below
+            # swallows errors — destroyed a recording that was only ever
+            # held in memory. There is no longer a moment where the advisor
+            # has no sample.
             cur.execute("""
                 INSERT INTO advisor_voice_samples
                     (advisor_slug, filename, mime, content, size_bytes,
                      consent_given, consent_note, voice_mode)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (advisor_slug) DO UPDATE SET
+                    filename = EXCLUDED.filename, mime = EXCLUDED.mime,
+                    content = EXCLUDED.content, size_bytes = EXCLUDED.size_bytes,
+                    consent_given = EXCLUDED.consent_given,
+                    consent_note = EXCLUDED.consent_note,
+                    voice_mode = EXCLUDED.voice_mode,
+                    provider = NULL, provider_voice_id = NULL,
+                    uploaded_at = NOW()
             """, (slug, filename[:200], mime, content, len(content),
                   bool(consent_given), (consent_note or "")[:500], prior_mode))
         conn.commit()
+        app.logger.info(f"[advisor-voice] saved {len(content) // 1024}KB sample "
+                        f"for {slug} (previous copy archived)")
         return True
     except Exception as e:
-        app.logger.error(f"[advisor-voice] write failed: {e}")
+        # Nothing was committed, so the existing sample is untouched — but
+        # say so explicitly, because the previous version of this message
+        # was indistinguishable from one that had already deleted it.
+        app.logger.error(f"[advisor-voice] write failed for {slug}: {e} "
+                         f"— the existing sample was NOT changed")
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return False
     finally:
         conn.close()
@@ -9345,9 +9533,14 @@ def delete_advisor_voice_sample(slug: str) -> bool:
         return False
     try:
         _advisor_voice_ensure_table(conn)
+        # Removal is recoverable: the recording goes to the archive, where
+        # the admin panel offers it back.
+        _archive_current_voice_sample(conn, slug, "removed by an admin")
         with conn.cursor() as cur:
             cur.execute("DELETE FROM advisor_voice_samples WHERE advisor_slug = %s", (slug,))
         conn.commit()
+        app.logger.info(f"[advisor-voice] removed sample for {slug} "
+                        f"(archived, restorable from the admin panel)")
         return True
     except Exception as e:
         app.logger.error(f"[advisor-voice] delete failed: {e}")
@@ -15390,6 +15583,38 @@ tbody tr:hover td { background: var(--N10); }
           <button type="submit" class="btn" style="font-size: 0.64rem;">Save voice sample</button>
         </form>
         {% endif %}
+        {% set archived = (voice_archives or {}).get(t_slug) or [] %}
+        {% if archived %}
+        <details style="margin-top: 0.9rem;">
+          <summary style="font-size: 0.82rem; cursor: pointer; color: var(--navy);">
+            Previous recordings ({{ archived|length }})
+          </summary>
+          <p class="muted" style="margin: 0.5rem 0 0.6rem; font-size: 0.78rem; line-height: 1.6;">
+            Kept automatically whenever a recording is replaced or removed,
+            so a re-record that goes wrong is never the end of the sample.
+            Restoring one archives whatever is live now, and the voice is
+            re-cloned on next use.
+          </p>
+          {% for a in archived %}
+          <div style="display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap;
+                      padding: 0.45rem 0; border-bottom: 1px solid var(--N40);">
+            <span style="flex: 1 1 220px; font-size: 0.85rem;">
+              {{ a.filename }}
+              <span class="muted">
+                — {{ "%.1f"|format(a.size_bytes / 1048576) }} MB,
+                {{ a.archived_at.strftime("%Y-%m-%d %H:%M") if a.archived_at else "" }}
+                {% if a.reason %}· {{ a.reason }}{% endif %}
+                {% if not a.consent_given %}· no consent on record{% endif %}
+              </span>
+            </span>
+            <form method="POST"
+                  action="{{ url_for('admin_restore_advisor_voice', slug=t_slug, archive_id=a.id) }}">
+              <button type="submit" class="copy-link">Restore</button>
+            </form>
+          </div>
+          {% endfor %}
+        </details>
+        {% endif %}
       </details>
       {% endif %}
     {% endmacro %}
@@ -17983,10 +18208,11 @@ def admin_dashboard():
         _behavioral_map = advisor_behavioral_map()
         _meta_360_map = advisor_360_meta_map()
         _voice_map = advisor_voice_meta_map()
+        _voice_archive_map = advisor_voice_archive_map()
         _briefings_map = briefings_by_advisor(limit_per=10)
     else:
         _personality_map = _behavioral_map = _meta_360_map = {}
-        _voice_map = _briefings_map = {}
+        _voice_map = _briefings_map = _voice_archive_map = {}
     _phase_mark("advisor detail (5 bulk reads)")
 
     # Sections a viewer never sees should not cost a query to build. Each of
@@ -18009,6 +18235,7 @@ def admin_dashboard():
         mail_ready=mail_transport_configured(),
         avatar_custom=avatar_exists(),
         elevenlabs_configured=bool(os.environ.get("ELEVENLABS_API_KEY")),
+        voice_archives=_voice_archive_map,
         default_persona_voice_sample=_voice_map.get(DEFAULT_PERSONA_SLUG),
         default_persona_slug=DEFAULT_PERSONA_SLUG,
         advisors=advisors_with_detail(
@@ -18361,6 +18588,23 @@ def admin_play_advisor_voice(slug):
         return ("No voice sample on record.", 404)
     content, mime, filename = result
     return Response(content, mimetype=mime)
+
+
+@app.route("/admin/advisors/voice/restore/<slug>/<int:archive_id>", methods=["POST"])
+@require_permission("edit_voice")
+def admin_restore_advisor_voice(slug, archive_id):
+    """Put a previous recording back. The sample it replaces is archived in
+    turn, so this is itself undoable."""
+    advisor = _resolve_voice_target(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    if restore_voice_sample(slug, archive_id):
+        flash(f"✓ Restored a previous recording for {advisor['name']}. It will "
+              f"be re-cloned on the next use of Speak.")
+    else:
+        flash("Could not restore that recording — check the server logs.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/voice/delete/<slug>", methods=["POST"])

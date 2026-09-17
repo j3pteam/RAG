@@ -1,99 +1,84 @@
-# J3P Advisor — build 2026-09-17-b
+# J3P Advisor — build 2026-09-17-c
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## The voice problem
+## Why the voice sample disappeared
 
-Preview now reports: **"no voice sample has been uploaded for them yet."**
+`save_advisor_voice_sample` did this:
 
-That is the server saying there is no row in `advisor_voice_samples` for
-slug `alan-friedman`. It is a database fact, not a display bug — and the
-white-label work did not cause it. That work added code to
-`synthesize_advisor_voice` (a cache and two log lines) and changed nothing
-else in the voice path; `get_advisor_voice_meta`, `save_advisor_voice_sample`,
-`set_advisor_voice_provider`, `_advisor_voice_ensure_table` and the
-`/advisor/speak` route are byte-identical to the build before it.
-
-Three things produce that message, and they need different fixes:
-
-1. **The sample was never saved.** The upload requires the consent checkbox;
-   without it nothing is written, and the form does not always make that
-   obvious.
-2. **It was saved, then removed.** Re-recording replaces the row, and
-   "Remove sample" deletes it.
-3. **It is filed under a different slug** than the participant page asks
-   for — e.g. the advisor was renamed, which changes the slug, leaving the
-   sample attached to the old one.
-
-### Finding out which
-
-Open `/health` on the deployment. There is now an `advisor_voice` block:
-
-```json
-"advisor_voice": {
-  "elevenlabs_key_set": true,
-  "advisors": ["alan-friedman", "bruce-gewertz"],
-  "with_sample": {
-    "alan-friedman": {
-      "name": "Alan Friedman",
-      "consent_given": true,
-      "cloned": true,
-      "voice_mode": "participant_choice",
-      "size_kb": 2929
-    }
-  },
-  "advisors_without_sample": ["bruce-gewertz"]
-}
+```
+DELETE FROM advisor_voice_samples WHERE advisor_slug = ...
+INSERT INTO advisor_voice_samples ...
 ```
 
-- `alan-friedman` absent from `with_sample` → case 1 or 2: re-record it in
-  the admin panel under Advisors → Alan Friedman → Voice Sample, and tick
-  the consent box before saving.
-- A slug in `with_sample` showing `"name": "(no advisor with this slug)"` →
-  case 3. The sample is orphaned against an old slug. Re-record under the
-  current advisor.
-- Present with `consent_given: false` → the sample exists but is unusable.
-  The Voice Sample section has a "Confirm consent for this recording"
-  form that fixes it without re-recording.
-- Present and correct but `elevenlabs_key_set: false` → the sample is fine
-  and the provider is not configured.
+Between those two statements the recording existed only in memory. Anything
+going wrong in that window — and the exception handler caught errors,
+logged a line, and returned `False` without rolling back — destroyed a
+sample that took minutes to record and had already been cloned. Every
+re-record ran that risk. The error message it printed, "write failed", was
+also indistinguishable from a failure that had changed nothing.
 
-`/advisor/speak` also logs the slug it searched and every slug that does
-have a sample, so the Railway logs show the same thing.
+### What now happens instead
 
-### While you are in there
+**Nothing is deleted on save.** It's an upsert: the row is written over in
+place, so there is no moment where the advisor has no sample. If the write
+fails, the existing recording is untouched, and the log says so explicitly.
 
-The admin panel's Voice Sample section for each advisor has a four-line
-checklist — sample uploaded, consent given, API key configured, voice
-cloned. If Alan's shows ✗ on the first line, that confirms case 1 or 2
-immediately.
+**Every replacement is archived first.** Re-recording copies the current
+sample — audio included — into `advisor_voice_archive` before writing the
+new one. Removing a sample archives it too. The last five per advisor are
+kept; audio is large, and the point is undoing a recent mistake rather than
+keeping everything forever.
 
-A note on sample length: a clip under a minute clones poorly, and that is
-the most common cause of a cloned voice that plays but does not sound like
-the person. Aim for one to two minutes of natural speech.
+**You can put one back.** Each advisor's Voice Sample section now has a
+"Previous recordings (N)" panel listing what was archived, when, and why —
+"replaced by a new recording", "removed by an admin". One click restores
+it. The sample it displaces is archived in turn, so restoring is itself
+undoable. `provider_voice_id` is cleared on restore, because the cloned
+voice at ElevenLabs was built from whichever sample was live at the time
+and has to be rebuilt from this one.
+
+**The archive works retroactively from now on, not backwards.** It cannot
+recover the sample already lost — that one has to be re-recorded. It means
+this can't happen again.
+
+### Re-recording Alan's sample
+
+Admin → Advisors → Alan Friedman → Voice Sample. Tick the consent box
+before saving; without it nothing is written at all. Aim for one to two
+minutes of natural speech — a clip under a minute clones poorly, and that
+is the usual cause of a cloned voice that plays but doesn't sound like the
+person. There's a suggested script in that section.
+
+Afterwards the section's four-line checklist should read ✓ on all of
+sample uploaded, consent given, API key configured, voice cloned. The last
+one ticks over on the first use of Speak.
 
 ---
 
-## Also in this build (2026-09-17-a)
+## Also in this build
 
-Preview Voice reports which voice it used and why. Every fallback path in
-that handler was previously silent — a bare `catch`, and a 204 response
-carrying an `X-Voice-Status` header that nothing read — so a preview that
-fell back to the browser voice looked identical to one that worked. The
-footnote under the button now names the reason, including the case where
-the browser blocks playback because the click's gesture allowance expired
-during synthesis, which the participant can fix by clicking again.
+**`/health` reports advisor voice state** (2026-09-17-b). An
+`advisor_voice` block lists every advisor, every slug that actually has a
+sample, and for each: consent, whether it's cloned, voice mode, size. A
+sample filed against a stale slug shows as `"name": "(no advisor with this
+slug)"`. `/advisor/speak` also logs the slug it searched and every slug
+that does have a sample.
+
+**Preview Voice reports which voice it used and why** (2026-09-17-a).
+Every fallback in that handler was previously silent, so a preview that
+fell back to the browser voice looked identical to one that worked.
 
 ---
 
 ## From build 2026-09-16-j
 
-**Admin panel.** Atlassian design language in J3P colours; sentence case and
-larger type; status colour on chips and figures, contrast-checked. One tab
-per request instead of all seven — Overview 553 KB → 71 KB, Advisors → 246
-KB. Advisor detail in five bulk queries rather than five per advisor.
+**Admin panel.** Atlassian design language in J3P colours; sentence case
+and larger type; contrast-checked status colour on chips and figures. One
+tab per request instead of all seven — Overview 553 KB → 71 KB, Advisors →
+246 KB. Advisor detail in five bulk queries rather than five per advisor.
 Per-advisor participant links with bulk CSV/XLSX upload and export. The
 automatic learning toggle merged into Continuous Learning. Copied links are
 https.
@@ -109,7 +94,9 @@ typing. The feedback comment box duplicating on a double-tap.
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-b"`.
+`/health` reports `"version": "2026-09-17-c"`.
+
+The archive table is created on first use — no migration step.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
-files — the CSS is inlined in `ADMIN_HTML`. Safe to delete.
+files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.
