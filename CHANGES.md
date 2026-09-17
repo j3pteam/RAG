@@ -1,93 +1,98 @@
-# J3P Advisor — build 2026-09-17-h
+# J3P Advisor — build 2026-09-17-i
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## Where the four seconds go
+## Why the admin panel was slow
 
-The Advisors tab reported **3928 ms, cold start 1.4s**. That settles two
-things: it is not the container waking up, and it is not the browser. The
-server takes four seconds.
-
-What it does not yet say is *which part*. The phase marks were too coarse —
-one of them covered four separate queries. This build splits them so each
-significant call is timed on its own, and makes a slow page show its own
-breakdown:
+The breakdown on the Overview page gave it away:
 
 ```
-Admin   build 2026-09-17-h · 3928 ms, cold start 1.4s
-        voice archive map        2600 ms
-        template render           480 ms
-        list_documents            120 ms
-        list_advisors              95 ms
+2606 ms total
+  list_documents          1043 ms
+  document_advisor_map     817 ms
+  template render          564 ms
+  feedback stats + log      91 ms
 ```
 
-The four slowest phases appear under the build line whenever a page takes
-over a second. Below that they stay hidden — under a second is noise.
+A 30-row select taking a second, and two tiny lookups taking another. The
+SQL is not what costs that. Each was the **first use of a separate database
+connection**, and the app opened both fresh on every request — TCP, TLS and
+auth against a remote managed Postgres, roughly a second each, paid before
+any query ran. Around 1.9 s of every page load was handshake.
 
-Newly timed separately: `list_documents`, `document_advisor_map`,
-`list_advisors`, participant links, and each of the six per-advisor bulk
-reads (personality, behavioural, 360, voice meta, voice archive, briefings)
-rather than one lump.
+An earlier round of this made each connection shared for the duration of a
+single request, which removed dozens of extra handshakes *within* a page.
+It did nothing about the two that happened again on the *next* page, and
+the phase marks were too coarse to show that.
 
-**My guess, to be clear that it is one:** the voice archive map is the
-newest query and the only one reading a table with audio in it. It selects
-metadata only, so it should be cheap — but if Postgres is fetching the
-BYTEA column to satisfy the row scan, that table holds several megabytes of
-audio per row. The next screenshot will confirm or kill that in one glance,
-and if it is something else the breakdown names it instead.
+### The fix
 
-Load the Advisors tab and send me the four lines.
+Connections now live for the life of the worker rather than the request.
+One set per thread, so the background learning scheduler never shares with
+a request; gunicorn's sync workers handle one request at a time, so within a
+worker this is a single connection with no contention.
+
+At the end of a request they are rolled back and handed back rather than
+closed — the rollback clears anything left open, so the next request starts
+clean.
+
+This also covers `database.py`'s own connection, without modifying that
+file: it caches on `g.db_shared_conn` and opens one if absent, so a
+`before_request` hook populates it with the thread's live connection.
+
+Dead connections are handled: managed Postgres drops idle ones, and the
+rollback on handover is what detects that. A broken connection is discarded
+and replaced on next use.
+
+Set `DB_PERSISTENT_CONN=off` to revert to per-request connections without a
+deploy, if anything looks wrong.
+
+**Expected:** the first page load after a deploy still pays both handshakes.
+Every page after that should drop by roughly 1.9 s. If Overview comes back
+around 600–700 ms, that is the handshake gone and the remaining time is the
+template render, which is the next thing to look at.
+
+### The timing display
+
+That breakdown in the sidebar is mine — it appears only when a page takes
+over a second, so once this is fixed it should disappear on its own. If you
+want it gone regardless, delete the `_with_render_time` call sites or set
+`SLOW_PAGE_MS` to a large number.
 
 ---
 
-## From build 2026-09-17-g
+## From build 2026-09-17-h
 
-Chevron pinned to the trailing edge of each advisor row — it had been
-dropping below the status chips. Render time shown beside the build number.
+Per-phase timing, and the on-page breakdown when a page exceeds a second.
 
----
+## From 2026-09-17-g and -f
 
-## From build 2026-09-17-f
-
-Advisors page collapses to one card at a time: photo, name, slug and status
-chips per row, opening one closes the others. "Add or update an advisor"
-collapses too.
-
----
+Chevron pinned to the row edge; render time beside the build number.
+Advisors page collapses to one card at a time.
 
 ## From build 2026-09-17-e
 
-**The advisor on the page is the advisor that answers.** A stored
-participant link was overriding the page, so `/a/alan-friedman` rendered
-Alan while the voice and the replies came from a different advisor.
-
-Plus: voice samples show their slug and can be copied between advisors
-(`-d`); voice samples are no longer destroyed on save, and are archived and
-restorable (`-c`); `/health` reports advisor voice state (`-b`); Preview
-Voice reports which voice it used and why (`-a`).
-
----
+**The advisor on the page is the advisor that answers** — a stored
+participant link was overriding the page, so the voice and the replies came
+from a different advisor than the one shown. Plus voice samples showing
+their slug and copyable between advisors, no longer destroyed on save, and
+archived and restorable.
 
 ## From build 2026-09-16-j
 
-**Admin panel.** Atlassian design language in J3P colours; sentence case
-and larger type; contrast-checked status colour. One tab per request —
-Overview 553 KB → 71 KB. Advisor detail in bulk queries rather than per
-advisor. Per-advisor participant links with bulk CSV/XLSX upload and
-export. Copied links are https.
-
-**Participant chat.** The "Error: Unknown error" bug. The cloned voice
-timing out on long replies. The idle prompt interrupting typing. The
-duplicate feedback box.
+Admin panel rebuilt on the Atlassian design language in J3P colours; one
+tab per request; per-advisor participant links with bulk upload and export.
+Participant chat: the "Error: Unknown error" bug, the cloned voice timeout,
+the idle prompt interrupting typing, the duplicate feedback box.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Railway rebuilds on push. Check
-`/health` reports `"version": "2026-09-17-h"`.
+`/health` reports `"version": "2026-09-17-i"`.
 
 `admin-atlassian.css` and `admin-refresh.css` in the repo root are dead
 files; the CSS is inlined in `ADMIN_HTML`. Safe to delete.

@@ -196,8 +196,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-h"
-APP_BUILD_NOTES = "a slow admin page shows which phase was slow"
+APP_VERSION = "2026-09-17-i"
+APP_BUILD_NOTES = "database connections live across requests"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -420,6 +420,82 @@ class _NonClosingConnProxy:
         return getattr(self._real, name)
 
 
+# ---------------------------------------------------------------------------
+# Connection reuse across requests
+# ---------------------------------------------------------------------------
+# Measured on the Overview page: list_documents 1043ms and
+# document_advisor_map 817ms, for a 30-row select and two tiny lookups. The
+# SQL is not what costs that. Each was the first use of a separate
+# connection, and both were opened fresh on every request — TCP, TLS and
+# auth against a remote managed Postgres, roughly a second each, paid before
+# any query ran.
+#
+# An earlier fix made each connection shared for the duration of one
+# request, which removed the dozens of extra handshakes within a page. It
+# did not stop the two remaining ones happening again on the next page.
+#
+# These live for the life of the worker instead. One set per thread, so the
+# background learning scheduler never shares a connection with a request:
+# gunicorn's sync workers handle one request at a time, so within a worker
+# this is a single connection with no contention.
+#
+# Set DB_PERSISTENT_CONN=off to fall back to per-request connections.
+_PERSISTENT_CONNS_ENABLED = os.environ.get(
+    "DB_PERSISTENT_CONN", "on").lower() not in ("off", "0", "false")
+_conn_store = threading.local()
+
+
+def _persistent_conn(key: str, url: str):
+    """A live connection for this thread, reconnecting if it has died.
+
+    rollback() on handover does double duty: it clears any transaction the
+    previous request left behind, and it is the cheapest way to find out
+    that a connection has been dropped — managed Postgres closes idle ones,
+    and a dead connection has to be replaced rather than handed on.
+    """
+    conns = getattr(_conn_store, "conns", None)
+    if conns is None:
+        conns = _conn_store.conns = {}
+    conn = conns.get(key)
+    if conn is not None:
+        try:
+            if getattr(conn, "closed", False):
+                raise RuntimeError("connection closed")
+            conn.rollback()
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conns.pop(key, None)
+    import psycopg
+    conn = psycopg.connect(url)
+    conns[key] = conn
+    return conn
+
+
+@app.before_request
+def _reuse_database_connection():
+    """Hand database.py the thread's existing connection.
+
+    database.py caches its connection on g.db_shared_conn and opens one if
+    that is absent. Populating it here means it reuses the live connection
+    instead of opening its own on every request. Done without touching
+    database.py, which owns its own connection handling.
+    """
+    if not _PERSISTENT_CONNS_ENABLED:
+        return
+    url = os.environ.get("DATABASE_URL")
+    if not url or "db_shared_conn" in g:
+        return
+    try:
+        g.db_shared_conn = _persistent_conn("database", url)
+    except Exception as e:
+        # Fall through to database.py opening its own, as before.
+        app.logger.warning(f"[db] could not reuse a connection: {e}")
+
+
 def _settings_db_conn():
     """Connection for the settings table, or None when Postgres isn't set
     up. Reused for the rest of the current request via Flask's g —
@@ -437,8 +513,11 @@ def _settings_db_conn():
         g.settings_db_conn = None
         return None
     try:
-        import psycopg
-        real_conn = psycopg.connect(url)
+        if _PERSISTENT_CONNS_ENABLED:
+            real_conn = _persistent_conn("settings", url)
+        else:
+            import psycopg
+            real_conn = psycopg.connect(url)
         g.settings_db_conn = _NonClosingConnProxy(real_conn)
     except Exception as e:
         app.logger.warning(f"[settings] Postgres unavailable: {e}")
@@ -448,22 +527,36 @@ def _settings_db_conn():
 
 @app.teardown_appcontext
 def _close_settings_db_conn(exception=None):
+    """End of request: release the connections without discarding them.
+
+    A rollback clears anything the request left open — an aborted
+    transaction, an uncommitted write — so the next request starts clean.
+    Closing them, as this used to, is what made every page pay for two new
+    handshakes. When persistence is off they are closed as before.
+    """
     conn = g.pop("settings_db_conn", None)
-    if conn is not None:
-        try:
-            conn._real.close()
-        except Exception:
-            pass
-    # database.py's get_conn() shares a connection the same way, via
-    # g.db_shared_conn — it never closes it, since it gets entered and
-    # exited many times within one request; this closes the real thing
-    # once, here, at the actual end of the request.
     db_conn = g.pop("db_shared_conn", None)
-    if db_conn is not None:
-        try:
-            db_conn.close()
-        except Exception:
-            pass
+    for real in (getattr(conn, "_real", None), db_conn):
+        if real is None:
+            continue
+        if _PERSISTENT_CONNS_ENABLED:
+            try:
+                real.rollback()
+            except Exception:
+                # Broken — drop it so the next use reconnects.
+                try:
+                    real.close()
+                except Exception:
+                    pass
+                for store_key, held in list(
+                        getattr(_conn_store, "conns", {}).items()):
+                    if held is real:
+                        _conn_store.conns.pop(store_key, None)
+        else:
+            try:
+                real.close()
+            except Exception:
+                pass
 
 
 def _settings_ensure_table(conn):
