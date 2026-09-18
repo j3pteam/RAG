@@ -1,51 +1,46 @@
-# J3P Advisor — build 2026-09-18-a
+# J3P Advisor — build 2026-09-18-b
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## The booking button names the advisor
+## "Show full history" dropped you on Overview
 
-On an advisor's own page the button said "Schedule time with a J3P Advisor"
-— underneath that advisor's photo, their name in the header, and a greeting
-naming them. It already pointed at their own calendar when they had one, so
-the link was right and only the label was generic.
+Three controls in the conversation log were written when the active tab was
+held in the browser, so the URL carried no tab at all:
 
-| Page | Button now reads |
-|---|---|
-| `/a/alan-friedman` | Schedule time with Alan Friedman |
-| `/p/<token>` assigned to Alan | Schedule time with Alan Friedman |
-| `/a/bruce-gewertz` | Schedule time with Bruce Gewertz, MD |
-| `/` and `/scheduling` (default persona) | Schedule Time With a J3P Advisor |
+```html
+<a href="?filter=...&advisor=...&log_limit=all">Show full history</a>
+<a href="?filter=...&advisor=...&log_limit=25">Show recent only</a>
+<form method="GET" action="/admin">   <!-- the filter dropdowns -->
+```
 
-The default persona deliberately keeps the generic label. Someone on the
-main link has not been matched with anyone yet, so naming a person there
-would be wrong.
+Once tabs moved to the server, a URL without `tab=` resolves to the default
+— Overview. So asking for the full history, or changing the filter, landed
+somewhere else entirely and silently discarded what had just been set. The
+links were correct when written; the tab change in build `2026-09-16-b`
+invalidated them and this was missed.
 
-Two details worth recording:
+All three now carry `tab=activity`.
 
-**Built from the name, not substituted into the stock label.** The
-configured label carries an article — "with **a** J3P Advisor" — which does
-not survive swapping in a person's name. The same problem already existed
-in the greeting, where "with the J3P Advisor" had to lose its article to
-become "with Alan Friedman", and it is handled the same way here.
-
-**Scoped to named advisors only.** My first attempt put this inside the
-function that renames the persona, which also runs for the default persona
-when it has a display name — that would have produced "Schedule time with
-J3P" rather than "J3P Advisor" on the main link.
-
-The footer sentence that introduces the button follows the same rule.
+I swept the rest of the template for the same mistake: every other
+query-string link and GET form includes a tab, and of the 91 server-side
+redirects to the dashboard, the only three without one are the post-sign-in
+redirects, where landing on Overview is correct.
 
 ---
+
+## From build 2026-09-18-a
+
+**The booking button names the advisor.** "Schedule time with Alan
+Friedman" on his own pages; the default persona keeps the generic label,
+since someone on the main link has not been matched with anyone yet.
 
 ## From build 2026-09-17-m
 
 **Queries hoisted out of the render call and gated by tab.** Six database
-calls were sitting in the argument list of `_cached_render`, so they were
-timed as "template render" — 841 ms that was not rendering. Hoisting them
-showed most were not needed on most tabs: Settings went from 15 queries to
-3, Overview to 4, Advisors to 8.
+calls sat in the argument list of `_cached_render` and were being timed as
+"template render". Settings went from 15 queries to 3, Overview to 4.
 
 ## From earlier
 
@@ -59,4 +54,4 @@ archive and slug work (`-e` through `-a`).
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-18-a`.
+`2026-09-18-b`.

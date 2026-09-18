@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-a"
-APP_BUILD_NOTES = "the booking button names the advisor whose session it is"
+APP_VERSION = "2026-09-18-b"
+APP_BUILD_NOTES = "conversation log filters and history links stay on Activity"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -17084,6 +17084,9 @@ tbody tr:hover td { background: var(--N10); }
             {% endfor %}
           </select>
           <input type="hidden" name="log_limit" value="{{ log_limit }}" />
+          {# Without this the form submits to /admin with no tab and lands
+             on Overview, losing the filter the admin just set. #}
+          <input type="hidden" name="tab" value="activity" />
         </form>
         {% if stats.total > 0 %}
         <button type="button" id="export-csv" class="btn"
@@ -17097,9 +17100,9 @@ tbody tr:hover td { background: var(--N10); }
       Every chat exchange is logged automatically. Ratings and comments are added when a user clicks thumbs up or down.
       Currently showing {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 else '' }}{% if log_limit < 10000 %} (most recent first — kept short so this page loads quickly){% endif %}.
       {% if log_limit < 10000 and feedback_rows|length >= log_limit %}
-      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=all">Show full history</a> instead.
+      <a href="?tab=activity&filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=all">Show full history</a> instead.
       {% elif log_limit >= 10000 %}
-      <a href="?filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=25">Show recent only</a> for a faster-loading page.
+      <a href="?tab=activity&filter={{ log_filter }}&advisor={{ log_persona }}&log_limit=25">Show recent only</a> for a faster-loading page.
       {% endif %}
       Tick rows to export or delete just those; with nothing ticked, export includes every record.
     </p>
