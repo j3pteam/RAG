@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-b"
-APP_BUILD_NOTES = "conversation log filters and history links stay on Activity"
+APP_VERSION = "2026-09-18-c"
+APP_BUILD_NOTES = "booking button is a toggle per advisor and per participant link"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -8179,6 +8179,15 @@ def _participant_links_ensure_table(conn):
             CREATE INDEX IF NOT EXISTS participant_links_token_idx
             ON participant_links (token)
         """)
+        # Added later: whether this particular person sees the booking
+        # button. NULL means inherit the advisor's setting, which is what a
+        # new link gets: freezing the advisor's current value at creation
+        # time would silently diverge the moment the advisor changed theirs.
+        for col, ddl in (("show_scheduling", "BOOLEAN"),):
+            cur.execute(f"""
+                ALTER TABLE participant_links
+                ADD COLUMN IF NOT EXISTS {col} {ddl}
+            """)
         # Added later: the participant's own first name, used to personalize
         # their opening greeting. Deliberately separate from "label" — label
         # is free text for the admin's own reference (could be anything,
@@ -8238,7 +8247,7 @@ def list_participant_links() -> list:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, token, label, advisor_slug, enabled, created_at,
-                       last_used_at, first_name, email
+                       last_used_at, first_name, email, show_scheduling
                 FROM participant_links ORDER BY created_at DESC
             """)
             for row in cur.fetchall():
@@ -8247,6 +8256,7 @@ def list_participant_links() -> list:
                     "advisor_slug": row[3] or "", "enabled": bool(row[4]),
                     "created_at": row[5], "last_used_at": row[6],
                     "first_name": row[7] or "", "email": row[8] or "",
+                    "show_scheduling": row[9],   # None = follow the advisor
                 })
     except Exception as e:
         app.logger.error(f"[participant-links] list failed: {e}")
@@ -8377,7 +8387,7 @@ def get_participant_link(token: str):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, token, label, advisor_slug, enabled, created_at,
-                       last_used_at, first_name
+                       last_used_at, first_name, show_scheduling
                 FROM participant_links WHERE token = %s
             """, (token,))
             row = cur.fetchone()
@@ -8386,7 +8396,8 @@ def get_participant_link(token: str):
         return {"id": row[0], "token": row[1], "label": row[2],
                 "advisor_slug": row[3] or "", "enabled": bool(row[4]),
                 "created_at": row[5], "last_used_at": row[6],
-                "first_name": row[7] or ""}
+                "first_name": row[7] or "",
+                "show_scheduling": row[8]}   # None = follow the advisor
     except Exception as e:
         app.logger.error(f"[participant-links] read failed: {e}")
         return None
@@ -8408,6 +8419,26 @@ def touch_participant_link(token: str):
         conn.commit()
     except Exception as e:
         app.logger.error(f"[participant-links] touch failed: {e}")
+    finally:
+        conn.close()
+
+
+def set_participant_link_scheduling(link_id: int, value) -> bool:
+    """Show, hide, or follow the advisor — value is True, False or None."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE participant_links SET show_scheduling = %s "
+                        "WHERE id = %s", (value, link_id))
+            changed = cur.rowcount
+        conn.commit()
+        return changed > 0
+    except Exception as e:
+        app.logger.error(f"[participant-links] scheduling update failed: {e}")
+        return False
     finally:
         conn.close()
 
@@ -11674,7 +11705,11 @@ def participant_link_index(token):
         # This link is for the default/shared persona — make sure a stale
         # advisor_slug from some earlier visit on this browser can't bleed in.
         session.pop("advisor_slug", None)
-    return _render_chat(advisor=advisor, participant_first_name=link.get("first_name"))
+    # This person's own booking setting wins over the advisor's, and None
+    # means they never had one of their own — follow the advisor.
+    return _render_chat(advisor=advisor,
+                        participant_first_name=link.get("first_name"),
+                        force_scheduling=link.get("show_scheduling"))
 
 
 @app.route("/no-scheduling")
@@ -16047,7 +16082,9 @@ tbody tr:hover td { background: var(--N10); }
         <table style="font-size: 0.8rem;">
           <tr>
             <th style="width: 20%;">Label</th><th>Link</th>
-            <th style="width: 10%;">Status</th><th style="width: 12%;">Last used</th>
+            <th style="width: 10%;">Status</th>
+            <th style="width: 13%;">Booking</th>
+            <th style="width: 12%;">Last used</th>
             {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
           </tr>
           {% for l in t_links %}
@@ -16074,6 +16111,31 @@ tbody tr:hover td { background: var(--N10); }
             <td>
               {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
               {% else %}<span class="muted">Disabled</span>{% endif %}
+            </td>
+            <td>
+              {# Per-person control of the booking button. "Follow advisor"
+                 is the default and the common case; the override exists for
+                 the participant who should not be sold a session — someone
+                 mid-engagement, or a courtesy link. #}
+              {% if can_edit %}
+              <form method="POST" action="/admin/participant-links/scheduling/{{ l.id }}"
+                    style="margin: 0;">
+                <input type="hidden" name="return_to" value="advisors" />
+                <select name="show_scheduling" onchange="this.form.submit()"
+                        style="width: 100%; padding: 0.3rem; font-family: inherit;
+                               font-size: 0.78rem; border: 1px solid var(--line);
+                               border-radius: 2px; background: var(--paper);">
+                  <option value="" {% if l.show_scheduling is none %}selected{% endif %}>Follow advisor</option>
+                  <option value="1" {% if l.show_scheduling is sameas true %}selected{% endif %}>Show</option>
+                  <option value="0" {% if l.show_scheduling is sameas false %}selected{% endif %}>Hide</option>
+                </select>
+              </form>
+              {% else %}
+              <span class="muted">
+                {% if l.show_scheduling is none %}Follow advisor
+                {% elif l.show_scheduling %}Shown{% else %}Hidden{% endif %}
+              </span>
+              {% endif %}
             </td>
             <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
             {% if can_edit %}
@@ -16227,20 +16289,23 @@ tbody tr:hover td { background: var(--N10); }
       <div class="advisor-section-group is-links">Links</div>
 
       <details class="advisor-section">
-        <summary>Scheduling Links</summary>
-        {% for path, label in [
-            ('/scheduling', 'Booking button always shown'),
-            ('/no-scheduling', 'Booking button always hidden')] %}
-        <div class="advisor-link-row">
-          <div class="muted advisor-link-label">{{ label }}</div>
-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-            <a href="{{ path }}" target="_blank" class="adv-link">{{ base_url }}{{ path }}</a>
-            <button type="button" class="copy-link" data-url="{{ base_url }}{{ path }}">Copy</button>
-            <button type="button" class="share-link" data-url="{{ base_url }}{{ path }}"
-                    data-advisor="{{ settings.avatar_name or cfg.persona_name }}">Share</button>
-          </div>
-        </div>
-        {% endfor %}
+        <summary>Booking button</summary>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          Whether sessions on the main link show
+          "{{ cfg.footer_cta_label }}" under the composer.
+        </p>
+        <form method="POST" action="/admin/settings"
+              style="display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;">
+          <input type="hidden" name="_fields" value="show_scheduling_button" />
+          <input type="hidden" name="return_to" value="advisors" />
+          <label style="display: flex; align-items: center; gap: 0.6rem; cursor: pointer;">
+            <input type="checkbox" name="show_scheduling_button" value="1"
+                   {% if settings.show_scheduling_button %}checked{% endif %}
+                   style="width: 17px; height: 17px; accent-color: var(--navy); cursor: pointer;" />
+            <span>Show the booking button</span>
+          </label>
+          <button type="submit" class="btn">Save</button>
+        </form>
       </details>
 
       {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
@@ -16374,23 +16439,30 @@ tbody tr:hover td { background: var(--N10); }
       <div class="advisor-section-group is-links">Links</div>
 
       <details class="advisor-section">
-        <summary>Scheduling Links</summary>
-        {% for path, label in [
-            ('/scheduling', 'Booking button always shown'),
-            ('/no-scheduling', 'Booking button always hidden')] %}
-        <div class="advisor-link-row">
-          <div class="muted advisor-link-label">{{ label }}</div>
-          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-            <a href="/a/{{ adv.slug }}{{ path }}" target="_blank"
-               class="adv-link">{{ base_url }}/a/{{ adv.slug }}{{ path }}</a>
-            <button type="button" class="copy-link"
-                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}">Copy</button>
-            <button type="button" class="share-link"
-                    data-url="{{ base_url }}/a/{{ adv.slug }}{{ path }}"
-                    data-advisor="{{ adv.name }}">Share</button>
-          </div>
-        </div>
-        {% endfor %}
+        <summary>Booking button</summary>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          Whether {{ adv.name }}'s sessions show
+          "Schedule time with {{ adv.name }}" under the composer. Individual
+          participant links can override this below.
+        </p>
+        <form method="POST" action="/admin/advisors/scheduling/{{ adv.slug }}"
+              style="display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;">
+          <select name="show_scheduling"
+                  style="padding: 0.45rem; border: 1px solid var(--line);
+                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;">
+            <option value="" {% if adv.show_scheduling_override is none %}selected{% endif %}>
+              Follow the site setting ({{ "shown" if settings.show_scheduling_button else "hidden" }})
+            </option>
+            <option value="1" {% if adv.show_scheduling_override is sameas true %}selected{% endif %}>Always show</option>
+            <option value="0" {% if adv.show_scheduling_override is sameas false %}selected{% endif %}>Always hide</option>
+          </select>
+          <button type="submit" class="btn">Save</button>
+        </form>
+        <p class="muted" style="margin: 0.9rem 0 0; font-size: 0.78rem; line-height: 1.6;">
+          Their session link is
+          <a href="/a/{{ adv.slug }}" target="_blank" class="adv-link">{{ base_url }}/a/{{ adv.slug }}</a>,
+          listed with the rest under Participant Links.
+        </p>
       </details>
 
       {{ participant_links_section(adv.slug, adv.name,
@@ -19136,6 +19208,44 @@ def admin_move_advisor_voice(slug):
     else:
         flash("Could not copy that recording — check the server logs.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+def _tristate_form_value(name):
+    """A select with "", "1" and "0" meaning inherit, on, off."""
+    raw = (request.form.get(name) or "").strip()
+    if raw == "":
+        return None
+    return raw in ("1", "true", "on", "yes")
+
+
+@app.route("/admin/advisors/scheduling/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_set_advisor_scheduling(slug):
+    """Show, hide, or follow the site setting, for one advisor's sessions."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    value = _tristate_form_value("show_scheduling")
+    save_advisor(slug, advisor["name"], show_scheduling_override=value)
+    where = ("follow the site setting" if value is None
+             else "always show" if value else "always hide")
+    flash(f"✓ Booking button for {advisor['name']}: {where}.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/participant-links/scheduling/<int:link_id>", methods=["POST"])
+@require_permission("edit_participant_links")
+def admin_set_participant_link_scheduling(link_id):
+    """Per-person override of the booking button."""
+    value = _tristate_form_value("show_scheduling")
+    if set_participant_link_scheduling(link_id, value):
+        where = ("follow the advisor" if value is None
+                 else "shown" if value else "hidden")
+        flash(f"✓ Booking button for that link: {where}.")
+    else:
+        flash("Could not update that link.")
+    return _participant_link_redirect()
 
 
 @app.route("/admin/advisors/voice/restore/<slug>/<int:archive_id>", methods=["POST"])
