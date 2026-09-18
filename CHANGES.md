@@ -1,103 +1,62 @@
-# J3P Advisor — build 2026-09-17-m
+# J3P Advisor — build 2026-09-18-a
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## "template render" was not rendering
+## The booking button names the advisor
 
-The Diagnostics reading was:
+On an advisor's own page the button said "Schedule time with a J3P Advisor"
+— underneath that advisor's photo, their name in the header, and a greeting
+naming them. It already pointed at their own calendar when they had one, so
+the link was right and only the label was generic.
 
-```
-1629 ms
-  template render        841 ms
-  list_documents         488 ms
-  document_advisor_map   179 ms
-  feedback stats + log    61 ms
-  list_advisors           60 ms
-```
+| Page | Button now reads |
+|---|---|
+| `/a/alan-friedman` | Schedule time with Alan Friedman |
+| `/p/<token>` assigned to Alan | Schedule time with Alan Friedman |
+| `/a/bruce-gewertz` | Schedule time with Bruce Gewertz, MD |
+| `/` and `/scheduling` (default persona) | Schedule Time With a J3P Advisor |
 
-841 ms to render is implausible — the template compiles once per worker and
-is cached after that. It turned out that phase was not measuring rendering.
-Six database calls sat in the *argument list* of the render call:
+The default persona deliberately keeps the generic label. Someone on the
+main link has not been matched with anyone yet, so naming a person there
+would be wrong.
 
-```python
-html = _cached_render(
-    ADMIN_HTML,
-    settings=load_settings(force=True),        # a query
-    avatar_custom=avatar_exists(),             # a query
-    briefings=list_briefings(...),             # a query
-    admin_identity=current_admin_identity(),   # a query
-    diag={"voice": _voice_health()},           # two queries
-    ...
-```
+Two details worth recording:
 
-Python evaluates those before the call runs, so they were counted as
-render. The measurement was honest about the total and wrong about the
-cause, which is exactly the failure mode of a coarse phase mark.
+**Built from the name, not substituted into the stock label.** The
+configured label carries an article — "with **a** J3P Advisor" — which does
+not survive swapping in a person's name. The same problem already existed
+in the greeting, where "with the J3P Advisor" had to lose its article to
+become "with Alan Friedman", and it is handled the same way here.
 
-They are hoisted out now and timed separately. More importantly, hoisting
-them made obvious that most are not needed on most tabs.
+**Scoped to named advisors only.** My first attempt put this inside the
+function that renames the persona, which also runs for the default persona
+when it has a display name — that would have produced "Schedule time with
+J3P" rather than "J3P Advisor" on the main link.
 
-## Queries gated by tab
-
-| Tab | Before | After |
-|---|---|---|
-| Settings | 15 | 3 |
-| Overview | 15 | 4 |
-| Biometric | 15 | 4 |
-| Users | 15 | 5 |
-| Knowledge | 15 | 5 |
-| Diagnostics | 15 | 6 |
-| Advisors | 15 | 8 |
-| Activity | 15 | 9 |
-
-What changed:
-
-- **`list_documents` — the 488 ms one — now runs only on tabs that show or
-  count documents.** Activity, Settings, Users and Biometric never looked at
-  it and were paying for it on every load.
-- **`document_advisor_map`** (179 ms) runs only for Knowledge and Advisors.
-- **`avatar_exists`** only for Advisors, **`list_briefings`** only for
-  Activity, **`current_admin_identity`** only for Users and Diagnostics.
-- **`_voice_health`** re-queried the advisor list the route had already
-  loaded; it takes it as an argument now.
-
-At roughly 60–180 ms per round trip against this database, Overview should
-land near 400–500 ms and Settings lower still. Advisors and Activity stay
-heaviest because they genuinely need the data.
-
-Reload Diagnostics after deploying and the table will show where it
-actually stands.
+The footer sentence that introduces the button follows the same rule.
 
 ---
 
-## What is left after this
+## From build 2026-09-17-m
 
-If the remaining figure is still higher than you want, two things are
-known and neither is guesswork:
+**Queries hoisted out of the render call and gated by tab.** Six database
+calls were sitting in the argument list of `_cached_render`, so they were
+timed as "template render" — 841 ms that was not rendering. Hoisting them
+showed most were not needed on most tabs: Settings went from 15 queries to
+3, Overview to 4, Advisors to 8.
 
-1. **Each query costs 60–180 ms.** That is round-trip latency to Postgres,
-   not query cost — the tables are small. Reducing it further means fewer
-   round trips, or a database closer to the app.
-2. **`list_documents` goes through `database.py`**, whose connection is
-   still rebuilt per request. That file is the one piece of this I have
-   never seen; guessing at its connection handling is what took the panel
-   down in build `-i`.
+## From earlier
 
----
-
-## From earlier today
-
-Diagnostics tab (`-l`). Timing made opt-in (`-k`). Connection reuse made
-fail-safe (`-j`) after it broke the panel (`-i`). Per-phase timing (`-h`).
-Chevron on the advisor row edge (`-g`). Advisors collapsing to one card at a
-time (`-f`). The advisor on the page being the advisor that answers, plus
-the voice-sample archive and slug work (`-e` through `-a`).
+Diagnostics tab (`-l`). Connection reuse, made fail-safe after it broke the
+panel (`-i`, `-j`). Advisors collapsing to one card at a time (`-f`). The
+advisor on the page being the advisor that answers, plus the voice-sample
+archive and slug work (`-e` through `-a`).
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-17-m`.
+`2026-09-18-a`.

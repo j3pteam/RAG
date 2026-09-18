@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-17-m"
-APP_BUILD_NOTES = "queries hoisted out of the render call and gated by tab"
+APP_VERSION = "2026-09-18-a"
+APP_BUILD_NOTES = "the booking button names the advisor whose session it is"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -11453,6 +11453,23 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         page_cfg["client_bio"] = active.get("client_bio", "")
         page_cfg["expertise"] = active.get("expertise", "")
         name_the_advisor(page_cfg, active["name"])
+
+        # The booking button names the advisor whose session this is. It
+        # already points at their own calendar when they have one, so
+        # "schedule time with a J3P Advisor" under their photo and their name
+        # read as something more generic than the session in front of you.
+        #
+        # Built from the name rather than substituted into the stock label:
+        # that label carries an article — "with a J3P Advisor" — which does
+        # not survive a swap to a person's name.
+        #
+        # Only for a named advisor. The default persona keeps the configured
+        # label, which is the generic one on purpose: a participant on the
+        # main link has not been matched with anyone yet.
+        page_cfg["footer_cta_label"] = f"Schedule time with {active['name']}"
+        page_cfg["footer_cta_text"] = (
+            f"To schedule time with {active['name']}, please")
+
         if active.get("scheduling_url"):
             page_cfg["footer_cta_url"] = active["scheduling_url"]
     elif (settings.get("default_scheduling_url") or "").strip():
