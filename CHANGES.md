@@ -1,63 +1,71 @@
-# J3P Advisor — build 2026-09-19-a
+# J3P Advisor — build 2026-09-19-b
 
-One file: `app.py`. Deploy this to fix the failed deployment.
+Two files: `app.py` (replaces the existing one) and `import_order_check.py`
+(new, optional — see below).
 
 ---
 
-## Why the deploy failed
+## Why the deploy kept failing
 
-Build and Deploy both passed. It died at **Network → Healthcheck** after
-23 seconds.
+Not the healthcheck being slow. The worker was never starting.
 
-`railway.json` points the healthcheck at `/health` with a 30-second budget.
-That makes `/health` the very first request a fresh container serves —
-before psycopg or voyageai have been imported, before any connection
-exists, before the schema check has run.
+In build `-g` I added the literature-search ingest route and placed it at
+line 8103:
 
-In build `2026-09-17-b` I added an `advisor_voice` block to that endpoint.
-It runs two database queries and ensures two tables. On a warm database it
-answers in time; on a cold one it does not, and the deploy fails.
+```python
+@app.route("/admin/research/ingest", methods=["POST"])
+@require_permission("edit_knowledge")        # defined at line 8417
+def admin_ingest_research():
+```
 
-The endpoint already carried this comment, three lines below what I added:
+Decorators are evaluated when the module is imported, so Python hit
+`require_permission` 300 lines before it exists and raised `NameError`. The
+module never finished importing, gunicorn's worker died, and nothing was
+listening when Railway probed `/health` — which presents as "Healthcheck
+failure" and looks identical to a slow response.
 
-> *Deliberately env-only: calling `db.is_enabled()` here imported psycopg
-> and voyageai on the very first request, which is the healthcheck — the
-> reason deploys were failing.*
+The route is now beside the other admin routes, all of which are defined
+well after `require_permission`.
 
-So this was diagnosed and fixed once before, written down in the right
-place, and I broke it again anyway. That explains the intermittency too —
-`-c` through `-g` deployed because the timing happened to fall inside the
-window.
+**The `-a` healthcheck fix was still correct** and is included. `/health`
+touching the database was a real fault; it just was not this one. Both are
+fixed.
 
-## The fix
+## Why I did not catch it
 
-`/health` now calls nothing but `jsonify`, `os.environ.get` and `bool`.
-Verified by walking the function's syntax tree: no database-touching call
-remains.
+Every build this week was verified with `ast.parse`, which checks syntax
+and nothing else. A name used 300 lines before it is defined is
+syntactically perfect. The check I was running could not have found this.
 
-Nothing is lost. The advisor voice report moved to the admin panel under
-**Diagnostics** in build `-l`, which is a page a person loads, not a
-liveness probe with a deadline.
+`import_order_check.py` closes that gap. It walks the module top to bottom,
+tracks what has been defined, and reports any name used at module level —
+in a decorator, a default argument, a module-level assignment — before it
+exists.
 
-The comment on the endpoint is now explicit about the rule rather than
-describing a past incident, so the next person to reach for it — including
-me — sees the constraint before the history.
+```
+$ python3 import_order_check.py app.py
+app.py: every module-level name is defined before it is used
+```
+
+Verified two ways: it reports clean on this build, and on a minimal file
+reproducing the bug it flags exactly the name Python's own `NameError`
+names. Run it before any deploy; it takes under a second and needs no
+dependencies.
+
+You do not have to commit it — it is a development tool, not part of the
+app. But committing it means it is there next time.
 
 ---
 
 ## Everything else is unchanged from -g
 
-PubMed and OpenAlex literature search in the Knowledge tab. Session
-transcripts scopeable to assigned advisors. Participant text kept out of
-the deploy logs. Replies checked back against the knowledge base.
+PubMed and OpenAlex literature search. Session transcripts scopeable to
+assigned advisors. Participant text kept out of the deploy logs. Replies
+checked back against the knowledge base after generation.
 
 ---
 
 ## Installing
 
-Replace `app.py`, commit to `main`. The deploy should pass its healthcheck
-this time; `/health` should return quickly and report version
-`2026-09-19-a`.
-
-If it fails again at the same step, the cause is something else and the
-deploy log will name it — send me what "View logs" shows.
+Replace `app.py`, commit to `main`. Diagnostics should report version
+`2026-09-19-b`.

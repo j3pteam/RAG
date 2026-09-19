@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-a"
-APP_BUILD_NOTES = "healthcheck no longer touches the database"
+APP_VERSION = "2026-09-19-b"
+APP_BUILD_NOTES = "fixes the import error that stopped the worker booting"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -8096,44 +8096,6 @@ def run_literature_search(query: str, sources) -> list:
             seen_title.add(key_title)
         merged.append(r)
     return merged
-
-
-@app.route("/admin/research/ingest", methods=["POST"])
-@require_permission("edit_knowledge")
-def admin_ingest_research():
-    """Put one search result into the knowledge base.
-
-    Only the abstract is stored — not the full paper. That is what the APIs
-    return, it is what is unambiguously free to hold, and it is the part
-    that carries the finding. The citation and link go in with it so an
-    advisor's answer can be traced back to the source.
-    """
-    title = (request.form.get("title") or "").strip()[:300]
-    abstract = (request.form.get("abstract") or "").strip()
-    citation = (request.form.get("citation") or "").strip()
-    url = (request.form.get("url") or "").strip()
-    owner = (request.form.get("owner") or "").strip()
-    if not title or not abstract:
-        flash("That result has no abstract to add.")
-        return redirect(url_for("admin_dashboard", tab="knowledge"))
-    if db.find_duplicate_document(title=title):
-        flash(f"⚠ '{title[:60]}' is already in the knowledge base.")
-        return redirect(url_for("admin_dashboard", tab="knowledge"))
-    try:
-        body = f"{title}\n\n{citation}\n{url}\n\n{abstract}".strip()
-        chunks = emb.chunk_text(body)
-        if not chunks:
-            flash("That abstract produced no chunks.")
-            return redirect(url_for("admin_dashboard", tab="knowledge"))
-        vectors = emb.embed_batch(chunks)
-        doc_id = db.insert_document(title, url or "literature search",
-                                    list(zip(chunks, vectors)))
-        set_document_owner(title, owner)
-        flash(f"✓ Added '{title[:60]}' — {len(chunks)} chunks (doc #{doc_id}).")
-    except Exception as e:
-        app.logger.error(f"[research] ingest failed: {e}")
-        flash(f"Could not add that paper: {str(e)[:160]}")
-    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 def _admin_users_ensure_table(conn):
@@ -21050,6 +21012,44 @@ def admin_create_user():
     else:
         flash(result["error"])
     return redirect(url_for("admin_dashboard", tab="users"))
+
+
+@app.route("/admin/research/ingest", methods=["POST"])
+@require_permission("edit_knowledge")
+def admin_ingest_research():
+    """Put one search result into the knowledge base.
+
+    Only the abstract is stored — not the full paper. That is what the APIs
+    return, it is what is unambiguously free to hold, and it is the part
+    that carries the finding. The citation and link go in with it so an
+    advisor's answer can be traced back to the source.
+    """
+    title = (request.form.get("title") or "").strip()[:300]
+    abstract = (request.form.get("abstract") or "").strip()
+    citation = (request.form.get("citation") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    owner = (request.form.get("owner") or "").strip()
+    if not title or not abstract:
+        flash("That result has no abstract to add.")
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
+    if db.find_duplicate_document(title=title):
+        flash(f"⚠ '{title[:60]}' is already in the knowledge base.")
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
+    try:
+        body = f"{title}\n\n{citation}\n{url}\n\n{abstract}".strip()
+        chunks = emb.chunk_text(body)
+        if not chunks:
+            flash("That abstract produced no chunks.")
+            return redirect(url_for("admin_dashboard", tab="knowledge"))
+        vectors = emb.embed_batch(chunks)
+        doc_id = db.insert_document(title, url or "literature search",
+                                    list(zip(chunks, vectors)))
+        set_document_owner(title, owner)
+        flash(f"✓ Added '{title[:60]}' — {len(chunks)} chunks (doc #{doc_id}).")
+    except Exception as e:
+        app.logger.error(f"[research] ingest failed: {e}")
+        flash(f"Could not add that paper: {str(e)[:160]}")
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 @app.route("/admin/users/scope/<int:user_id>", methods=["POST"])
