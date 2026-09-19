@@ -56,6 +56,47 @@ class _LazyModule:
 
 db = _LazyModule("database")
 emb = _LazyModule("embeddings")
+# ---------------------------------------------------------------------------
+# Prefer Railway's private network for the database
+# ---------------------------------------------------------------------------
+# Measured: two queries on an already-open connection take 68ms, while two
+# queries that each open one take 2.2 seconds. Roughly a second per
+# handshake is not TCP and TLS to a database in the same datacentre — it is
+# a round trip over the public internet.
+#
+# Railway exposes a Postgres service two ways: DATABASE_URL, pointing at a
+# public proxy hostname that leaves the datacentre, and a private
+# .railway.internal address that does not. The private one is typically
+# single-digit milliseconds to connect.
+#
+# Set here in os.environ rather than passed around, because database.py
+# reads DATABASE_URL itself and this file does not own that module. Doing it
+# before either is used means both pick it up with no change to either.
+_private_db = (os.environ.get("DATABASE_PRIVATE_URL")
+               or os.environ.get("POSTGRES_PRIVATE_URL") or "").strip()
+if _private_db and _private_db != os.environ.get("DATABASE_URL"):
+    os.environ["DATABASE_URL"] = _private_db
+    print("[db] using the private network address for Postgres", flush=True)
+
+
+def database_host() -> str:
+    """The database hostname, for Diagnostics. Host only — the URL carries
+    credentials and must never be displayed or logged."""
+    raw = os.environ.get("DATABASE_URL") or ""
+    if not raw:
+        return ""
+    try:
+        import urllib.parse as _parse
+        return _parse.urlsplit(raw).hostname or ""
+    except Exception:
+        return ""
+
+
+def database_is_private() -> bool:
+    host = database_host()
+    return host.endswith(".railway.internal") or host in ("localhost", "127.0.0.1")
+
+
 import paywall
 import exports
 
@@ -197,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-f"
-APP_BUILD_NOTES = "all four Activity sections collapse, log included"
+APP_VERSION = "2026-09-19-h"
+APP_BUILD_NOTES = "uses Railway's private database address when available"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -15929,6 +15970,12 @@ details.section[open] > summary {
   </div>
 </aside>
 <main class="admin-main">
+{# Timing for whichever tab is open, on request. The Diagnostics tab has
+   its own copy of this; Activity and Advisors are the heavy pages and
+   could not be measured without it. #}
+{% if show_timing and active_tab != "diagnostics" %}
+<div class="section"><!--RENDER_MS--></div>
+{% endif %}
 
   {% with messages = get_flashed_messages() %}
     {% for m in messages %}
@@ -17198,6 +17245,19 @@ details.section[open] > summary {
       <tr><th style="width: 45%;">Reuse this app's own connection</th>
           <td>{% if diag.persistent_conns %}<span style="color: var(--ok);">on</span>
               {% else %}<span class="muted">off — set DB_PERSISTENT_CONN=on</span>{% endif %}</td></tr>
+      <tr><th style="width: 45%;">Database address</th>
+          <td>
+            <code>{{ diag.db_host or "not configured" }}</code><br />
+            {% if diag.db_private %}
+            <span style="color: var(--ok);">private network — connections stay local</span>
+            {% else %}
+            <span style="color: var(--bad);">public proxy — every connection leaves the
+            datacentre, costing roughly a second</span>
+            <span class="muted"><br />Point this service&#39;s <code>DATABASE_URL</code>
+            at the Postgres service&#39;s private URL, or set
+            <code>DATABASE_PRIVATE_URL</code> alongside it.</span>
+            {% endif %}
+          </td></tr>
       <tr><th>Share it with database.py</th>
           <td>{% if diag.reuse_shared_conn %}<span style="color: var(--warn);">on</span>
               {% else %}<span class="muted">off — DB_REUSE_SHARED_CONN=on enables it</span>{% endif %}</td></tr>
@@ -19501,6 +19561,7 @@ def admin_dashboard():
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
         app_build_notes=APP_BUILD_NOTES,
         short_location=short_location,
+        show_timing=bool(request.args.get("timing")),
         show_personality_col=any(_personality_summary.get(i) for i in _row_ids),
         show_tips_col=any(_personality_tips.get(i) for i in _row_ids),
         show_location_col=any(_locations.get(i) for i in _row_ids),
@@ -19510,6 +19571,8 @@ def admin_dashboard():
         diag={
             "persistent_conns": _PERSISTENT_CONNS_ENABLED,
             "reuse_shared_conn": _REUSE_DB_SHARED_CONN,
+            "db_host": database_host(),
+            "db_private": database_is_private(),
             "voice": _voice_diag,
             "grounding": _grounding_snapshot(),
         },
