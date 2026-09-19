@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-g"
-APP_BUILD_NOTES = "PubMed and OpenAlex search for building the knowledge base"
+APP_VERSION = "2026-09-19-a"
+APP_BUILD_NOTES = "healthcheck no longer touches the database"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -13389,11 +13389,17 @@ def health():
     return jsonify({
         "status": "ok",
         "version": APP_VERSION,
-        # Everything the advisor voice needs, in one place. Checked when
-        # Speak or Preview falls back to the browser voice: it distinguishes
-        # "no sample saved" from "saved under a different slug" from
-        # "sample fine, provider not configured".
-        "advisor_voice": _voice_health(),
+        # NOTHING HERE MAY TOUCH THE DATABASE. This endpoint is Railway's
+        # healthcheck, so it is the first request a fresh container serves,
+        # with a 30s budget. A database call here means lazy-importing
+        # psycopg, opening a connection and running schema checks before it
+        # can answer — which fails the deploy intermittently, depending on
+        # how warm the database happens to be.
+        #
+        # This was already learned once and written down two lines below,
+        # and a voice-diagnostics block added in 2026-09-17-b broke it
+        # again. The advisor voice report now lives in the admin panel
+        # under Diagnostics, which is a page, not a liveness probe.
         "build": APP_BUILD_NOTES,
         "admin_sections": [
             "Display", "Advisors", "Access", "Scheduling", "Feedback",

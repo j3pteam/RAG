@@ -1,84 +1,63 @@
-# J3P Advisor — build 2026-09-18-g
+# J3P Advisor — build 2026-09-19-a
 
-One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
-
----
-
-## Literature search: PubMed and OpenAlex
-
-Knowledge tab → **Find research**. Type a query, get merged results from
-both services, and add any paper's abstract to the knowledge base with one
-click.
-
-Both are free and need no API key.
-
-**This is admin-side only, and that is the point.** Nothing a participant
-types is ever sent to either service. This builds the corpus the advisor
-answers from; it does not let the advisor answer from the open web. Putting
-search in the participant path would undo the scope guard, undo the
-grounding check, and send coaching questions to a new vendor — the opposite
-of last week's privacy work.
-
-### What it stores
-
-The abstract, not the full paper — that is what the APIs return, it is
-unambiguously free to hold, and it carries the finding. The citation and
-source URL go in with it, so an advisor's answer can be traced back.
-
-Each result can be assigned to one advisor or shared with all, using the
-same ownership control as any other document.
-
-### Details that matter in practice
-
-**Structured abstracts keep their labels.** PubMed returns Background,
-Methods, Results as separate elements; the labels are preserved because
-they chunk better than a flattened paragraph.
-
-**OpenAlex abstracts are rebuilt.** OpenAlex stores them as a word-position
-map rather than text, so they are reconstructed on the way in. Without
-that, OpenAlex results would carry no abstract at all and be worthless to
-ingest.
-
-**Duplicates are merged on DOI**, with the PubMed copy preferred — its
-abstracts are cleaner and structured ones keep their sections. The same
-paper is in both services routinely.
-
-**Both services are told who is calling.** NCBI raises the rate limit for
-identified callers and OpenAlex routes them to a faster pool. It uses your
-contact address, or `RESEARCH_CONTACT_EMAIL` if you set one.
-
-Verified against representative payloads: italic markup inside titles,
-structured-abstract labels, inverted-index reconstruction, DOI
-de-duplication across sources.
+One file: `app.py`. Deploy this to fix the failed deployment.
 
 ---
 
-## Also in this build
+## Why the deploy failed
 
-**Session transcripts can be scoped to assigned advisors** (`-f`). Manage
-Users → "Sessions they can read". Every existing account stays unrestricted;
-scoping is turned on per person.
+Build and Deploy both passed. It died at **Network → Healthcheck** after
+23 seconds.
 
-**Participant text no longer goes into the deploy logs** (`-e`).
+`railway.json` points the healthcheck at `/health` with a 30-second budget.
+That makes `/health` the very first request a fresh container serves —
+before psycopg or voyageai have been imported, before any connection
+exists, before the schema check has run.
 
-**Replies are checked back against the knowledge base** after generation
-(`-d`), with results in Diagnostics → Answer grounding.
+In build `2026-09-17-b` I added an `advisor_voice` block to that endpoint.
+It runs two database queries and ensures two tables. On a warm database it
+answers in time; on a cold one it does not, and the deploy fails.
+
+The endpoint already carried this comment, three lines below what I added:
+
+> *Deliberately env-only: calling `db.is_enabled()` here imported psycopg
+> and voyageai on the very first request, which is the healthcheck — the
+> reason deploys were failing.*
+
+So this was diagnosed and fixed once before, written down in the right
+place, and I broke it again anyway. That explains the intermittency too —
+`-c` through `-g` deployed because the timing happened to fall inside the
+window.
+
+## The fix
+
+`/health` now calls nothing but `jsonify`, `os.environ.get` and `bool`.
+Verified by walking the function's syntax tree: no database-touching call
+remains.
+
+Nothing is lost. The advisor voice report moved to the admin panel under
+**Diagnostics** in build `-l`, which is a page a person loads, not a
+liveness probe with a deadline.
+
+The comment on the endpoint is now explicit about the rule rather than
+describing a past incident, so the next person to reach for it — including
+me — sees the constraint before the history.
 
 ---
 
-## Still open from the privacy list
+## Everything else is unchanged from -g
 
-1. No audit trail — "who read my session?" is unanswerable
-2. No retention policy — nothing is ever deleted
-3. No participant deletion path
-4. Participant links never expire
+PubMed and OpenAlex literature search in the Knowledge tab. Session
+transcripts scopeable to assigned advisors. Participant text kept out of
+the deploy logs. Replies checked back against the knowledge base.
 
 ---
 
 ## Installing
 
-Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-18-g`.
+Replace `app.py`, commit to `main`. The deploy should pass its healthcheck
+this time; `/health` should return quickly and report version
+`2026-09-19-a`.
 
-First search to try: something you already know the literature on, so you
-can judge the result quality before trusting it on an unfamiliar topic.
+If it fails again at the same step, the cause is something else and the
+deploy log will name it — send me what "View logs" shows.
