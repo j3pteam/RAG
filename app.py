@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-c"
-APP_BUILD_NOTES = "booking button is a toggle per advisor and per participant link"
+APP_VERSION = "2026-09-18-d"
+APP_BUILD_NOTES = "replies are checked back against the knowledge base"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -11322,6 +11322,95 @@ def build_retrieval_query(current_question: str, prior_user_msg: str = "",
     return "\n".join(pieces)
 
 
+
+# --- Grounding check ------------------------------------------------------
+# Rolling counters for the Diagnostics tab. In-process and per worker, so
+# they are indicative rather than an audit trail — the [grounding] log lines
+# are the record.
+_GROUNDING_STATS = {"checked": 0, "grounded": 0, "weak": 0, "ungrounded": 0,
+                    "no_kb": 0, "recent": []}
+_GROUNDING_LOCK = threading.Lock()
+
+# Below this the knowledge base does not meaningfully back the answer. Set a
+# little under the retrieval threshold used for the question itself: an
+# answer legitimately contains framing and phrasing that appear nowhere in
+# the source material, so demanding the same similarity would flag every
+# reply.
+GROUNDING_WEAK_AT = 0.45
+GROUNDING_STRONG_AT = 0.60
+
+
+def _grounding_snapshot():
+    with _GROUNDING_LOCK:
+        out = dict(_GROUNDING_STATS)
+        out["recent"] = list(_GROUNDING_STATS["recent"])
+    return out
+
+
+def _record_grounding(bucket, entry):
+    with _GROUNDING_LOCK:
+        _GROUNDING_STATS["checked"] += 1
+        _GROUNDING_STATS[bucket] += 1
+        _GROUNDING_STATS["recent"].insert(0, entry)
+        del _GROUNDING_STATS["recent"][12:]
+
+
+def _check_grounding(question, answer, advisor_slug):
+    """Retrieve on the answer and score how well the knowledge base backs it.
+
+    Runs in its own thread with its own app context, so it needs the advisor
+    slug passed in — there is no request or session here.
+    """
+    try:
+        if not (db.is_enabled() and emb.is_enabled()):
+            _record_grounding("no_kb", {"score": None, "question": question[:80],
+                                        "advisor": advisor_slug, "verdict": "no knowledge base"})
+            return
+        probe = (answer or "").strip()
+        if len(probe) < 40:
+            return                      # too short to say anything about
+        probe = probe[:2000]            # embedding input, not the whole essay
+        answer_embedding = emb.embed_text(probe)
+        results = db.search_chunks(answer_embedding, limit=CONFIG["rag_top_k"] * 4)
+        results = filter_chunks_for_advisor(results, advisor_slug)
+        top = max((r["similarity"] for r in results), default=0.0)
+        titles = [r["title"] for r in results[:3]]
+
+        if not results:
+            bucket, verdict = "ungrounded", "nothing in the knowledge base is close"
+        elif top >= GROUNDING_STRONG_AT:
+            bucket, verdict = "grounded", "well supported"
+        elif top >= GROUNDING_WEAK_AT:
+            bucket, verdict = "weak", "loosely supported"
+        else:
+            bucket, verdict = "ungrounded", "not supported by the knowledge base"
+
+        level = (app.logger.info if bucket == "grounded" else app.logger.warning)
+        level(f"[grounding] {verdict} (top={top:.2f}) advisor={advisor_slug or 'default'} "
+              f"q={question[:70]!r} sources={titles}")
+        _record_grounding(bucket, {
+            "score": round(top, 3), "question": question[:80],
+            "advisor": advisor_slug or "default", "verdict": verdict,
+            "sources": titles, "at": datetime.utcnow()})
+    except Exception as e:
+        # A check that breaks must never affect the conversation it is
+        # checking — the reply has already been delivered by this point.
+        app.logger.error(f"[grounding] check failed: {e}")
+
+
+def check_grounding_async(question, answer, advisor_slug):
+    """Fire the check on a background thread. The participant has their
+    reply already; nothing here is allowed to delay them."""
+    try:
+        def run():
+            with app.app_context():
+                _check_grounding(question, answer, advisor_slug)
+        threading.Thread(target=run, daemon=True,
+                         name="grounding-check").start()
+    except Exception as e:
+        app.logger.error(f"[grounding] could not start the check: {e}")
+
+
 def retrieve_context_and_lessons(query: str) -> tuple:
     """Search knowledge base AND approved lessons for material relevant to the query.
 
@@ -12817,6 +12906,11 @@ def chat():
             and not detect_export_format(user_input)
             and not all(d["suggested"] == "pptx" for d in documents)):
         export_format = "docx"
+
+    # Second pass: the reply goes back through retrieval to see whether the
+    # knowledge base actually supports it. Backgrounded, so it costs the
+    # participant nothing.
+    check_grounding_async(user_input, assistant_text, session.get("advisor_slug"))
 
     if not assistant_text.strip():
         # Reached only if the model itself returned nothing. Say something
@@ -16802,6 +16896,50 @@ tbody tr:hover td { background: var(--N10); }
   </div>
 
   <div class="section">
+    <h2>Answer grounding</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      Every reply is put back through retrieval to see whether the knowledge
+      base supports it. The reply is never changed — a similarity score is
+      not a good enough reason to rewrite coaching advice — but a run of
+      unsupported answers is worth knowing about. Counted since this worker
+      started; the full record is in the logs as <code>[grounding]</code>.
+    </p>
+    {% if diag.grounding.checked %}
+    <table>
+      <tr><th style="width: 45%;">Replies checked</th><td>{{ diag.grounding.checked }}</td></tr>
+      <tr><th>Well supported</th>
+          <td><span style="color: var(--ok);">{{ diag.grounding.grounded }}</span></td></tr>
+      <tr><th>Loosely supported</th>
+          <td><span style="color: var(--warn);">{{ diag.grounding.weak }}</span></td></tr>
+      <tr><th>Not supported</th>
+          <td><span style="color: var(--bad);">{{ diag.grounding.ungrounded }}</span></td></tr>
+      {% if diag.grounding.no_kb %}
+      <tr><th>No knowledge base available</th><td class="muted">{{ diag.grounding.no_kb }}</td></tr>
+      {% endif %}
+    </table>
+    {% if diag.grounding.recent %}
+    <h3 style="font-size: 0.9rem; margin: 1.4rem 0 0.6rem;">Most recent</h3>
+    <table>
+      <tr><th>Question</th><th style="width: 15%;">Advisor</th>
+          <th style="width: 22%;">Verdict</th><th style="width: 10%; text-align:right;">Score</th></tr>
+      {% for r in diag.grounding.recent %}
+      <tr>
+        <td>{{ r.question }}</td>
+        <td class="muted">{{ r.advisor }}</td>
+        <td>{{ r.verdict }}</td>
+        <td style="text-align:right;" class="muted">{{ r.score if r.score is not none else "—" }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+    {% else %}
+    <p class="muted" style="margin: 0;">
+      No replies checked yet on this worker.
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="section">
     <h2>Content</h2>
     <table>
       <tr><th style="width: 45%;">Documents in the knowledge base</th><td>{{ docs|length }}</td></tr>
@@ -18829,6 +18967,7 @@ def admin_dashboard():
             "persistent_conns": _PERSISTENT_CONNS_ENABLED,
             "reuse_shared_conn": _REUSE_DB_SHARED_CONN,
             "voice": _voice_diag,
+            "grounding": _grounding_snapshot(),
         },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=_settings,

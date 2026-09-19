@@ -1,80 +1,87 @@
-# J3P Advisor — build 2026-09-18-c
+# J3P Advisor — build 2026-09-18-d
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
 ---
 
-## The booking button is a setting, not two URLs
+## Replies are checked back against the knowledge base
 
-Each advisor had two near-identical links — `/a/<slug>/scheduling` and
-`/a/<slug>/no-scheduling` — that differed only in whether the booking button
-appeared. That meant choosing the behaviour at the moment of copying, and
-never being able to see or change what a link already sent out was doing.
+The flow is now **question → retrieval → model → retrieval**.
 
-Both sections are replaced by a control.
+The first pass was already there: every message is embedded, searched
+against the knowledge base, and the matching material is handed to the
+model. What was missing is any check that the model *used* it. An answer
+can be fluent, on-topic and entirely unsupported, and that is precisely the
+failure you cannot spot by reading replies one at a time.
 
-**Per advisor.** "Scheduling Links" is now **Booking button**, with three
-choices: follow the site setting, always show, always hide. The default
-persona gets a straight on/off switch for the main link.
+The second pass re-embeds the model's own answer, searches the same
+knowledge base with it, and records how well the result backs it up.
 
-**Per participant link.** The links table has a new Booking column: *Follow
-advisor*, *Show*, *Hide*, changeable in place from the dropdown. Follow
-advisor is the default, and stays the default for links created later —
-the setting is stored as "no preference" rather than copying the advisor's
-current value, so a link does not silently diverge when the advisor's
-setting changes.
+| Top similarity | Verdict |
+|---|---|
+| 0.60 and above | well supported |
+| 0.45 to 0.59 | loosely supported |
+| below 0.45 | not supported by the knowledge base |
+| no chunks returned | nothing in the knowledge base is close |
 
-The override exists for the participant who should not be sold a session —
-someone mid-engagement, or a courtesy link.
+The threshold sits below the one used for the question itself, deliberately.
+A coaching answer legitimately contains framing, structure and phrasing that
+appear nowhere in the source documents; demanding the same similarity as a
+retrieval query would flag every reply and the signal would be worthless.
 
-### Old links keep working
+### Two decisions worth disagreeing with if you want
 
-`/scheduling` and `/no-scheduling` still resolve. Links already in
-circulation must not break, and a URL that says explicitly what it wants
-still wins over the toggles. They are simply no longer offered in the admin
-panel.
+**The reply is never changed.** A similarity score is not a good enough
+reason to rewrite coaching advice — a rewrite driven by a number would do
+more damage than the ungrounded answer it was fixing. The check makes the
+pattern visible and leaves the judgement with a person. If you want it to
+intervene, that is a different build and worth deciding deliberately.
 
-Precedence, verified:
+**It runs after the reply has been sent**, on a background thread. It costs
+the participant nothing — no added wait, and a failure in the check can
+never affect the conversation it is checking. Given how hard the last two
+days of latency work were, spending 1–3 seconds of a participant's time on
+a check they never see would have been a poor trade.
 
-| Situation | Button | Decided by |
-|---|---|---|
-| Advisor set to always hide | hidden | the advisor |
-| Advisor set to follow site | shown | the site setting |
-| Link set to Hide, advisor shows | hidden | this participant's link |
-| Link follows advisor, advisor hides | hidden | the advisor |
-| An existing `/no-scheduling` link | hidden | the URL |
-| An existing `/scheduling` link | shown | the URL |
+### Where to see it
 
-The new column is added to `participant_links` on first use — no migration
-step.
+Diagnostics → **Answer grounding**: replies checked, and the split across
+well supported, loosely supported and not supported, plus the twelve most
+recent with their question, advisor, verdict and score.
+
+Counters are per worker and reset on deploy, so they are indicative. The
+record is in the deploy logs — every check writes a `[grounding]` line, at
+warning level when a reply is not well supported, with the question and the
+source documents that came closest.
+
+**What to do with a run of "not supported":** it usually means the knowledge
+base has a gap on that topic rather than that the model invented something.
+The recent list names the questions, which is the useful part — those are
+the documents worth adding.
 
 ---
 
-## From build 2026-09-18-b
+## From build 2026-09-18-c
 
-Conversation log filters and the "Show full history" link were dropping back
-to Overview: they were written before tabs moved server-side and carried no
-`tab=`.
-
-## From build 2026-09-18-a
-
-The booking button names the advisor whose session it is.
+The booking button became a setting instead of two URLs: a per-advisor
+control (follow the site, always show, always hide) and a per-participant
+-link override. Existing `/scheduling` and `/no-scheduling` links still work
+and still win.
 
 ## From earlier
 
-Queries hoisted out of the render call and gated by tab — Settings went from
-15 queries to 3 (`-m`). Diagnostics tab (`-l`). Connection reuse made
-fail-safe (`-i`, `-j`). Advisors collapsing to one card at a time (`-f`).
-The advisor on the page being the advisor that answers, plus the
-voice-sample archive and slug work (`-e` through `-a`).
+Conversation log filters staying on Activity (`-b`). The booking button
+naming the advisor (`-a`). Queries hoisted out of the render call and gated
+by tab (`-m`). Diagnostics tab (`-l`). The advisor on the page being the
+advisor that answers, plus the voice-sample work.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-18-c`.
+`2026-09-18-d`.
 
-Worth checking after deploying: open an advisor, set Booking button to
-"Always hide", and confirm their session link no longer shows it — then set
-one participant link to "Show" and confirm that person does.
+Send a few messages, then open Diagnostics → Answer grounding. If everything
+lands in "not supported", tell me the scores — the thresholds are a starting
+point calibrated on reasoning, not on your corpus, and they may need moving.
