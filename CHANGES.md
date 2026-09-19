@@ -1,94 +1,76 @@
-# J3P Advisor — build 2026-09-19-h
+# J3P Advisor — build 2026-09-19-i
 
 `app.py`, plus the pre-deploy checks.
 
+**Includes the private-database-address change from `-h`** — the one that
+addresses the slowness. Deploy this.
+
 ---
 
-## Found it: the database is on the public network
+## Every tab now behaves the same way
 
-The Diagnostics reading settles this:
+Sections collapse and open on click, each with its own summary line:
 
+**Knowledge**
 ```
-3317 ms
-  list_advisors        1341 ms   ← first use of one connection
-  list_documents        893 ms   ← first use of the other
-  page-specific lookups 665 ms
-  settings              266 ms
-  feedback stats + log   68 ms   ← two queries, connection already open
-  template render        84 ms
-```
-
-**Two queries on an open connection: 68 ms. Two queries that each open a
-connection: 2.2 seconds.** The database is fast. Connecting to it is what
-costs, and roughly a second per handshake is not TCP and TLS to a machine
-in the same datacentre — that is a round trip over the public internet.
-
-Railway exposes a Postgres service two ways:
-
-- `DATABASE_URL` — a **public proxy** hostname, something like
-  `roundhouse.proxy.rlwy.net`. Traffic leaves the datacentre and comes
-  back.
-- a **private** `.railway.internal` address, which does not leave.
-
-If your web service is using the first, every connection pays an internet
-round trip. That is consistent with every number measured this week,
-including why removing two-thirds of the queries barely moved the total.
-
-## What this build does
-
-It prefers the private address automatically. If `DATABASE_PRIVATE_URL` is
-set, it is used — including by `database.py`, because the value is placed
-into the environment before either module reads it, so no change to that
-file is needed.
-
-**Diagnostics now names the address** under Database connections:
-
-```
-Database address   postgres.railway.internal
-                   private network — connections stay local
+▸ Find research            PubMed and OpenAlex · 2 results
+▾ Documents                30 embedded
+▸ Upload Document          PDF, Word, text or Markdown
+▸ Upload Folder            many files at once
+▸ Add Knowledge from URL   fetches and embeds a web page
+▸ Add Knowledge from Text  paste directly
 ```
 
-or
+**Manage Users**
+```
+▸ Signed in as             Alan Friedman · owner
+▸ Add a user               invite an administrator
+▾ Existing users (2)       2 accounts
+```
+
+**Biometric data**
+```
+▸ Upload a file            Apple Health, Oura, Whoop exports
+▾ Files                    3 files
+```
+
+**Settings** — Participant Access collapses; the rest of that tab is one
+form and was already compact.
+
+In each case the section people arrive for stays open — Documents,
+Existing users, Files — and the actions that create new things start
+closed, since they are occasional.
+
+## Two tabs left alone, deliberately
+
+**Overview** is a single card of four numbers. A collapsible wrapper round
+one card is cost without benefit.
+
+**Diagnostics** exists to be read all at once when something is wrong.
+Making someone open six sections to find which one is red would defeat what
+it is for. Say the word if you would rather it matched anyway.
+
+**Advisors** already worked this way — one card open at a time, from `-f`.
+
+---
+
+## Still the main thing
+
+`-h` added automatic use of Railway's private database address. Until that
+variable is set, Diagnostics → Database connections will show:
 
 ```
 Database address   roundhouse.proxy.rlwy.net
-                   public proxy — every connection leaves the datacentre,
-                   costing roughly a second
+                   public proxy — every connection leaves the datacentre
 ```
 
-Only the hostname is shown, never the URL — it carries the password.
-
-## What you need to do
-
-In Railway, on the **web** service → Variables, add:
-
-```
-DATABASE_PRIVATE_URL = ${{Postgres.DATABASE_PRIVATE_URL}}
-```
-
-using the variable-reference syntax so Railway fills it in. (The exact name
-on the Postgres service may differ — look for the one whose host ends in
-`.railway.internal`.) Leave the existing `DATABASE_URL` alone; it stays as
-a fallback.
-
-**Expected result:** connection time drops from ~1000 ms to single digits.
-On the numbers above, the Diagnostics page would go from 3317 ms to roughly
-400 ms, and Activity proportionally.
-
-If Diagnostics still says "public proxy" after that, the variable did not
-resolve, and the hostname shown will say which one it got.
-
----
-
-## From -g
-
-`?timing=1` works on every tab, not just Diagnostics — which is how this
-was finally measured.
+Measured: two queries on an open connection take 68 ms; two that each open
+one take 2.2 seconds. Setting `DATABASE_PRIVATE_URL` on the web service is
+what closes that gap, and no code change achieves the same.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-19-h`, and its Database connections section will tell you which
-network you are on.
+`2026-09-19-i`.

@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-h"
-APP_BUILD_NOTES = "uses Railway's private database address when available"
+APP_VERSION = "2026-09-19-i"
+APP_BUILD_NOTES = "Knowledge, Users and Biometric collapse like Activity"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -16091,8 +16091,11 @@ details.section[open] > summary {
   <div class="tab-pane" data-tab="biometric">
     <h2 class="group-heading">Biometric Data</h2>
 
-    <div class="section">
-      <h2>Upload a file</h2>
+    <details class="section">
+      <summary>
+        <h2>Upload a file</h2>
+        <span class="section-note">Apple Health, Oura, Whoop exports</span>
+      </summary>
       <p class="muted" style="margin: 0 0 1rem 0;">
         Attach a wearable or lab export to a participant's email — CSV, PDF,
         XLSX, whatever their device or provider produces. Up to 20 MB.
@@ -16111,10 +16114,13 @@ details.section[open] > summary {
                       border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
         <button type="submit" class="btn">Upload</button>
       </form>
-    </div>
+    </details>
 
-    <div class="section">
-      <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
+    <details class="section" open>
+      <summary>
+        <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
+        <span class="section-note">{{ biometric_files|length }} file{{ 's' if biometric_files|length != 1 }}</span>
+      </summary>
       {% if biometric_files %}
       {% for email, files in biometric_files|groupby('participant_email') %}
       <h3 style="margin: {{ '0' if loop.first else '1.4rem' }} 0 0.6rem;
@@ -16148,7 +16154,7 @@ details.section[open] > summary {
       {% else %}
       <p class="muted" style="margin: 0;">No files uploaded yet.</p>
       {% endif %}
-    </div>
+    </details>
   </div>
   {% endif %}
 
@@ -17367,8 +17373,11 @@ details.section[open] > summary {
   <div class="tab-pane" data-tab="settings">
   <h2 class="group-heading">Access</h2>
 
-  <div class="section">
-    <h2>Participant Access</h2>
+  <details class="section">
+    <summary>
+      <h2>Participant Access</h2>
+      <span class="section-note">{{ 'sign-in required' if settings.require_login else 'open' }}</span>
+    </summary>
     <form method="POST" action="/admin/settings">
       <input type="hidden" name="_fields" value="require_login" />
       <label style="display: flex; align-items: flex-start; gap: 0.7rem;
@@ -17399,7 +17408,7 @@ details.section[open] > summary {
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
-  </div>
+  </details>
   </div>
   {% endif %}
   {% endif %}
@@ -17409,8 +17418,11 @@ details.section[open] > summary {
   <div class="tab-pane" data-tab="users">
   <h2 class="group-heading">Manage Users</h2>
 
-  <div class="section">
-    <h2>Signed in as</h2>
+  <details class="section">
+    <summary>
+      <h2>Signed in as</h2>
+      <span class="section-note">{{ admin_identity.name }}{% if admin_identity.role %} · {{ admin_identity.role }}{% endif %}</span>
+    </summary>
     <p style="margin: 0 0 0.6rem; font-size: 0.9rem;">
       {% if admin_identity.is_master %}
         <strong>Master key</strong> <span class="muted">(the ADMIN_PASSWORD env var — full owner access, not tied to any one account)</span>
@@ -17438,10 +17450,13 @@ details.section[open] > summary {
       </form>
     </details>
     {% endif %}
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Add a user</h2>
+  <details class="section">
+    <summary>
+      <h2>Add a user</h2>
+      <span class="section-note">invite an administrator</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">
       Owner gets everything, including managing other users. Admin gets
       everything except that. Viewer is read-only — can see the knowledge
@@ -17465,10 +17480,13 @@ details.section[open] > summary {
       </select>
       <button type="submit" class="btn">Create user</button>
     </form>
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Existing users{% if admin_users %} ({{ admin_users|length }}){% endif %}</h2>
+  <details class="section" open>
+    <summary>
+      <h2>Existing users{% if admin_users %} ({{ admin_users|length }}){% endif %}</h2>
+      <span class="section-note">{{ admin_users|length }} account{{ 's' if admin_users|length != 1 }}</span>
+    </summary>
     {% if admin_users %}
     <table class="kb-table users-table">
       <tr>
@@ -17554,7 +17572,7 @@ details.section[open] > summary {
     {% else %}
     <p class="muted">No individual accounts yet — everyone is using the master key.</p>
     {% endif %}
-  </div>
+  </details>
   </div>
   {% endif %}
   {% endif %}
@@ -18120,8 +18138,11 @@ details.section[open] > summary {
   {% if rag_ready %}
   <h2 class="group-heading">Knowledge Base</h2>
 
-  <div class="section">
-    <h2>Find research</h2>
+  <details class="section">
+    <summary>
+      <h2>Find research</h2>
+      <span class="section-note">PubMed and OpenAlex{% if research_results %} · {{ research_results|length }} result{{ 's' if research_results|length != 1 }}{% endif %}</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem;">
       Searches PubMed and OpenAlex for papers to add to the knowledge base.
       Nothing a participant asks is ever sent to either service — this is for
@@ -18197,10 +18218,13 @@ details.section[open] > summary {
       </p>
       {% endif %}
     {% endif %}
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Documents</h2>
+  <details class="section" open>
+    <summary>
+      <h2>Documents</h2>
+      <span class="section-note">{{ docs|length }} embedded</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">
       {{ docs|length }} document{{ 's' if docs|length != 1 else '' }} embedded and
       available to the advisor. Deleting one removes its chunks and the advisor
@@ -18220,12 +18244,15 @@ details.section[open] > summary {
     {% else %}
     <p class="muted">No documents yet. Upload your first one below.</p>
     {% endif %}
-  </div>
+  </details>
 
   <h2 class="group-heading">Knowledge Upload</h2>
 
-  <div class="section">
-    <h2>Upload Document</h2>
+  <details class="section">
+    <summary>
+      <h2>Upload Document</h2>
+      <span class="section-note">PDF, Word, text or Markdown</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">Accepts PDF, Word, Excel, PowerPoint, CSV, TXT, MD, RTF. Up to {{ cfg.max_upload_mb }} MB. The document will be chunked and embedded automatically.</p>
     <form method="POST" action="/admin/upload" enctype="multipart/form-data" class="upload">
       <input type="file" name="file" accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
@@ -18238,10 +18265,13 @@ details.section[open] > summary {
       </select>
       <button type="submit" class="btn">Upload & Embed</button>
     </form>
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Upload Folder</h2>
+  <details class="section">
+    <summary>
+      <h2>Upload Folder</h2>
+      <span class="section-note">many files at once</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">
       Select an entire folder. All supported files inside it (including subfolders) will be uploaded and embedded in one batch.
       Unsupported files and duplicates are skipped automatically. Maximum 50 files per batch.
@@ -18302,10 +18332,13 @@ details.section[open] > summary {
         });
       })();
     </script>
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Add Knowledge from URL</h2>
+  <details class="section">
+    <summary>
+      <h2>Add Knowledge from URL</h2>
+      <span class="section-note">fetches and embeds a web page</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">Paste a link to an article, blog post, or web page. The main article text will be extracted and embedded. Works best with article-style pages (not paywalled, login-required, or JavaScript-only sites).</p>
     <form method="POST" action="/admin/upload-url" class="upload">
       <input type="url" name="url" placeholder="https://example.com/article" required style="flex: 1.5; min-width: 280px; padding: 0.5rem; border: 1px solid var(--line); border-radius: 2px; font-family: inherit;" />
@@ -18318,10 +18351,13 @@ details.section[open] > summary {
       </select>
       <button type="submit" class="btn">Fetch & Embed</button>
     </form>
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Add Knowledge from Text</h2>
+  <details class="section">
+    <summary>
+      <h2>Add Knowledge from Text</h2>
+      <span class="section-note">paste directly</span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">
       Paste content directly — a podcast transcript, show notes, an email, a
       passage from a book. Use this when a page won't give up its text, which
@@ -18346,7 +18382,7 @@ details.section[open] > summary {
       </select>
       <button type="submit" class="btn" style="margin-top: 0.6rem;">Add &amp; Embed</button>
     </form>
-  </div>
+  </details>
   {% else %}
   <p class="muted">Set up Postgres and <code>OPENAI_API_KEY</code> to enable the knowledge base — see the notice above.</p>
   {% endif %}
