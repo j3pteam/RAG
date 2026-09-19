@@ -1,82 +1,84 @@
-# J3P Advisor — build 2026-09-18-f
+# J3P Advisor — build 2026-09-18-g
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
-Includes the `-e` log fix, so deploy this whether or not you took that one.
+---
+
+## Literature search: PubMed and OpenAlex
+
+Knowledge tab → **Find research**. Type a query, get merged results from
+both services, and add any paper's abstract to the knowledge base with one
+click.
+
+Both are free and need no API key.
+
+**This is admin-side only, and that is the point.** Nothing a participant
+types is ever sent to either service. This builds the corpus the advisor
+answers from; it does not let the advisor answer from the open web. Putting
+search in the participant path would undo the scope guard, undo the
+grounding check, and send coaching questions to a new vendor — the opposite
+of last week's privacy work.
+
+### What it stores
+
+The abstract, not the full paper — that is what the APIs return, it is
+unambiguously free to hold, and it carries the finding. The citation and
+source URL go in with it, so an advisor's answer can be traced back.
+
+Each result can be assigned to one advisor or shared with all, using the
+same ownership control as any other document.
+
+### Details that matter in practice
+
+**Structured abstracts keep their labels.** PubMed returns Background,
+Methods, Results as separate elements; the labels are preserved because
+they chunk better than a flattened paragraph.
+
+**OpenAlex abstracts are rebuilt.** OpenAlex stores them as a word-position
+map rather than text, so they are reconstructed on the way in. Without
+that, OpenAlex results would carry no abstract at all and be worthless to
+ingest.
+
+**Duplicates are merged on DOI**, with the PubMed copy preferred — its
+abstracts are cleaner and structured ones keep their sections. The same
+paper is in both services routinely.
+
+**Both services are told who is calling.** NCBI raises the rate limit for
+identified callers and OpenAlex routes them to a faster pool. It uses your
+contact address, or `RESEARCH_CONTACT_EMAIL` if you set one.
+
+Verified against representative payloads: italic markup inside titles,
+structured-abstract labels, inverted-index reconstruction, DOI
+de-duplication across sources.
 
 ---
 
-## Session transcripts can be scoped to assigned advisors
+## Also in this build
 
-Before this, `view_conversation_log` was `True` for **owner, admin and
-viewer alike**, with no per-advisor filtering anywhere. Any account of any
-role could read every session with every participant across every advisor.
-For psychological assessment and employment material, with client
-organisations sometimes being the participant's own employer, that default
-was not defensible.
+**Session transcripts can be scoped to assigned advisors** (`-f`). Manage
+Users → "Sessions they can read". Every existing account stays unrestricted;
+scoping is turned on per person.
 
-**Manage Users now has a "Sessions they can read" column.** Select one or
-more advisors and that account sees only those sessions. Select none — the
-default, and what every existing account keeps — and nothing changes for
-them.
+**Participant text no longer goes into the deploy logs** (`-e`).
 
-Enforcement is in two places, deliberately:
-
-- The advisor filter on the Activity tab lists only advisors in scope, so
-  an out-of-scope advisor cannot be reached by editing the URL.
-- Rows are filtered again after the query, so an account viewing "all
-  advisors" still only sees its own. Applied in the route rather than
-  inside SQL, so the rule is readable where it is enforced.
-
-Verified: unrestricted accounts see all four test sessions; an account
-scoped to one advisor sees one; scoped to two sees two.
-
-**Owners are never scoped.** Someone has to be able to see everything, and
-hiding data from the account that administers the system is containment in
-appearance rather than in fact.
-
-**One behaviour worth knowing:** sessions on the default persona belong to
-no advisor, so they fall outside every scope and a restricted account will
-not see them. That is the safe direction, but it means a scoped coach will
-not see main-link sessions even if you expected them to.
-
-## Existing accounts are unaffected
-
-The column defaults to empty, which means unrestricted. Nobody loses access
-on deploy. Scoping is something you turn on per person.
+**Replies are checked back against the knowledge base** after generation
+(`-d`), with results in Diagnostics → Answer grounding.
 
 ---
 
-## Also in this build (from -e)
+## Still open from the privacy list
 
-**Participant text no longer goes into the deploy logs.** The grounding
-check in `-d` wrote each participant's question into the application log.
-Deploy logs are retained by the host, readable by anyone with project
-access, and outside the database's access controls and deletion paths. The
-line now carries only the score, verdict and source titles.
-
----
-
-## Still open, from the privacy conversation
-
-1. **No audit trail** — you cannot answer "who at J3P read my session?"
-2. **No retention policy** — nothing is ever deleted
-3. **No participant deletion path** — a deletion request needs SQL today
-4. **Participant links never expire**
-5. **360 documents contain third parties** who never consented to being in
-   the system
-
-I would take the audit trail next: for HR material, being unable to answer
-who read what is the gap most likely to matter in a dispute, and it is
-cheap to add now that scoping exists.
+1. No audit trail — "who read my session?" is unanswerable
+2. No retention policy — nothing is ever deleted
+3. No participant deletion path
+4. Participant links never expire
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-18-f`.
+`2026-09-18-g`.
 
-After deploying: Manage Users, pick a non-owner account, assign one advisor,
-sign in as them and confirm the Activity tab shows only that advisor's
-sessions.
+First search to try: something you already know the literature on, so you
+can judge the result quality before trusting it on an unfamiliar topic.

@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-f"
-APP_BUILD_NOTES = "session transcripts can be scoped to assigned advisors"
+APP_VERSION = "2026-09-18-g"
+APP_BUILD_NOTES = "PubMed and OpenAlex search for building the knowledge base"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7916,6 +7916,224 @@ ROLE_PERMISSIONS = {
         "manage_admins": False,
     },
 }
+
+
+
+# ---------------------------------------------------------------------------
+# Literature search — PubMed and OpenAlex
+# ---------------------------------------------------------------------------
+# Admin-side only, and deliberately so. Nothing a participant types goes to
+# either service: this is a tool for finding material to put *into* the
+# knowledge base, not a way for the advisor to answer from the open web.
+# That keeps the advisor grounded in J3P's own material, which is the whole
+# point of the scope guard and of the grounding check.
+#
+# Both are free and need no key. Both ask callers to identify themselves,
+# and both give better service to those who do — NCBI raises the rate limit,
+# OpenAlex routes you to a faster pool. RESEARCH_CONTACT_EMAIL sets it;
+# without one the contact address already in the config is used.
+
+PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils"
+OPENALEX_BASE = "https://api.openalex.org/works"
+
+
+def _research_contact():
+    return (os.environ.get("RESEARCH_CONTACT_EMAIL")
+            or CONFIG.get("contact_email") or "")
+
+
+def _research_get(url, timeout=12):
+    import urllib.request as _url
+    req = _url.Request(url, headers={
+        # Both services ask for a contactable agent string. Sending one is
+        # the difference between the polite pool and the throttled one.
+        "User-Agent": f"J3P-Advisor/1.0 (mailto:{_research_contact()})",
+        "Accept": "application/json, text/xml;q=0.9",
+    })
+    with _url.urlopen(req, timeout=timeout) as resp:
+        return resp.read()
+
+
+def _clean_ws(text):
+    return re.sub(r"\s+", " ", (text or "")).strip()
+
+
+def search_pubmed(query: str, limit: int = 10) -> list:
+    """Search PubMed and return records with their abstracts.
+
+    Two calls, because that is how E-utilities works: esearch returns ids,
+    efetch returns the records. esummary would be one call but carries no
+    abstract, and an abstract is the entire point — a title alone chunks
+    into nothing useful.
+    """
+    import urllib.parse as _parse
+    import xml.etree.ElementTree as _ET
+    out = []
+    try:
+        params = _parse.urlencode({
+            "db": "pubmed", "term": query, "retmax": str(limit),
+            "retmode": "json", "sort": "relevance",
+            "tool": "j3p-advisor", "email": _research_contact(),
+        })
+        data = _json.loads(_research_get(f"{PUBMED_BASE}/esearch.fcgi?{params}"))
+        ids = data.get("esearchresult", {}).get("idlist", [])
+        if not ids:
+            return []
+
+        params = _parse.urlencode({
+            "db": "pubmed", "id": ",".join(ids), "retmode": "xml",
+            "tool": "j3p-advisor", "email": _research_contact(),
+        })
+        root = _ET.fromstring(_research_get(f"{PUBMED_BASE}/efetch.fcgi?{params}"))
+
+        for art in root.findall(".//PubmedArticle"):
+            pmid = art.findtext(".//PMID") or ""
+            title = _clean_ws(" ".join(art.find(".//ArticleTitle").itertext())
+                              if art.find(".//ArticleTitle") is not None else "")
+            # Structured abstracts arrive as several labelled sections; keep
+            # the labels, they carry meaning (Background, Methods, Results).
+            parts = []
+            for node in art.findall(".//Abstract/AbstractText"):
+                label = node.get("Label")
+                body = _clean_ws(" ".join(node.itertext()))
+                if body:
+                    parts.append(f"{label}: {body}" if label else body)
+            abstract = "\n\n".join(parts)
+            journal = _clean_ws(art.findtext(".//Journal/Title") or "")
+            year = (art.findtext(".//JournalIssue/PubDate/Year")
+                    or art.findtext(".//JournalIssue/PubDate/MedlineDate") or "")[:4]
+            authors = []
+            for a in art.findall(".//AuthorList/Author")[:6]:
+                last, initials = a.findtext("LastName"), a.findtext("Initials")
+                if last:
+                    authors.append(f"{last} {initials or ''}".strip())
+            doi = ""
+            for ident in art.findall(".//ArticleId"):
+                if ident.get("IdType") == "doi":
+                    doi = ident.text or ""
+            out.append({
+                "source": "PubMed", "id": pmid, "title": title,
+                "abstract": abstract, "journal": journal, "year": year,
+                "authors": authors, "doi": doi,
+                "url": f"https://pubmed.ncbi.nlm.nih.gov/{pmid}/",
+            })
+    except Exception as e:
+        app.logger.error(f"[research] PubMed search failed: {e}")
+    return out
+
+
+def _openalex_abstract(inverted):
+    """OpenAlex stores abstracts as {word: [positions]} rather than as text.
+
+    Rebuilding it is the only way to get a usable abstract out, and an
+    abstract is what makes a record worth ingesting at all.
+    """
+    if not inverted:
+        return ""
+    slots = {}
+    for word, positions in inverted.items():
+        for pos in positions:
+            slots[pos] = word
+    return _clean_ws(" ".join(slots[k] for k in sorted(slots)))
+
+
+def search_openalex(query: str, limit: int = 10) -> list:
+    import urllib.parse as _parse
+    out = []
+    try:
+        params = _parse.urlencode({
+            "search": query, "per-page": str(limit),
+            "mailto": _research_contact(),
+        })
+        data = _json.loads(_research_get(f"{OPENALEX_BASE}?{params}"))
+        for w in data.get("results", []):
+            authors = [a.get("author", {}).get("display_name", "")
+                       for a in (w.get("authorships") or [])[:6]]
+            venue = ((w.get("primary_location") or {}).get("source") or {}
+                     ).get("display_name") or ""
+            out.append({
+                "source": "OpenAlex",
+                "id": (w.get("id") or "").rsplit("/", 1)[-1],
+                "title": _clean_ws(w.get("title") or w.get("display_name") or ""),
+                "abstract": _openalex_abstract(w.get("abstract_inverted_index")),
+                "journal": venue,
+                "year": str(w.get("publication_year") or ""),
+                "authors": [a for a in authors if a],
+                "doi": (w.get("doi") or "").replace("https://doi.org/", ""),
+                "url": w.get("doi") or w.get("id") or "",
+                "cited_by": w.get("cited_by_count") or 0,
+                "open_access": bool((w.get("open_access") or {}).get("is_oa")),
+            })
+    except Exception as e:
+        app.logger.error(f"[research] OpenAlex search failed: {e}")
+    return out
+
+
+def run_literature_search(query: str, sources) -> list:
+    """Both services, merged, de-duplicated on DOI.
+
+    The same paper is routinely in both. Preferring the PubMed copy is not
+    arbitrary: its abstracts are cleaner, and structured ones keep their
+    section labels, which chunk better than a rebuilt word-position blob.
+    """
+    results = []
+    if "pubmed" in sources:
+        results += search_pubmed(query)
+    if "openalex" in sources:
+        results += search_openalex(query)
+
+    seen_doi, seen_title, merged = set(), set(), []
+    for r in sorted(results, key=lambda x: 0 if x["source"] == "PubMed" else 1):
+        doi = (r.get("doi") or "").lower().strip()
+        key_title = _clean_ws(r["title"]).lower()[:120]
+        if doi and doi in seen_doi:
+            continue
+        if key_title and key_title in seen_title:
+            continue
+        if doi:
+            seen_doi.add(doi)
+        if key_title:
+            seen_title.add(key_title)
+        merged.append(r)
+    return merged
+
+
+@app.route("/admin/research/ingest", methods=["POST"])
+@require_permission("edit_knowledge")
+def admin_ingest_research():
+    """Put one search result into the knowledge base.
+
+    Only the abstract is stored — not the full paper. That is what the APIs
+    return, it is what is unambiguously free to hold, and it is the part
+    that carries the finding. The citation and link go in with it so an
+    advisor's answer can be traced back to the source.
+    """
+    title = (request.form.get("title") or "").strip()[:300]
+    abstract = (request.form.get("abstract") or "").strip()
+    citation = (request.form.get("citation") or "").strip()
+    url = (request.form.get("url") or "").strip()
+    owner = (request.form.get("owner") or "").strip()
+    if not title or not abstract:
+        flash("That result has no abstract to add.")
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
+    if db.find_duplicate_document(title=title):
+        flash(f"⚠ '{title[:60]}' is already in the knowledge base.")
+        return redirect(url_for("admin_dashboard", tab="knowledge"))
+    try:
+        body = f"{title}\n\n{citation}\n{url}\n\n{abstract}".strip()
+        chunks = emb.chunk_text(body)
+        if not chunks:
+            flash("That abstract produced no chunks.")
+            return redirect(url_for("admin_dashboard", tab="knowledge"))
+        vectors = emb.embed_batch(chunks)
+        doc_id = db.insert_document(title, url or "literature search",
+                                    list(zip(chunks, vectors)))
+        set_document_owner(title, owner)
+        flash(f"✓ Added '{title[:60]}' — {len(chunks)} chunks (doc #{doc_id}).")
+    except Exception as e:
+        app.logger.error(f"[research] ingest failed: {e}")
+        flash(f"Could not add that paper: {str(e)[:160]}")
+    return redirect(url_for("admin_dashboard", tab="knowledge"))
 
 
 def _admin_users_ensure_table(conn):
@@ -17751,6 +17969,85 @@ tbody tr:hover td { background: var(--N10); }
   <h2 class="group-heading">Knowledge Base</h2>
 
   <div class="section">
+    <h2>Find research</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      Searches PubMed and OpenAlex for papers to add to the knowledge base.
+      Nothing a participant asks is ever sent to either service — this is for
+      building the corpus, not for answering from the open web. Abstracts are
+      stored, not full papers.
+    </p>
+    <form method="GET" action="/admin" style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+      <input type="hidden" name="tab" value="knowledge" />
+      <input type="text" name="research" value="{{ research_query }}"
+             placeholder="e.g. physician leadership burnout intervention"
+             style="flex: 1 1 320px; padding: 0.5rem; border: 1px solid var(--line);
+                    border-radius: 2px; font-family: inherit;" />
+      <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;">
+        <input type="checkbox" name="src" value="pubmed"
+               {% if "pubmed" in research_sources %}checked{% endif %} /> PubMed
+      </label>
+      <label style="display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem;">
+        <input type="checkbox" name="src" value="openalex"
+               {% if "openalex" in research_sources %}checked{% endif %} /> OpenAlex
+      </label>
+      <button type="submit" class="btn">Search</button>
+    </form>
+
+    {% if research_query %}
+      {% if research_results %}
+      <p class="muted" style="margin: 1.2rem 0 0.6rem; font-size: 0.82rem;">
+        {{ research_results|length }} result{{ 's' if research_results|length != 1 }}
+        for "{{ research_query }}". Duplicates across both sources are merged.
+      </p>
+      {% for r in research_results %}
+      <div style="padding: 0.9rem 0; border-bottom: 1px solid var(--N40);">
+        <div style="display: flex; gap: 0.6rem; align-items: baseline; flex-wrap: wrap;">
+          <span class="advisor-chip {{ 'info' if r.source == 'PubMed' else 'on' }}">{{ r.source }}</span>
+          <strong style="flex: 1 1 320px; font-size: 0.95rem;">{{ r.title }}</strong>
+        </div>
+        <p class="muted" style="margin: 0.35rem 0 0; font-size: 0.8rem;">
+          {{ r.authors|join(", ") }}{% if r.authors %} · {% endif %}
+          {{ r.journal }}{% if r.year %} ({{ r.year }}){% endif %}
+          {% if r.cited_by %} · cited {{ r.cited_by }}×{% endif %}
+          {% if r.open_access %} · open access{% endif %}
+          {% if r.url %} · <a href="{{ r.url }}" target="_blank" rel="noopener" class="adv-link">source</a>{% endif %}
+        </p>
+        {% if r.abstract %}
+        <p style="margin: 0.5rem 0 0; font-size: 0.85rem; line-height: 1.6;">
+          {{ r.abstract[:420] }}{% if r.abstract|length > 420 %}…{% endif %}
+        </p>
+        {% endif %}
+        {% if admin_perms.edit_knowledge %}
+        <form method="POST" action="/admin/research/ingest"
+              style="margin: 0.6rem 0 0; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+          <input type="hidden" name="title" value="{{ r.title }}" />
+          <input type="hidden" name="abstract" value="{{ r.abstract }}" />
+          <input type="hidden" name="url" value="{{ r.url }}" />
+          <input type="hidden" name="citation"
+                 value="{{ r.authors|join(', ') }}. {{ r.journal }} {{ r.year }}.{% if r.doi %} doi:{{ r.doi }}{% endif %}" />
+          <select name="owner" style="padding: 0.35rem; font-family: inherit; font-size: 0.8rem;
+                                      border: 1px solid var(--line); border-radius: 2px;">
+            <option value="">Shared with all advisors</option>
+            {% for a in advisors %}<option value="{{ a.slug }}">{{ a.name }} only</option>{% endfor %}
+          </select>
+          <button type="submit" class="copy-link"
+                  {% if not r.abstract %}disabled title="No abstract to add"{% endif %}>
+            Add to knowledge base
+          </button>
+        </form>
+        {% endif %}
+      </div>
+      {% endfor %}
+      {% else %}
+      <p class="muted" style="margin: 1.2rem 0 0;">
+        Nothing found for "{{ research_query }}", or both services were
+        unreachable — the deploy log records which.
+      </p>
+      {% endif %}
+    {% endif %}
+  </div>
+
+  <div class="section">
     <h2>Documents</h2>
     <p class="muted" style="margin: 0 0 1rem 0;">
       {{ docs|length }} document{{ 's' if docs|length != 1 else '' }} embedded and
@@ -18957,6 +19254,14 @@ def admin_dashboard():
     emb_ok = emb.is_enabled()
     rag_ready = db_ok and emb_ok
     # 488ms, and Activity, Settings, Users and Biometric never look at it.
+    # Literature search runs only when asked, and only on Knowledge.
+    research_query = (request.args.get("research") or "").strip()
+    research_sources = request.args.getlist("src") or ["pubmed", "openalex"]
+    research_results = []
+    if research_query and active_tab == "knowledge" and has_permission("view_knowledge"):
+        research_results = run_literature_search(research_query, research_sources)
+        _phase_mark("literature search")
+
     _wants_docs = active_tab in ("overview", "knowledge", "advisors", "diagnostics")
     docs = db.list_documents() if (db_ok and _wants_docs) else []
     _phase_mark("list_documents")
@@ -19081,6 +19386,8 @@ def admin_dashboard():
     html = _cached_render(
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
         app_build_notes=APP_BUILD_NOTES,
+        research_query=research_query, research_results=research_results,
+        research_sources=research_sources,
         first_request_boot_ms=FIRST_REQUEST_BOOT_MS,
         diag={
             "persistent_conns": _PERSISTENT_CONNS_ENABLED,
