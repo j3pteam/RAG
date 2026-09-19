@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-e"
-APP_BUILD_NOTES = "Activity sections collapse; each opens on click"
+APP_VERSION = "2026-09-19-f"
+APP_BUILD_NOTES = "all four Activity sections collapse, log included"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -17665,9 +17665,14 @@ details.section[open] > summary {
 
   <h2 class="group-heading">Logs</h2>
 
-  <div class="section">
-    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
-      <h2 style="margin: 0; border: none; padding: 0;">Conversation Log</h2>
+  <details class="section">
+    <summary>
+      <h2>Conversation Log</h2>
+      <span class="section-note">
+        {{ feedback_rows|length }} record{{ 's' if feedback_rows|length != 1 }}{% if log_limit != 25 %} (full history){% endif %}{% if log_persona %} · {{ log_persona }}{% endif %}
+      </span>
+    </summary>
+    <div style="display: flex; justify-content: flex-end; align-items: center; margin-bottom: 1rem; padding-bottom: 0.6rem; border-bottom: 1px solid var(--line); flex-wrap: wrap; gap: 0.5rem;">
       <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <form method="GET" action="/admin" style="display: inline-flex; gap: 0.4rem; align-items: center; margin: 0;">
           <label for="filter-select" style="font-size: 0.78rem; color: var(--muted);">Show:</label>
@@ -18046,7 +18051,7 @@ details.section[open] > summary {
     {% else %}
     <p class="muted">No feedback yet.</p>
     {% endif %}
-  </div>
+  </details>
   </div>
   {% endif %}
 

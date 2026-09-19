@@ -1,43 +1,39 @@
-# J3P Advisor — build 2026-09-19-e
+# J3P Advisor — build 2026-09-19-f
 
-`app.py`, plus the pre-deploy checks (`check.sh` and its three helpers).
+`app.py`, plus the pre-deploy checks.
 
-**Includes the Activity 500 fix from `-d`.** Deploy this.
+**Includes the Activity 500 fix from `-d`.**
 
 ---
 
-## Activity collapses into four sections
+## The conversation log collapses too
 
-The tab was four unrelated things stacked vertically — ratings, the
-learning engine, briefings, and a 25-row conversation log — so reaching any
-one of them meant scrolling past the others.
-
-Each is now a section that opens on click, with its headline figure in the
-header so a closed section still answers the question you opened it to ask:
+`-e` collapsed three of the four Activity sections and left the log — the
+longest one — permanently open, which rather defeated the point. All four
+now behave the same:
 
 ```
-▸ Ratings                  36 rated · 86% helpful
+▾ Ratings                  36 rated · 86% helpful
 ▸ Continuous Learning      on — every 24h, last run Sep 18
 ▸ Briefings — Main Link    1 waiting
 ▸ Conversation Log         25 records
 ```
 
-Ratings stays open by default — four numbers, no scrolling cost, and it is
-the thing people glance at. The rest start closed. The chevron, hover
-behaviour and spacing match the advisor cards, so the two tabs now behave
-the same way.
+The summary reflects what you are actually looking at — it reads
+"25 records (full history)" after clicking Show full history, and names the
+advisor when the log is filtered to one.
 
-## A stray tag, found by a new check
+**The filter and export controls moved below the header.** They sat in the
+same row as the title, and a `<summary>` swallows clicks on anything inside
+it — so picking an advisor from the dropdown would have collapsed the
+section instead. They are in the section body now, right-aligned above the
+table.
 
-While verifying the markup I added an HTML well-formedness check across all
-eight tabs. It immediately found a pre-existing fault in **Settings**: the
-Participant Access form closes its `<label>` twice, a leftover from an
-earlier edit. Browsers silently absorb that, which is why it survived every
-visual review. Removed.
+Ratings stays open by default. The rest start closed.
 
 ---
 
-## The pre-deploy checks now run four things
+## Verification
 
 ```
 $ ./check.sh
@@ -47,25 +43,27 @@ $ ./check.sh
 4/4  rendered HTML is well-formed      ok
 ```
 
-Each exists because something shipped broken without it:
+All eight tabs render with balanced tags, and the four Activity sections
+were confirmed by inspecting the rendered markup rather than by eye.
 
-| Check | Caught |
-|---|---|
-| `ast.parse` | syntax only — caught none of this week's failures |
-| pyflakes | the Activity 500, the `UnboundLocalError` in advisor scoping, an oversized-upload 500 that predates me |
-| `import_order_check.py` | the decorator that stopped every gunicorn worker booting |
-| `tagcheck.py` | the duplicate `</label>` in Settings |
+---
 
-Needs `pip install pyflakes` once. Takes about two seconds. Run it before
-every deploy — I am.
+## From -e
+
+Activity sections made collapsible, and a stray duplicate `</label>` in the
+Settings tab removed — a pre-existing fault the new HTML check found on its
+first run.
+
+## From -d
+
+The Activity 500 (`personality_summary`, `personality_tips` and `locations`
+referenced as variables when they were only ever inline arguments), an
+`UnboundLocalError` in the advisor-scoping code, and a pre-existing
+oversized-upload 500.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-19-e`.
-
-`check.sh`, `import_order_check.py`, `tagcheck.py` and `render_test.py` are
-development tools rather than part of the app. Committing them is optional,
-but it is how the checks are there next time.
+`2026-09-19-f`.
