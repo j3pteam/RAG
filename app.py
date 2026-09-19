@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-c"
-APP_BUILD_NOTES = "conversation log is readable: one-line locations, no empty columns"
+APP_VERSION = "2026-09-19-d"
+APP_BUILD_NOTES = "fixes the Activity 500 and two other undefined names"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -12172,7 +12172,7 @@ def chat():
             file_bytes = uploaded_file.read()
             if len(file_bytes) > MAX_UPLOAD_BYTES:
                 return jsonify({
-                    "error": f"{filename} is too large "
+                    "error": f"{uploaded_file.filename or 'That file'} is too large "
                              f"({len(file_bytes) / 1048576:.0f} MB). "
                              f"Limit is {MAX_UPLOAD_MB} MB per file."
                 }), 400
@@ -19300,6 +19300,10 @@ def admin_dashboard():
     # Second, independent filter — which advisor's sessions to show.
     # "" (All advisors) means no persona filter at all.
     log_personas = db.list_feedback_personas() if (db_ok and want_activity) else []
+    # Needed by the scope check below, so it is loaded before it, not after.
+    _advisor_rows = list_advisors()
+    _phase_mark("list_advisors")
+
     # An account restricted to certain advisors sees only those in the
     # filter, and cannot reach the others by editing the URL.
     _log_scope = admin_advisor_scope()
@@ -19348,8 +19352,6 @@ def admin_dashboard():
     _advisor_map = (document_advisor_map()
                     if active_tab in ("knowledge", "advisors") else {})
     _phase_mark("document_advisor_map")
-    _advisor_rows = list_advisors()
-    _phase_mark("list_advisors")
     _advisor_names = {a["slug"]: a["name"] for a in _advisor_rows}
     _advisor_docs = {}
     for d in docs:
@@ -19413,15 +19415,30 @@ def admin_dashboard():
                          "with_sample": {}, "advisors_without_sample": []})
     _phase_mark("page-specific lookups")
 
+    _row_ids = [r.get("id") for r in feedback_rows]
+    _locations = locations_for(_row_ids)
+    _acks = acknowledgements_for(_row_ids)
+    _personality_notes = {
+        iid: personality_interpretation_lines(scores)
+        for iid, scores in _personality_by_interaction.items()
+    }
+    _personality_summary = {
+        iid: personality_summary_tag(scores)
+        for iid, scores in _personality_by_interaction.items()
+    }
+    _personality_tips = {
+        iid: personality_interaction_tips(scores)
+        for iid, scores in _personality_by_interaction.items()
+    }
+    _phase_mark("log annotations")
+
     html = _cached_render(
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
         app_build_notes=APP_BUILD_NOTES,
         short_location=short_location,
-        show_personality_col=any(personality_summary.get(f["id"])
-                                 for f in feedback_rows),
-        show_tips_col=any(personality_tips.get(f["id"])
-                          for f in feedback_rows),
-        show_location_col=any(locations.get(f["id"]) for f in feedback_rows),
+        show_personality_col=any(_personality_summary.get(i) for i in _row_ids),
+        show_tips_col=any(_personality_tips.get(i) for i in _row_ids),
+        show_location_col=any(_locations.get(i) for i in _row_ids),
         research_query=research_query, research_results=research_results,
         research_sources=research_sources,
         first_request_boot_ms=FIRST_REQUEST_BOOT_MS,
@@ -19462,20 +19479,11 @@ def admin_dashboard():
         archived_runs=_archived_runs,
         learning_interval=LEARNING_INTERVAL_HOURS,
         app_version=APP_VERSION,
-        locations=locations_for([r.get("id") for r in feedback_rows]),
-        acks=acknowledgements_for([r.get("id") for r in feedback_rows]),
-        personality_notes={
-            iid: personality_interpretation_lines(scores)
-            for iid, scores in _personality_by_interaction.items()
-        },
-        personality_summary={
-            iid: personality_summary_tag(scores)
-            for iid, scores in _personality_by_interaction.items()
-        },
-        personality_tips={
-            iid: personality_interaction_tips(scores)
-            for iid, scores in _personality_by_interaction.items()
-        },
+        locations=_locations,
+        acks=_acks,
+        personality_notes=_personality_notes,
+        personality_summary=_personality_summary,
+        personality_tips=_personality_tips,
         base_url=public_base_url(),
         stats=stats, rag_ready=rag_ready, db_ok=db_ok, emb_ok=emb_ok,
         log_filter=log_filter,
