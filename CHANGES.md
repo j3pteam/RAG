@@ -1,87 +1,82 @@
-# J3P Advisor — build 2026-09-18-d
+# J3P Advisor — build 2026-09-18-f
 
 One file: `app.py`. Replaces the existing one in `j3pteam/RAG`.
 
----
-
-## Replies are checked back against the knowledge base
-
-The flow is now **question → retrieval → model → retrieval**.
-
-The first pass was already there: every message is embedded, searched
-against the knowledge base, and the matching material is handed to the
-model. What was missing is any check that the model *used* it. An answer
-can be fluent, on-topic and entirely unsupported, and that is precisely the
-failure you cannot spot by reading replies one at a time.
-
-The second pass re-embeds the model's own answer, searches the same
-knowledge base with it, and records how well the result backs it up.
-
-| Top similarity | Verdict |
-|---|---|
-| 0.60 and above | well supported |
-| 0.45 to 0.59 | loosely supported |
-| below 0.45 | not supported by the knowledge base |
-| no chunks returned | nothing in the knowledge base is close |
-
-The threshold sits below the one used for the question itself, deliberately.
-A coaching answer legitimately contains framing, structure and phrasing that
-appear nowhere in the source documents; demanding the same similarity as a
-retrieval query would flag every reply and the signal would be worthless.
-
-### Two decisions worth disagreeing with if you want
-
-**The reply is never changed.** A similarity score is not a good enough
-reason to rewrite coaching advice — a rewrite driven by a number would do
-more damage than the ungrounded answer it was fixing. The check makes the
-pattern visible and leaves the judgement with a person. If you want it to
-intervene, that is a different build and worth deciding deliberately.
-
-**It runs after the reply has been sent**, on a background thread. It costs
-the participant nothing — no added wait, and a failure in the check can
-never affect the conversation it is checking. Given how hard the last two
-days of latency work were, spending 1–3 seconds of a participant's time on
-a check they never see would have been a poor trade.
-
-### Where to see it
-
-Diagnostics → **Answer grounding**: replies checked, and the split across
-well supported, loosely supported and not supported, plus the twelve most
-recent with their question, advisor, verdict and score.
-
-Counters are per worker and reset on deploy, so they are indicative. The
-record is in the deploy logs — every check writes a `[grounding]` line, at
-warning level when a reply is not well supported, with the question and the
-source documents that came closest.
-
-**What to do with a run of "not supported":** it usually means the knowledge
-base has a gap on that topic rather than that the model invented something.
-The recent list names the questions, which is the useful part — those are
-the documents worth adding.
+Includes the `-e` log fix, so deploy this whether or not you took that one.
 
 ---
 
-## From build 2026-09-18-c
+## Session transcripts can be scoped to assigned advisors
 
-The booking button became a setting instead of two URLs: a per-advisor
-control (follow the site, always show, always hide) and a per-participant
--link override. Existing `/scheduling` and `/no-scheduling` links still work
-and still win.
+Before this, `view_conversation_log` was `True` for **owner, admin and
+viewer alike**, with no per-advisor filtering anywhere. Any account of any
+role could read every session with every participant across every advisor.
+For psychological assessment and employment material, with client
+organisations sometimes being the participant's own employer, that default
+was not defensible.
 
-## From earlier
+**Manage Users now has a "Sessions they can read" column.** Select one or
+more advisors and that account sees only those sessions. Select none — the
+default, and what every existing account keeps — and nothing changes for
+them.
 
-Conversation log filters staying on Activity (`-b`). The booking button
-naming the advisor (`-a`). Queries hoisted out of the render call and gated
-by tab (`-m`). Diagnostics tab (`-l`). The advisor on the page being the
-advisor that answers, plus the voice-sample work.
+Enforcement is in two places, deliberately:
+
+- The advisor filter on the Activity tab lists only advisors in scope, so
+  an out-of-scope advisor cannot be reached by editing the URL.
+- Rows are filtered again after the query, so an account viewing "all
+  advisors" still only sees its own. Applied in the route rather than
+  inside SQL, so the rule is readable where it is enforced.
+
+Verified: unrestricted accounts see all four test sessions; an account
+scoped to one advisor sees one; scoped to two sees two.
+
+**Owners are never scoped.** Someone has to be able to see everything, and
+hiding data from the account that administers the system is containment in
+appearance rather than in fact.
+
+**One behaviour worth knowing:** sessions on the default persona belong to
+no advisor, so they fall outside every scope and a restricted account will
+not see them. That is the safe direction, but it means a scoped coach will
+not see main-link sessions even if you expected them to.
+
+## Existing accounts are unaffected
+
+The column defaults to empty, which means unrestricted. Nobody loses access
+on deploy. Scoping is something you turn on per person.
+
+---
+
+## Also in this build (from -e)
+
+**Participant text no longer goes into the deploy logs.** The grounding
+check in `-d` wrote each participant's question into the application log.
+Deploy logs are retained by the host, readable by anyone with project
+access, and outside the database's access controls and deletion paths. The
+line now carries only the score, verdict and source titles.
+
+---
+
+## Still open, from the privacy conversation
+
+1. **No audit trail** — you cannot answer "who at J3P read my session?"
+2. **No retention policy** — nothing is ever deleted
+3. **No participant deletion path** — a deletion request needs SQL today
+4. **Participant links never expire**
+5. **360 documents contain third parties** who never consented to being in
+   the system
+
+I would take the audit trail next: for HR material, being unable to answer
+who read what is the gap most likely to matter in a dispute, and it is
+cheap to add now that scoping exists.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-18-d`.
+`2026-09-18-f`.
 
-Send a few messages, then open Diagnostics → Answer grounding. If everything
-lands in "not supported", tell me the scores — the thresholds are a starting
-point calibrated on reasoning, not on your corpus, and they may need moving.
+After deploying: Manage Users, pick a non-owner account, assign one advisor,
+sign in as them and confirm the Activity tab shows only that advisor's
+sessions.

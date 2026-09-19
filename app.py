@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-18-d"
-APP_BUILD_NOTES = "replies are checked back against the knowledge base"
+APP_VERSION = "2026-09-18-f"
+APP_BUILD_NOTES = "session transcripts can be scoped to assigned advisors"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -7818,6 +7818,66 @@ def set_advisor_expertise(slug: str, expertise: str) -> bool:
 
 ADMIN_ROLES = ("owner", "admin", "viewer")
 
+def set_admin_advisor_scope(user_id: int, slugs) -> bool:
+    """Restrict an account to these advisors' sessions. Empty list removes
+    the restriction."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    value = ",".join(sorted({s.strip() for s in slugs if s and s.strip()}))
+    try:
+        _admin_users_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE admin_users SET advisor_scope = %s WHERE id = %s",
+                        (value, user_id))
+            changed = cur.rowcount
+        conn.commit()
+        app.logger.info(f"[admin-users] scope for #{user_id}: "
+                        f"{value or 'all advisors'}")
+        return changed > 0
+    except Exception as e:
+        app.logger.error(f"[admin-users] scope update failed: {e}")
+        return False
+    finally:
+        conn.close()
+
+
+def admin_advisor_scope(identity=None):
+    """Advisor slugs this account may read sessions for, or None for all.
+
+    Sessions are psychological and employment material. An account brought
+    in to support one engagement has no business reading another's, and
+    until now every role — owner, admin and viewer alike — could read every
+    transcript from every advisor. Empty scope means unrestricted, which is
+    what every existing account has, so turning this on is a deliberate act
+    per person rather than something that silently changes access.
+
+    Owners are never scoped: someone has to be able to see everything, and
+    hiding data from the account that administers the system produces a
+    false sense of containment rather than real containment.
+    """
+    if current_admin_role() == "owner":
+        return None
+    ident = identity if identity is not None else current_admin_identity()
+    raw = (ident or {}).get("advisor_scope") or ""
+    slugs = [x.strip() for x in raw.split(",") if x.strip()]
+    return slugs or None
+
+
+def scope_conversation_rows(rows, scope, advisor_names):
+    """Drop sessions belonging to advisors outside this account's scope.
+
+    Filtered here rather than in SQL because the log's persona column holds
+    the advisor's display name while scope holds slugs, and because a filter
+    that is wrong in the database is invisible — this one can be read.
+    """
+    if scope is None:
+        return rows
+    allowed = {advisor_names.get(slug, slug) for slug in scope}
+    allowed |= set(scope)
+    return [r for r in rows if (r.get("persona") or "") in allowed]
+
+
 ROLE_PERMISSIONS = {
     "owner": {
         "view_knowledge": True, "edit_knowledge": True,
@@ -7861,6 +7921,7 @@ ROLE_PERMISSIONS = {
 def _admin_users_ensure_table(conn):
     if _already_ensured("admin_users"):
         return
+    # advisor_scope is added further down, after the table exists.
     with conn.cursor() as cur:
         cur.execute("""
             CREATE TABLE IF NOT EXISTS admin_users (
@@ -7874,6 +7935,10 @@ def _admin_users_ensure_table(conn):
                 last_login_at TIMESTAMPTZ
             )
         """)
+        # Comma-separated advisor slugs this account may read sessions for.
+        # Empty is unrestricted, which is what every existing account keeps.
+        cur.execute("ALTER TABLE admin_users ADD COLUMN IF NOT EXISTS "
+                    "advisor_scope TEXT")
     conn.commit()
 
 
@@ -7938,13 +8003,15 @@ def list_admin_users() -> list:
         _admin_users_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, email, name, role, enabled, created_at, last_login_at
+                SELECT id, email, name, role, enabled, created_at, last_login_at,
+                       COALESCE(advisor_scope, '')
                 FROM admin_users ORDER BY created_at ASC
             """)
             for row in cur.fetchall():
                 out.append({"id": row[0], "email": row[1], "name": row[2],
                             "role": row[3], "enabled": bool(row[4]),
-                            "created_at": row[5], "last_login_at": row[6]})
+                            "created_at": row[5], "last_login_at": row[6],
+                            "advisor_scope": row[7] or ""})
     except Exception as e:
         app.logger.error(f"[admin-users] list failed: {e}")
     finally:
@@ -7962,14 +8029,16 @@ def get_admin_user(user_id):
         _admin_users_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT id, email, name, role, enabled, password_hash
+                SELECT id, email, name, role, enabled, password_hash,
+                       COALESCE(advisor_scope, '')
                 FROM admin_users WHERE id = %s
             """, (user_id,))
             row = cur.fetchone()
         if not row:
             return None
         return {"id": row[0], "email": row[1], "name": row[2], "role": row[3],
-                "enabled": bool(row[4]), "password_hash": row[5]}
+                "enabled": bool(row[4]), "password_hash": row[5],
+                "advisor_scope": row[6] or ""}
     except Exception as e:
         app.logger.error(f"[admin-users] read failed: {e}")
         return None
@@ -8117,7 +8186,8 @@ def current_admin_identity() -> dict:
         user = get_admin_user(uid)
         if user and user["enabled"]:
             return {"name": user["name"], "email": user["email"],
-                    "role": user["role"], "is_master": False}
+                    "role": user["role"], "is_master": False,
+                    "advisor_scope": user.get("advisor_scope", "")}
     return {}
 
 
@@ -11386,8 +11456,15 @@ def _check_grounding(question, answer, advisor_slug):
             bucket, verdict = "ungrounded", "not supported by the knowledge base"
 
         level = (app.logger.info if bucket == "grounded" else app.logger.warning)
-        level(f"[grounding] {verdict} (top={top:.2f}) advisor={advisor_slug or 'default'} "
-              f"q={question[:70]!r} sources={titles}")
+        # Deliberately no participant text. Deploy logs are retained by the
+        # host, readable by anyone with project access, and outside the
+        # database's access controls and deletion paths — so a participant's
+        # question must not end up in them. The score, the verdict and the
+        # source titles say everything needed to act on this; the question
+        # itself is available in the admin panel, behind a login, to people
+        # who can already read the transcript.
+        level(f"[grounding] {verdict} (top={top:.2f}) "
+              f"advisor={advisor_slug or 'default'} sources={titles}")
         _record_grounding(bucket, {
             "score": round(top, 3), "question": question[:80],
             "advisor": advisor_slug or "default", "verdict": verdict,
@@ -17062,7 +17139,8 @@ tbody tr:hover td { background: var(--N10); }
     {% if admin_users %}
     <table class="kb-table users-table">
       <tr>
-        <th>Name</th><th>Email</th><th>Role</th><th>Status</th>
+        <th>Name</th><th>Email</th><th>Role</th>
+        <th style="width: 17%;">Sessions they can read</th><th>Status</th>
         <th>Created</th><th>Last login</th><th></th>
       </tr>
       {% for u in admin_users %}
@@ -17077,6 +17155,32 @@ tbody tr:hover td { background: var(--N10); }
               <option value="owner" {% if u.role == "owner" %}selected{% endif %}>Owner</option>
             </select>
           </form>
+        </td>
+        <td>
+          {# Which advisors' sessions this account can read. Owners are
+             always unrestricted — hiding data from the account that
+             administers the system is containment in appearance only. #}
+          {% if u.role == "owner" %}
+          <span class="muted">All advisors</span>
+          {% else %}
+          <form method="POST" action="{{ url_for('admin_set_user_scope', user_id=u.id) }}"
+                style="margin: 0;">
+            <select name="advisor_scope" multiple size="3" onchange="this.form.requestSubmit()"
+                    style="width: 100%; min-width: 150px; font-family: inherit;
+                           font-size: 0.78rem; border: 1px solid var(--line);
+                           border-radius: 2px; padding: 0.2rem;">
+              {% for a in advisors %}
+              <option value="{{ a.slug }}"
+                      {% if a.slug in (u.advisor_scope or "").split(",") %}selected{% endif %}>
+                {{ a.name }}
+              </option>
+              {% endfor %}
+            </select>
+            <span class="muted" style="font-size: 0.7rem;">
+              {% if u.advisor_scope %}restricted{% else %}all advisors — select to restrict{% endif %}
+            </span>
+          </form>
+          {% endif %}
         </td>
         <td>
           {% if u.enabled %}<span style="color: #2D7D5F;">Enabled</span>
@@ -18864,6 +18968,13 @@ def admin_dashboard():
     # Second, independent filter — which advisor's sessions to show.
     # "" (All advisors) means no persona filter at all.
     log_personas = db.list_feedback_personas() if (db_ok and want_activity) else []
+    # An account restricted to certain advisors sees only those in the
+    # filter, and cannot reach the others by editing the URL.
+    _log_scope = admin_advisor_scope()
+    if _log_scope is not None:
+        _allowed = {a["name"] for a in _advisor_rows if a["slug"] in _log_scope}
+        _allowed |= set(_log_scope)
+        log_personas = [p for p in log_personas if p in _allowed]
     log_persona = request.args.get("advisor") or ""
     if log_persona not in log_personas:
         log_persona = ""
@@ -18888,6 +18999,14 @@ def admin_dashboard():
         rating=(None if log_filter == "all" else log_filter),
         persona=(log_persona or None),
     ) if (db_ok and want_activity) else []
+    # Belt and braces: even with no advisor selected, a scoped account only
+    # sees sessions from advisors it is assigned to. Applied in the route
+    # rather than inside the query, so the rule is visible where it is
+    # enforced instead of buried in SQL.
+    if _log_scope is not None and feedback_rows:
+        feedback_rows = scope_conversation_rows(
+            feedback_rows, _log_scope,
+            {a["slug"]: a["name"] for a in _advisor_rows})
     stats = db.feedback_stats() if db_ok else {"up": 0, "down": 0, "total": 0}
     _phase_mark("feedback stats + log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
@@ -20617,6 +20736,27 @@ def admin_create_user():
         flash(f"✓ Created a {role} account for {name} ({email}).")
     else:
         flash(result["error"])
+    return redirect(url_for("admin_dashboard", tab="users"))
+
+
+@app.route("/admin/users/scope/<int:user_id>", methods=["POST"])
+@require_permission("manage_admins")
+def admin_set_user_scope(user_id):
+    """Restrict which advisors' sessions an account can read."""
+    slugs = request.form.getlist("advisor_scope")
+    user = get_admin_user(user_id)
+    if not user:
+        flash("That account no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="users"))
+    if user["role"] == "owner":
+        flash("Owners always see every advisor's sessions.")
+        return redirect(url_for("admin_dashboard", tab="users"))
+    if set_admin_advisor_scope(user_id, slugs):
+        flash(f"✓ {user['name']} can now read "
+              + (f"{len(slugs)} advisor(s)' sessions." if slugs
+                 else "every advisor's sessions."))
+    else:
+        flash("Could not update that account.")
     return redirect(url_for("admin_dashboard", tab="users"))
 
 
