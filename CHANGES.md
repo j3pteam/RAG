@@ -1,87 +1,71 @@
-# J3P Advisor — build 2026-09-19-d
+# J3P Advisor — build 2026-09-19-e
 
-Files: `app.py`, plus `check.sh` and `import_order_check.py` (development
-tools — see below).
+`app.py`, plus the pre-deploy checks (`check.sh` and its three helpers).
+
+**Includes the Activity 500 fix from `-d`.** Deploy this.
 
 ---
 
-## The 500 on Activity
+## Activity collapses into four sections
 
-My fault, from `-c`. The column flags I added referenced
-`personality_summary`, `personality_tips` and `locations` as if they were
-variables. They are not — they are built inline in the argument list of the
-render call, so no name for them exists anywhere in the route. Referencing
-them raised `NameError` on every load of the Activity tab.
+The tab was four unrelated things stacked vertically — ratings, the
+learning engine, briefings, and a 25-row conversation log — so reaching any
+one of them meant scrolling past the others.
 
-They are now real locals, built before the render call. That also fixes a
-second thing: `locations_for()` and `acknowledgements_for()` are two
-database calls that were being made inside the argument list, so they were
-counted as "template render" — the same mis-attribution fixed for other
-arguments in `-m` and missed for these.
+Each is now a section that opens on click, with its headline figure in the
+header so a closed section still answers the question you opened it to ask:
 
-## Two more found in the same sweep
-
-**`_advisor_rows` used before assignment.** The transcript-scoping code
-from `-f` reads the advisor list at line 19307; the list was not loaded
-until line 19351. Any account restricted to specific advisors would have
-hit `UnboundLocalError` on the Activity tab. Owners were unaffected, which
-is why it was not visible — the scope branch does not run for them. The
-list is now loaded before the check that uses it.
-
-**An oversized upload returned a 500 instead of an explanation.** This one
-is not mine — it predates my involvement. In the chat upload handler, the
-too-large error message references `filename`, which does not exist in that
-scope:
-
-```python
-"error": f"{filename} is too large ({len(file_bytes)/1048576:.0f} MB)."
+```
+▸ Ratings                  36 rated · 86% helpful
+▸ Continuous Learning      on — every 24h, last run Sep 18
+▸ Briefings — Main Link    1 waiting
+▸ Conversation Log         25 records
 ```
 
-So a participant attaching a file over the limit got "Internal Server
-Error" rather than being told the file was too big. It now names the file
-properly.
+Ratings stays open by default — four numbers, no scrolling cost, and it is
+the thing people glance at. The rest start closed. The chevron, hover
+behaviour and spacing match the advisor cards, so the two tabs now behave
+the same way.
+
+## A stray tag, found by a new check
+
+While verifying the markup I added an HTML well-formedness check across all
+eight tabs. It immediately found a pre-existing fault in **Settings**: the
+Participant Access form closes its `<label>` twice, a leftover from an
+earlier edit. Browsers silently absorb that, which is why it survived every
+visual review. Removed.
 
 ---
 
-## Why my checks kept missing these
-
-`ast.parse` validates syntax and nothing else. Every one of these bugs is
-syntactically perfect.
-
-`check.sh` runs three things:
+## The pre-deploy checks now run four things
 
 ```
 $ ./check.sh
-1/3  syntax                            ok
-2/3  undefined names                   ok
-3/3  module-level definition order     ok
+1/4  syntax                            ok
+2/4  undefined names                   ok
+3/4  module-level definition order     ok
+4/4  rendered HTML is well-formed      ok
 ```
 
-- **pyflakes** catches undefined names anywhere, including inside
-  functions. It would have caught today's 500, the `UnboundLocalError`, and
-  the pre-existing upload bug.
-- **import_order_check.py** catches names used at module level before they
-  are defined — the decorator that stopped every worker booting.
+Each exists because something shipped broken without it:
 
-Needs `pip install pyflakes` once. Run `./check.sh` before each deploy; it
-takes about a second. I am running all three on every build from here.
+| Check | Caught |
+|---|---|
+| `ast.parse` | syntax only — caught none of this week's failures |
+| pyflakes | the Activity 500, the `UnboundLocalError` in advisor scoping, an oversized-upload 500 that predates me |
+| `import_order_check.py` | the decorator that stopped every gunicorn worker booting |
+| `tagcheck.py` | the duplicate `</label>` in Settings |
 
----
-
-## Also in this build
-
-Conversation log cleaned up (`-c`): one-line locations — "New York, NY"
-rather than five wrapped lines — empty Personality and How-to-interact
-columns dropped, and the question and reply columns given the space back.
-
-The import fix (`-b`) and the healthcheck fix (`-a`).
+Needs `pip install pyflakes` once. Takes about two seconds. Run it before
+every deploy — I am.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-19-d`.
+`2026-09-19-e`.
 
-`check.sh` and `import_order_check.py` are development tools, not part of
-the app. Committing them is optional but means they are there next time.
+`check.sh`, `import_order_check.py`, `tagcheck.py` and `render_test.py` are
+development tools rather than part of the app. Committing them is optional,
+but it is how the checks are there next time.

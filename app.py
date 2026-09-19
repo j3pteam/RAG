@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-d"
-APP_BUILD_NOTES = "fixes the Activity 500 and two other undefined names"
+APP_VERSION = "2026-09-19-e"
+APP_BUILD_NOTES = "Activity sections collapse; each opens on click"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -15828,6 +15828,50 @@ tbody tr:hover td { background: var(--N10); }
 @media (prefers-reduced-motion: reduce) {
   .advisor-block > summary::after { transition: none; }
 }
+/* ===========================================================================
+   Collapsible sections (Activity)
+   =========================================================================== */
+details.section > summary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-150);
+  flex-wrap: wrap;
+  position: relative;
+  padding-right: var(--sp-400);
+  margin: 0;
+}
+details.section > summary::-webkit-details-marker,
+details.section > summary::marker { display: none; content: ""; }
+details.section > summary h2 {
+  margin: 0; border: none; padding: 0;
+}
+details.section > summary .section-note {
+  font-size: 0.82rem;
+  color: var(--N200);
+  font-weight: 400;
+}
+details.section > summary::after {
+  content: "";
+  position: absolute;
+  right: 2px; top: 0.45rem;
+  width: 9px; height: 9px;
+  border-right: 2px solid var(--N200);
+  border-bottom: 2px solid var(--N200);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+details.section[open] > summary::after { transform: rotate(45deg); }
+details.section > summary:hover::after { border-color: var(--N800); }
+details.section[open] > summary {
+  padding-bottom: var(--sp-150);
+  margin-bottom: var(--sp-200);
+  border-bottom: 1px solid var(--N40);
+}
+@media (prefers-reduced-motion: reduce) {
+  details.section > summary::after { transition: none; }
+}
 </style></head><body>
 <div class="admin-shell">
 <aside class="admin-sidebar">
@@ -17292,7 +17336,6 @@ tbody tr:hover td { background: var(--N10); }
         </span>
       </label>
 
-      </label>
 
       <button type="submit" class="btn" style="margin-top: 1rem;">Save</button>
     </form>
@@ -17460,8 +17503,14 @@ tbody tr:hover td { background: var(--N10); }
   <div class="tab-pane" data-tab="activity">
   <h2 class="group-heading">Feedback</h2>
 
-  <div class="section">
-    <h2>Ratings</h2>
+  <details class="section" open>
+    <summary>
+      <h2>Ratings</h2>
+      <span class="section-note">
+        {{ stats.total }} rated{% if stats.total %} ·
+        {{ (100 * stats.up / stats.total)|round(0)|int }}% helpful{% endif %}
+      </span>
+    </summary>
     <div class="stats">
       <div class="stat">
         <div class="stat-value">{{ stats.up }}</div>
@@ -17482,10 +17531,16 @@ tbody tr:hover td { background: var(--N10); }
         <div class="stat-label">Helpful rate</div>
       </div>
     </div>
-  </div>
+  </details>
 
-  <div class="section">
-    <h2>Continuous Learning</h2>
+  <details class="section">
+    <summary>
+      <h2>Continuous Learning</h2>
+      <span class="section-note">
+        {{ "on — every " ~ learning_interval ~ "h" if settings.auto_learning else "off" }}{% if learning_runs %},
+        last run {{ learning_runs[0].created_at.strftime("%b %-d") if learning_runs[0].created_at else "" }}{% endif %}
+      </span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0; font-size: 0.87rem; line-height: 1.6;">
       Rated exchanges become lessons the advisor sees whenever a similar
       question comes up again. A <strong>thumbs up</strong> teaches it the shape
@@ -17554,12 +17609,17 @@ tbody tr:hover td { background: var(--N10); }
         View archive{% if archived_runs %} ({{ archived_runs }}){% endif %}
       </a>
     </div>
-  </div>
+  </details>
 
   <h2 class="group-heading">Pre-Call Briefings</h2>
 
-  <div class="section">
-    <h2>Briefings — Main Link</h2>
+  <details class="section">
+    <summary>
+      <h2>Briefings — Main Link</h2>
+      <span class="section-note">
+        {{ briefings|length }} waiting
+      </span>
+    </summary>
     <p class="muted" style="margin: 0 0 1rem 0;">
       When a participant books time, a short brief on what they've been working
       through is prepared for the advisor.
@@ -17601,7 +17661,7 @@ tbody tr:hover td { background: var(--N10); }
     <p class="muted">No briefings yet. One is prepared each time a participant
       continues to scheduling.</p>
     {% endif %}
-  </div>
+  </details>
 
   <h2 class="group-heading">Logs</h2>
 
