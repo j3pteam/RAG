@@ -197,8 +197,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-b"
-APP_BUILD_NOTES = "fixes the import error that stopped the worker booting"
+APP_VERSION = "2026-09-19-c"
+APP_BUILD_NOTES = "conversation log is readable: one-line locations, no empty columns"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -13311,6 +13311,50 @@ def feedback():
     return jsonify({"ok": True})
 
 
+_US_STATES = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN",
+    "mississippi": "MS", "missouri": "MO", "montana": "MT", "nebraska": "NE",
+    "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ",
+    "new mexico": "NM", "new york": "NY", "north carolina": "NC",
+    "north dakota": "ND", "ohio": "OH", "oklahoma": "OK", "oregon": "OR",
+    "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA",
+    "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC",
+}
+
+
+def short_location(value: str) -> str:
+    """"New York, New York, United States" -> "New York, NY".
+
+    Geolocation returns city, region and country in full, which is three
+    times longer than the column it lands in. Collapsing a repeated city
+    and region, abbreviating US states and dropping the country when it is
+    the common one gets it onto a single line, which is what stops the row
+    from being five lines tall.
+    """
+    parts = [p.strip() for p in (value or "").split(",") if p.strip()]
+    if not parts:
+        return ""
+    country = parts[-1] if len(parts) > 2 else ""
+    is_us = country.lower() in ("united states", "usa", "us",
+                                "united states of america")
+    if is_us:
+        parts = parts[:-1]
+    if is_us and len(parts) >= 2:
+        # Abbreviate rather than de-duplicate: "New York, New York" is a
+        # real city-and-state pair, and "New York, NY" is how anyone would
+        # write it. Dropping the repeat would lose the state entirely.
+        parts[1] = _US_STATES.get(parts[1].lower(), parts[1])
+    return ", ".join(parts[:2])
+
+
 def _voice_health(advisors=None):
     """Non-secret summary of advisor voice readiness, for /health.
 
@@ -17626,7 +17670,13 @@ tbody tr:hover td { background: var(--N10); }
       <table>
         <tr>
           <th style="width: 28px;"></th>
-          <th>When</th><th>Rating</th><th>Advisor</th><th>Release</th><th>Personality</th><th>How to interact</th><th>Location</th><th>User question</th><th>Bot reply</th><th>Attachment</th><th>Comment</th>
+          <th>When</th><th>Rating</th><th>Advisor</th><th>Release</th>
+          {% if show_personality_col %}<th>Personality</th>{% endif %}
+          {% if show_tips_col %}<th>How to interact</th>{% endif %}
+          {% if show_location_col %}<th>Location</th>{% endif %}
+          <th style="width: 26%;">User question</th>
+          <th style="width: 26%;">Bot reply</th>
+          <th>Attachment</th><th>Comment</th>
           <th style="width: 60px;"></th>
         </tr>
         {% for f in feedback_rows %}
@@ -17660,18 +17710,27 @@ tbody tr:hover td { background: var(--N10); }
           </td>
           {% set _p_notes = personality_notes.get(f.id) %}
           {% set _p_tips = personality_tips.get(f.id) %}
+          {% if show_personality_col %}
           <td class="muted" style="font-size: 0.78rem; max-width: 130px;"
               title="{% if _p_notes %}{{ _p_notes|join('; ') }}{% endif %}">
             {{ personality_summary.get(f.id, '—') }}
           </td>
+          {% endif %}
+          {% if show_tips_col %}
           <td class="muted" style="font-size: 0.76rem; max-width: 170px;">
             {% if _p_tips %}
               {% for tip in _p_tips %}{{ tip }}<br />{% endfor %}
             {% else %}—{% endif %}
           </td>
-          <td class="muted" style="font-size: 0.78rem; max-width: 130px;">
-            {% if locations.get(f.id) %}{{ locations[f.id] }}{% else %}—{% endif %}
+          {% endif %}
+          {% if show_location_col %}
+          {# Single line, full value on hover — a wrapping location was
+             setting the height of every row in the table. #}
+          <td class="muted" style="font-size: 0.78rem; white-space: nowrap;"
+              title="{{ locations.get(f.id, '') }}">
+            {{ short_location(locations.get(f.id, '')) or '—' }}
           </td>
+          {% endif %}
           <td class="truncate" style="max-width: 280px;" title="{{ f.user_message }}">{{ f.user_message }}</td>
           <td class="truncate" style="max-width: 280px;" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
           <td class="truncate" title="{{ f.attachment_info or '' }}" style="max-width: 120px; font-size: 0.78rem;">
@@ -19272,6 +19331,9 @@ def admin_dashboard():
         rating=(None if log_filter == "all" else log_filter),
         persona=(log_persona or None),
     ) if (db_ok and want_activity) else []
+    # Columns that are "—" all the way down are pure width. Personality and
+    # How-to-interact are only populated when a participant has taken the
+    # assessment, which most have not.
     # Belt and braces: even with no advisor selected, a scoped account only
     # sees sessions from advisors it is assigned to. Applied in the route
     # rather than inside the query, so the rule is visible where it is
@@ -19354,6 +19416,12 @@ def admin_dashboard():
     html = _cached_render(
         ADMIN_HTML, active_tab=active_tab, admin_tabs=ADMIN_TABS,
         app_build_notes=APP_BUILD_NOTES,
+        short_location=short_location,
+        show_personality_col=any(personality_summary.get(f["id"])
+                                 for f in feedback_rows),
+        show_tips_col=any(personality_tips.get(f["id"])
+                          for f in feedback_rows),
+        show_location_col=any(locations.get(f["id"]) for f in feedback_rows),
         research_query=research_query, research_results=research_results,
         research_sources=research_sources,
         first_request_boot_ms=FIRST_REQUEST_BOOT_MS,
