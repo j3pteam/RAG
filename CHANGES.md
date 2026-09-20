@@ -1,69 +1,75 @@
-# J3P Advisor — build 2026-09-20-a
+# J3P Advisor — build 2026-09-20-b
 
 `app.py`, plus the pre-deploy checks.
 
 ---
 
-## Open a conversation from the log
+## Two faults, and the screenshots showed both
 
-A log row is one exchange out of a session. Reading one exchange out of
-context has been the only option because nothing joined a row to the
-conversation it came from — the log records exchanges, `chat_history` holds
-threads keyed by participant token, and the two had no link.
+### "synthesis-error: the read operation timed out"
 
-**The question in each row is now a link.** It opens the whole conversation,
-oldest first, with who it was with and how many messages.
+The server waited a flat **30 seconds** for ElevenLabs, whatever the length
+of the text. That is plenty for the one-sentence preview — which is why
+Preview reported "Playing Alan Friedman's own voice" — and not enough for a
+full coaching reply. The read timed out, and the participant got the browser
+voice instead.
 
-Two decisions worth stating plainly:
+The wait now scales with the text, from 12 seconds for a preview to 55 for a
+long reply.
 
-**It is read-only.** Reading a session and continuing one as the participant
-are different acts — the first is what the conversation log already permits,
-the second is impersonation and would put words in their mouth. If you want
-an advisor to be able to pick up a thread, that should be built knowingly
-rather than arrive as a side effect of a "view" button. The page says so.
+It is also deliberately kept **below** the browser's own ceiling, so the
+server is always the one that decides it has waited long enough:
 
-**Advisor scoping is enforced here too.** An account restricted to certain
-advisors cannot reach another advisor's conversation by editing the id in
-the URL. Opening one is logged with the admin's email.
+| Reply | Server waits | Browser waits | Gives up first |
+|---|---|---|---|
+| 80 chars | 12s | 14s | server |
+| 500 chars | 18s | 27s | server |
+| 1,500 chars | 38s | 57s | server |
+| 3,000 chars | 55s | 60s | server |
 
-**This works from now on, not backwards.** The link between an exchange and
-its conversation is recorded as exchanges happen, so sessions logged before
-this build will say so rather than show an empty page.
+That ordering matters: a browser-side abort tells us nothing about what the
+provider was doing, while a server-side timeout is logged with the text
+length and the elapsed time.
+
+### It spoke Danish
+
+This one is a design fault of mine, not a glitch. The reading-voice picker
+listed **the best voice for every language installed on the device** —
+Danish, Finnish, Japanese, Russian. Any of them could end up selected, and
+selecting one meant an English reply was read in that voice.
+
+Advisors write in English. The useful choice is between English voices, not
+between languages. The picker now lists up to eight English voices, best
+first:
+
+```
+English (US)  Samantha
+English (AU)  Karen
+English (US)  Alex
+English (GB)  Daniel
+```
+
+A preference saved before this change could still be a Danish voice, so a
+saved choice is now honoured only if it can actually read English;
+otherwise it is cleared and the automatic English pick is used. Nobody has
+to go and fix their own setting.
 
 ---
 
-## Export and import advisors
+## From build 2026-09-20-a
 
-Advisors tab → **Export or import advisors**.
-
-The export is the roster — name, slug, scheduling URL, booking-button
-setting, session link, and counts for participant links, documents, voice
-sample and portal link. CSV or Excel.
-
-It is the same shape the importer reads, so an edited export uploads
-straight back. Matching is by name, so a row for an existing advisor updates
-them rather than creating a duplicate.
-
-Only **Name** is required; Scheduling URL and Booking button are optional.
-Slug is deliberately ignored on import — it is derived from the name, and
-letting a file set it would allow two advisors to collide or an existing one
-to be silently repointed. **Photos, voice samples and knowledge are never
-touched by an import**, because a spreadsheet cannot carry them and clearing
-them would quietly wipe work done in the panel.
-
-Verified against a file with a quoted comma in a name, a blank row, and
-missing optional columns; a file with no Name column and a wrong file type
-are both rejected with a message that says what to fix.
-
-*(This completes work I started and left half-finished last turn — the
-parsing helpers were in the file with nothing calling them.)*
+**Open a conversation from the log** — the question in each row links to the
+whole session, read-only, with advisor scoping enforced. **Export and import
+advisors** as CSV or Excel.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-a`.
+`2026-09-20-b`.
 
-Run `./check.sh` first — it now covers syntax, undefined names, module-level
-definition order, and HTML well-formedness across all eight tabs.
+Worth retrying afterwards: the same long reply that failed. If it still
+falls back, the status note under the reply will say whether the provider
+errored or the wait was still too short — and the server log now records the
+character count and the elapsed milliseconds alongside it.

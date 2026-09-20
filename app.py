@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-a"
-APP_BUILD_NOTES = "open a whole conversation from the log; advisor export and import"
+APP_VERSION = "2026-09-20-b"
+APP_BUILD_NOTES = "long replies no longer time out; reading voices are English only"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -3792,7 +3792,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
         // An explicit user choice always wins over the automatic pick
         if (savedVoiceName) {
           const chosen = voices.find(v => v.name === savedVoiceName);
-          if (chosen) { preferred = chosen; return; }
+          // A choice saved before the picker was restricted to English
+          // could be any language. Honour it only if it can actually read
+          // an English reply; otherwise fall through to the automatic pick
+          // and clear it, rather than silently keeping a Danish voice.
+          if (chosen && (chosen.lang || "").toLowerCase().startsWith("en")) {
+            preferred = chosen;
+            return;
+          }
+          if (chosen) {
+            savedVoiceName = null;
+            try { localStorage.removeItem("j3p_voice"); } catch (e) {}
+          }
         }
         for (const name of PREFERRED_VOICES) {
           const hit = voices.find(v =>
@@ -3803,6 +3814,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         preferred =
           voices.find(v => (v.lang || "").toLowerCase().replace("_", "-").startsWith("en-us")) ||
           voices.find(v => (v.lang || "").toLowerCase().startsWith("en")) ||
+          // Last resort only: a non-English voice reading English is worse
+          // than an unfamiliar English one, so every English option is
+          // exhausted first.
           voices[0] || null;
       }
 
@@ -4048,27 +4062,29 @@ INDEX_HTML = r"""<!DOCTYPE html>
       function listVoices() {
         if (!voices.length) refreshVoices();
         const pro = voices.filter(isProfessional);
-        // One entry per primary language subtag: en, fr, es, de …
-        const best = new Map();
-        for (const v of pro) {
-          const key = (v.lang || "und").toLowerCase().replace("_", "-").split("-")[0];
-          const current = best.get(key);
-          if (!current || voiceScore(v) > voiceScore(current)) best.set(key, v);
+
+        // English only. The previous version listed the best voice for
+        // every installed language, which put Danish, Finnish and Thai in
+        // a picker that reads English coaching replies — and one of them
+        // being selected meant an English reply was read in a Danish
+        // accent, which is what happened. Advisors write in English; the
+        // useful choice is between English voices, not between languages.
+        const english = pro.filter(v =>
+          (v.lang || "").toLowerCase().replace("_", "-").startsWith("en"));
+        const pool = english.length ? english : pro;
+
+        // Several English voices rather than one, de-duplicated by name —
+        // some platforms register the same voice for en-US and en-GB.
+        const seen = new Set();
+        const out = [];
+        for (const v of pool.sort((a, b) => voiceScore(b) - voiceScore(a))) {
+          const key = (v.name || "").toLowerCase();
+          if (seen.has(key)) continue;
+          seen.add(key);
+          out.push({ name: v.name, lang: v.lang || "", local: !!v.localService });
+          if (out.length >= 8) break;
         }
-        // Always include whatever is currently selected, even if curation
-        // would otherwise have dropped it (e.g. a previously saved choice).
-        if (preferred && ![...best.values()].some(v => v.name === preferred.name)) {
-          const key = (preferred.lang || "und").toLowerCase().split("-")[0];
-          if (!best.has(key)) best.set(key, preferred);
-        }
-        return [...best.values()]
-          .map(v => ({ name: v.name, lang: v.lang || "", local: !!v.localService }))
-          .sort((a, b) => {
-            // English first, then alphabetical by language
-            const ae = a.lang.toLowerCase().startsWith("en") ? 0 : 1;
-            const be = b.lang.toLowerCase().startsWith("en") ? 0 : 1;
-            return ae - be || a.lang.localeCompare(b.lang);
-          });
+        return out;
       }
       function setVoice(name) {
         const hit = voices.find(v => v.name === name);
@@ -10325,6 +10341,22 @@ def _elevenlabs_clone_voice(api_key: str, name: str, audio_bytes: bytes, mime: s
     return voice_id
 
 
+def _elevenlabs_synthesis_timeout(text: str) -> int:
+    """Seconds to wait for synthesis, scaled to the text.
+
+    A flat 30s was fine for a preview and not for a full reply: a long
+    coaching answer takes longer than that to render, the read timed out,
+    and the participant got the browser voice with
+    "synthesis-error: the read operation timed out" — a real failure
+    dressed up as a fallback.
+
+    Kept below the browser's own ceiling so the server, not the client, is
+    the one that decides it has waited long enough — a client-side abort
+    tells us nothing about what the provider was doing.
+    """
+    return max(12, min(55, 8 + len(text or "") // 50))
+
+
 def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
                                 stability: float = 0.5, similarity_boost: float = 0.75,
                                 style: float = 0.0, speaker_boost: bool = True,
@@ -10366,7 +10398,7 @@ def _elevenlabs_text_to_speech(api_key: str, voice_id: str, text: str,
         method="POST",
     )
     try:
-        with _url.urlopen(req, timeout=30) as resp:
+        with _url.urlopen(req, timeout=_elevenlabs_synthesis_timeout(text)) as resp:
             audio_bytes = resp.read()
     except _url_error.HTTPError as e:
         try:
