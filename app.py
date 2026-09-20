@@ -167,6 +167,34 @@ def _phase_total_ms():
 
 SLOW_PAGE_MS = 1000
 
+# The last few replies and how long each phase took. Reply latency has been
+# reported as "a very long time" with no way to tell whether that is the
+# model, retrieval, the database or the voice — the participant page was
+# never instrumented, only admin page loads were. Kept in memory, per
+# worker, alongside the [timing] log line.
+_CHAT_TIMINGS = []
+_CHAT_TIMINGS_MAX = 12
+_CHAT_TIMINGS_LOCK = threading.Lock()
+
+
+def _record_chat_timing():
+    phases = getattr(g, "_phases", None)
+    if phases is None:
+        return
+    total = (time.perf_counter() - phases.t0) * 1000
+    entry = {"total_ms": round(total),
+             "phases": [(n, round(ms)) for n, ms in phases.marks if ms >= 1],
+             "at": datetime.now()}
+    with _CHAT_TIMINGS_LOCK:
+        _CHAT_TIMINGS.insert(0, entry)
+        del _CHAT_TIMINGS[_CHAT_TIMINGS_MAX:]
+    app.logger.info("[timing] " + phases.summary())
+
+
+def chat_timings():
+    with _CHAT_TIMINGS_LOCK:
+        return list(_CHAT_TIMINGS)
+
 
 def _phase_breakdown():
     """The per-phase timings, slowest first. Only the ones worth reading."""
@@ -238,8 +266,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-k"
-APP_BUILD_NOTES = "the speaker button and the avatar both stop the voice"
+APP_VERSION = "2026-09-20-l"
+APP_BUILD_NOTES = "reply latency is measured and shown in Diagnostics"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -12433,6 +12461,7 @@ def index_without_scheduling():
 @paywall.paywall_required
 @login_required
 def chat():
+    _phase_start("/chat")
     # Accept BOTH multipart/form-data (with optional file OR folder of files) and JSON.
     # Attachment paths:
     #   - Single document (PDF/DOCX/TXT/MD): extract text, prepend as context
@@ -12737,7 +12766,9 @@ def chat():
 
     full_user_content = user_input + attachment_context
 
+    _phase_mark("request parsed + attachments")
     messages = load_history()
+    _phase_mark("conversation history")
 
     # Captured now, before this turn gets appended to `messages` below —
     # used later to give RAG/lesson retrieval a follow-up question some
@@ -12802,6 +12833,7 @@ def chat():
     base_prompt = CONFIG["system_prompt"]
     retrieval_query = build_retrieval_query(user_input, _prior_user_msg, _prior_assistant_msg)
     context, lessons = retrieve_context_and_lessons(retrieval_query)
+    _phase_mark("knowledge retrieval")
 
     # Build lessons block: things we got wrong before and shouldn't repeat
     lessons_block = ""
@@ -13156,6 +13188,7 @@ def chat():
             + advisor_voice_guard(active_advisor)
         )
 
+    _phase_mark("prompt assembly")
     try:
         response = client.messages.create(
             model=CONFIG["model"],
@@ -13169,6 +13202,7 @@ def chat():
             ],
             messages=messages_for_api,
         )
+        _phase_mark("model call")
     except anthropic.APIError as e:
         return jsonify({"error": f"API error: {str(e)}"}), 500
     except Exception as e:
@@ -13526,6 +13560,8 @@ def chat():
             and not all(d["suggested"] == "pptx" for d in documents)):
         export_format = "docx"
 
+    _phase_mark("reply post-processing")
+
     # Second pass: the reply goes back through retrieval to see whether the
     # knowledge base actually supports it. Backgrounded, so it costs the
     # participant nothing.
@@ -13542,6 +13578,7 @@ def chat():
                      "Please try again — your message is still in the box."
         }), 502
 
+    _record_chat_timing()
     return jsonify({
         "reply": assistant_text,
         "interaction_id": interaction_id,
@@ -17987,6 +18024,37 @@ details.section[open] > summary {
   </div>
 
   <div class="section">
+    <h2>Reply times</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      How long the last few replies took, and where the time went. The model
+      call is normally the largest by a wide margin and is not something this
+      app controls; anything else being large is worth acting on.
+    </p>
+    {% if diag.chat_timings %}
+    <table>
+      <tr><th style="width: 14%;">When</th><th style="width: 12%;">Total</th>
+          <th>Where the time went</th></tr>
+      {% for t in diag.chat_timings %}
+      <tr>
+        <td class="muted">{{ t.at.strftime("%H:%M:%S") }}</td>
+        <td><strong style="color: {{ 'var(--bad)' if t.total_ms > 20000
+                                    else 'var(--warn)' if t.total_ms > 8000
+                                    else 'var(--ok)' }};">
+          {{ "%.1f"|format(t.total_ms / 1000) }}s</strong></td>
+        <td class="muted" style="font-size: 0.8rem;">
+          {% for name, ms in t.phases %}{{ name }} {{ ms }}ms{{ " · " if not loop.last }}{% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted" style="margin: 0;">
+      No replies recorded on this worker yet. Send a message and reload.
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="section">
     <h2>Answer grounding</h2>
     <p class="muted" style="margin: 0 0 1rem;">
       Every reply is put back through retrieval to see whether the knowledge
@@ -20292,6 +20360,7 @@ def admin_dashboard():
             "db_private": database_is_private(),
             "voice": _voice_diag,
             "grounding": _grounding_snapshot(),
+            "chat_timings": chat_timings() if active_tab == "diagnostics" else [],
         },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=_settings,

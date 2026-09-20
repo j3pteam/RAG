@@ -1,43 +1,61 @@
-# J3P Advisor — build 2026-09-20-k
+# J3P Advisor — build 2026-09-20-l
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-j`.
+`app.py`, plus the pre-deploy checks. Includes everything from `-k`.
 
 ---
 
-## The speaker button and the avatar both stop the voice
+## Reply latency is now measured
 
-**While something is speaking, the Speak button means stop.** It was a
-setting toggle — so pressing it to silence a reply could switch auto-speak
-*on* and start reading the next one, the opposite of the gesture. If
-auto-speak was on, one press now both stops the reply and turns it off,
-rather than needing a second press to stop the next one starting.
+The chat route had **no timing at all** — only admin page loads were
+instrumented. So "taking a very long time to respond" had nothing behind it,
+and I would have been guessing between the model, retrieval, history, the
+database and the voice.
 
-**Clicking the advisor's photo stops them too**, whichever reply is playing.
+Every reply is now timed by phase:
 
-Both work during the couple of seconds between the click and the first
-sound, while the audio is still being fetched. Nothing is audible then, but
-a click plainly means stop — and previously it was ignored.
+- request parsed and attachments read
+- conversation history loaded
+- knowledge retrieval (embedding + search)
+- prompt assembly
+- **model call**
+- reply post-processing (scrubbers, formatting)
 
-| | Idle | Speaking | Audio still loading |
-|---|---|---|---|
-| Speaker button | toggles auto-speak | stops | stops |
-| Avatar | reads the last reply | stops | stops |
+**Diagnostics → Reply times** shows the last twelve, newest first, with the
+total coloured by severity and the breakdown beside it:
 
-## The label you asked about
+```
+23:33:59   14.2s   request parsed 12ms · history 48ms · retrieval 610ms ·
+                   prompt 3ms · model call 13400ms · post-processing 160ms
+```
 
-`(their own voice)` was removed in `-g`, along with the `(32 parts)` count
-on the note. Both are in this build. Your screenshot still shows them, which
-means the running version is older than `-g` — so none of the last five
-builds are live yet, including the New-conversation stop and the
-speaks-over-itself fix.
+The same line goes to the deploy logs as `[timing] /chat: …`.
+
+## What to expect, and what it would mean
+
+The model call is normally the great majority of it, and that is Anthropic
+generating the reply — a long proposal legitimately takes ten to twenty
+seconds and no change here would alter that. **If the model call dominates,
+the latency is inherent.**
+
+What would be worth acting on is anything *else* being large:
+
+- **retrieval** over a second — the embedding call or the vector search,
+  which is fixable
+- **history** over a second — the conversation is being re-read from the
+  database on every turn
+- **post-processing** over a second — the scrubbers, which run over the
+  whole reply
+
+Send a message, open Diagnostics, and tell me what the row says. That turns
+this into one specific thing rather than another round of guesses.
+
+One note: the figures are per worker, and there are two. A reply handled by
+the other worker will not appear — reload once or send a second message if
+the table looks empty.
 
 ---
 
 ## Installing
 
-Replace `app.py`, commit to `main`.
-
-**Then check `/health` and confirm it reports `2026-09-20-k`.** Six of my
-last seven fixes have been tested against a build that did not contain them,
-which has cost us both time. If the version does not change after a push,
-the deploy is not completing and that is worth solving before anything else.
+Replace `app.py`, commit to `main`. Diagnostics should report version
+`2026-09-20-l`.
