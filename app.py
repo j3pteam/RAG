@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-b"
-APP_BUILD_NOTES = "long replies no longer time out; reading voices are English only"
+APP_VERSION = "2026-09-20-c"
+APP_BUILD_NOTES = "cloned voice synthesised in parts; playback starts in seconds"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5803,65 +5803,132 @@ INDEX_HTML = r"""<!DOCTYPE html>
           // just to be told to fall back — skip straight to it.
           if (!(PAGE_VOICE_MODE === "participant_choice" && PARTICIPANT_VOICE_PREFERENCE === "default")) {
           try {
-            // Long replies take real time to synthesise. Say so, rather
-            // than leaving the avatar looking inert for ten seconds.
-            Presence.set("thinking", "preparing their voice");
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(),
-                                         voiceTimeoutFor(cleanText));
-            const resp = await fetch("/advisor/speak", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: cleanText, advisor_slug: PAGE_ADVISOR_SLUG }),
-              signal: controller.signal,
-            });
-            clearTimeout(timeoutId);
-            const voiceStatus = resp.headers.get("X-Voice-Status") || "unknown";
-            console.log("[voice] /advisor/speak status:", resp.status, "reason:", voiceStatus);
-            if (resp.ok && resp.status === 200) {
-              const blob = await resp.blob();
-              if (blob.size > 0) {
-                const url = URL.createObjectURL(blob);
-                const audio = new Audio(url);
-                // The Speed slider in the Voice menu previously only ever
-                // touched the browser's own text-to-speech rate — it had
-                // no effect at all on this server-rendered audio, so
-                // adjusting it while the cloned voice was playing did
-                // nothing, silently. One familiar control should work
-                // for whichever voice actually ends up playing.
-                audio.playbackRate = J3PSpeech.getRate();
-                msgDiv.__serverAudio = audio;
-                audio.addEventListener("play", () => {
-                  window.__activeSpeakMsg = msgDiv;
-                  clearAllAvatarStates();
-                  setAvatarSpeaking(msgDiv, true);
-                  Presence.set("speaking", "their own voice");
-                  showVoiceStatusNote("🔊 Played in their own voice");
-                });
-                audio.addEventListener("ended", () => {
-                  URL.revokeObjectURL(url);
-                  msgDiv.__serverAudio = null;
-                  resetSpeakUI();
-                });
-                audio.addEventListener("error", () => {
-                  URL.revokeObjectURL(url);
-                  msgDiv.__serverAudio = null;
-                  resetSpeakUI();
-                });
-                await audio.play();
-                return;
+            // Synthesised in pieces, not in one request.
+            //
+            // A 4,000-character reply is a single enormous synthesis job.
+            // Whatever the timeout is set to, a long enough reply will
+            // exceed it — raising the number just moves the cliff, and the
+            // participant waits the whole time before hearing anything.
+            //
+            // Each piece is small, so each one comes back in a second or
+            // two, playback starts almost immediately, and the next piece
+            // is fetched while the current one plays. The browser's own
+            // speech engine already works this way, for the same reason.
+            //
+            // Split on sentence ends so the joins land where a speaker
+            // would pause anyway.
+            const pieces = (function splitForSynthesis(text, maxLen) {
+              const out = [];
+              let buf = "";
+              for (const sentence of String(text || "")
+                     .split(/(?<=[.!?])\s+/).filter(Boolean)) {
+                if ((buf + " " + sentence).trim().length > maxLen && buf) {
+                  out.push(buf.trim());
+                  buf = sentence;
+                } else {
+                  buf = (buf ? buf + " " : "") + sentence;
+                }
               }
-              fallbackReason = "empty audio returned";
+              if (buf.trim()) out.push(buf.trim());
+              return out.length ? out : [String(text || "")];
+            })(cleanText, 700);
+
+            Presence.set("thinking", "preparing their voice");
+
+            async function fetchPiece(piece) {
+              const controller = new AbortController();
+              const timeoutId = setTimeout(() => controller.abort(),
+                                           voiceTimeoutFor(piece));
+              try {
+                const r = await fetch("/advisor/speak", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ text: piece, advisor_slug: PAGE_ADVISOR_SLUG }),
+                  signal: controller.signal,
+                });
+                clearTimeout(timeoutId);
+                if (!(r.ok && r.status === 200)) {
+                  return { error: r.headers.get("X-Voice-Status") || "unavailable" };
+                }
+                const blob = await r.blob();
+                if (!blob.size) return { error: "empty audio returned" };
+                return { url: URL.createObjectURL(blob) };
+              } catch (err) {
+                clearTimeout(timeoutId);
+                return { error: err && err.name === "AbortError"
+                  ? "their voice took too long to generate"
+                  : "request failed" };
+              }
+            }
+
+            // Only the first piece decides whether the cloned voice is
+            // usable at all. If it works, playback has already started by
+            // the time a later piece could fail — switching voices
+            // mid-reply would be worse than finishing in the one that is
+            // already playing, so a later failure just ends it early and
+            // says so.
+            const first = await fetchPiece(pieces[0]);
+            if (first.error) {
+              fallbackReason = first.error;
             } else {
-              fallbackReason = voiceStatus;
+              let stopped = false;
+              const audio = new Audio(first.url);
+              audio.playbackRate = J3PSpeech.getRate();
+              msgDiv.__serverAudio = audio;
+              // Clicking Speak again mid-reply has to stop the whole
+              // sequence, not just the piece currently sounding.
+              audio.addEventListener("pause", () => { stopped = audio.ended ? stopped : true; });
+
+              let index = 0;
+              let pending = pieces.length > 1 ? fetchPiece(pieces[1]) : null;
+
+              audio.addEventListener("play", () => {
+                window.__activeSpeakMsg = msgDiv;
+                clearAllAvatarStates();
+                setAvatarSpeaking(msgDiv, true);
+                Presence.set("speaking", "their own voice");
+                showVoiceStatusNote("🔊 Played in their own voice"
+                  + (pieces.length > 1 ? ` (${pieces.length} parts)` : ""));
+              });
+
+              audio.addEventListener("ended", async () => {
+                URL.revokeObjectURL(audio.src);
+                index += 1;
+                if (stopped || index >= pieces.length) {
+                  msgDiv.__serverAudio = null;
+                  resetSpeakUI();
+                  return;
+                }
+                const next = await (pending || fetchPiece(pieces[index]));
+                pending = (index + 1 < pieces.length)
+                  ? fetchPiece(pieces[index + 1]) : null;
+                if (next.error || stopped) {
+                  // Part of it was read in their voice; the rest could not
+                  // be. Say that plainly rather than silently stopping.
+                  msgDiv.__serverAudio = null;
+                  showVoiceStatusNote("🔊 Played in their own voice — stopped after part "
+                                      + index + " of " + pieces.length
+                                      + " (" + (next.error || "stopped") + ")");
+                  resetSpeakUI();
+                  return;
+                }
+                audio.src = next.url;
+                audio.playbackRate = J3PSpeech.getRate();
+                audio.play().catch(() => { resetSpeakUI(); });
+              });
+
+              audio.addEventListener("error", () => {
+                msgDiv.__serverAudio = null;
+                resetSpeakUI();
+              });
+
+              await audio.play();
+              return;
             }
           } catch (e) {
-            // Network error, timeout, or a rejected play() — fall through
-            // to the browser's own voice below rather than surface this.
-            fallbackReason = (e && e.name === "AbortError")
-              ? "their voice took too long to generate"
-              : "request failed: " + (e && e.message ? e.message : "unknown");
-            console.log("[voice] /advisor/speak failed, falling back to browser voice:", e && e.message);
+            fallbackReason = "request failed: " + (e && e.message ? e.message : "unknown");
+            console.log("[voice] cloned voice unavailable, using the browser voice:",
+                        e && e.message);
           }
           } // end participant-chose-default-voice skip
 
