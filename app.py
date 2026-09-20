@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-f"
-APP_BUILD_NOTES = "markdown tables render as tables, not raw pipes"
+APP_VERSION = "2026-09-20-g"
+APP_BUILD_NOTES = "avatar status reads Speaking, without the voice detail"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5929,7 +5929,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
               return out.length ? out : [String(text || "")];
             })(cleanText, 700);
 
-            Presence.set("thinking", "preparing their voice");
+            Presence.set("thinking");
 
             async function fetchPiece(piece) {
               const controller = new AbortController();
@@ -5989,9 +5989,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 window.__activeSpeakMsg = msgDiv;
                 clearAllAvatarStates();
                 setAvatarSpeaking(msgDiv, true);
-                Presence.set("speaking", "their own voice");
-                showVoiceStatusNote("🔊 Played in their own voice"
-                  + (pieces.length > 1 ? ` (${pieces.length} parts)` : ""));
+                Presence.set("speaking");
+                showVoiceStatusNote("🔊 Played in their own voice");
               });
 
               audio.addEventListener("ended", async () => {
@@ -6041,9 +6040,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
               window.__activeSpeakMsg = msgDiv;
               clearAllAvatarStates();
               setAvatarSpeaking(msgDiv, true);
-              Presence.set("speaking", fallbackReason
-                ? ("default voice — " + fallbackReason.slice(0, 70))
-                : "default voice");
+              // The reason still reaches the reader — in the note under
+              // the reply, where it can be read at leisure rather than
+              // flashing past under the avatar.
+              Presence.set("speaking");
               showVoiceStatusNote(fallbackReason
                 ? ("🔈 Played in the default voice — " + fallbackReason)
                 : "🔈 Played in the default voice");

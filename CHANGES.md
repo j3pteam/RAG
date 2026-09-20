@@ -1,60 +1,58 @@
-# J3P Advisor — build 2026-09-20-f
+# J3P Advisor — build 2026-09-20-g
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-e`.
-
----
-
-## Tables render as tables
-
-The Investment table in your screenshot arrived as a wall of pipe
-characters:
-
-```
-| Phase | Scope | Fee | |---|---|---| | Phase A: Leadership Alignment, …
-```
-
-The markdown renderer handled headings, lists, bold, code and links — but
-not tables. The advisor writes pricing, phasing and comparisons as tables,
-so this is not an edge case; it is how a proposal looks.
-
-Now rendered properly, with column alignment honoured (`---:` right-aligns
-a fee column), bold and links working inside cells, and a gold rule under
-the header to match the rest of the reply styling. Wide tables scroll
-inside their own box so they never push the whole reply sideways on a
-phone.
-
-A line that merely contains pipes is left alone — a table is only a header
-row followed by a `|---|---|` separator, so ordinary prose with a pipe in
-it is not mangled.
-
-Verified against a real proposal table: three header cells, three body
-rows, right-aligned fee column, `**Total**` still bold inside its cell, no
-raw pipes left, and the paragraph after the table still rendered.
+`app.py`, plus the pre-deploy checks. Includes everything from `-f`.
 
 ---
 
-## Still open: the sound not stopping
+## The avatar status is just the status again
 
-The tab in your screenshot still shows the speaker icon while the avatar
-reads "Ready", which is the same mismatch as before — so I do not think
-this is resolved yet.
-
-`-e` added a last-resort stop that pauses every `<audio>` element on the
-page. If that is now deployed and the sound still continues, the one thing
-that would tell me where it is actually coming from is, with the reply
-speaking, in the browser console:
+It read `SPEAKING (THEIR OWN VOICE)` — and on a fallback, the whole error
+message in capitals beside a participant's session. That detail was added
+while chasing the voice bug. It did its job and became clutter.
 
 ```
-window.__stopAllSpeech()
+Ready
+Thinking
+Responding
+Speaking
 ```
 
-Stops → something is not calling it, which narrows it to the toggle wiring.
-Continues → it is coming from a source I have not accounted for, and the
-console will likely name it.
+No detail on any of them.
+
+**The explanation is still there**, in the note under the reply, where it
+can be read at leisure rather than flashing past under the avatar — "Played
+in their own voice", or "Played in the default voice — …" with the reason
+when something fell back. That is the right home for it: it belongs to the
+reply it describes, and it does not shout.
+
+I also dropped the "(28 parts)" from that note. Same category — how many
+requests the synthesis took is my business, not the participant's.
+
+---
+
+## One thing worth raising
+
+That reply was **28 parts**, so roughly 19,000 characters — each part its
+own call to ElevenLabs. It works, and playback starts quickly, but it is a
+lot of requests for one reply and it will show up in usage.
+
+Raising the chunk size from 700 to around 1,200 characters would cut the
+call count by about 40% while still starting playback in a couple of
+seconds. I have not changed it, because it trades slightly against how fast
+the first part arrives and that is your call rather than mine. Say the word
+either way.
+
+---
+
+## From -f and -e
+
+**Markdown tables render as tables** rather than a wall of pipes — the
+Investment table in your earlier screenshot. **Stopping speech pauses every
+`<audio>` element on the page**, including any this code has lost track of.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-f`.
+`2026-09-20-g`.
