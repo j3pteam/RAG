@@ -1,48 +1,52 @@
-# J3P Advisor — build 2026-09-20-i
+# J3P Advisor — build 2026-09-20-j
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-h`.
-
----
-
-## The voice starts sooner
-
-Nothing is heard until the first piece has finished synthesising, and every
-piece was up to 700 characters — so you waited for 700 characters of
-synthesis before any sound, however long the reply.
-
-Pieces now **grow as they go**: about 180 characters for the first, 420 for
-the second, 900 after that. The opening line is spoken while the longer
-pieces behind it are still being made.
-
-| Reply | First piece | Sound starts | Was | Pieces (was) |
-|---|---|---|---|---|
-| 600 chars | 95 chars | ~0.7s | ~2.7s | 3 (1) |
-| 2,000 chars | 95 chars | ~0.7s | ~3.0s | 4 (3) |
-| 6,000 chars | 95 chars | ~0.7s | ~3.0s | 9 (9) |
-| 19,000 chars | 95 chars | ~0.7s | ~3.0s | 24 (29) |
-
-Roughly four times faster to first sound, and no slower overall — playback
-of one piece overlaps synthesis of the next, so the listener never catches
-up with the fetching.
-
-They grow rather than staying short because each piece is a separate call to
-the voice service. All-short would triple the request count for no benefit
-once playback is under way. On your 19,000-character reply this is actually
-*fewer* calls than before — 24 instead of 29 — while starting far sooner,
-which also answers the usage question I raised earlier.
+`app.py`, plus the pre-deploy checks. Includes everything from `-i`.
 
 ---
 
-## Still worth confirming
+## Repeated clicks can no longer start two voices
 
-Your last few screenshots showed the old status label, so the build in the
-browser was older than `-g`. If `/health` does not report
-`2026-09-20-i` after deploying, none of the recent fixes — including the
-New-conversation stop — are live yet.
+Speaking a reply is asynchronous: the audio is fetched before anything
+plays, and the "is something already speaking?" flag was only set once the
+audio fired its `play` event — seconds later, after the fetch.
+
+A second click inside that window passed the check, because nothing *was*
+playing yet. So two runs proceeded and two voices spoke over each other. A
+third click made it three.
+
+Two things fix it:
+
+**A flag set synchronously, before the first await.** A rapid second click
+now sees that this reply is already being prepared, and treats it as stop —
+the same as clicking while it plays.
+
+**A run token claimed on entry.** A later click supersedes an earlier run;
+when the earlier one's fetch finally returns, it sees it has been superseded
+and releases the audio instead of playing it. Checked at every await — the
+first piece, each later piece, and the browser-voice fallback.
+
+Verified by modelling the click handler against a slow fetch:
+
+| Sequence | Voices playing at once |
+|---|---|
+| Three rapid clicks on one reply | 1 |
+| Four rapid clicks across two replies | 0 |
+| A single click | 1 |
+
+Never two, and a single click still works normally.
+
+---
+
+## From -i and -h
+
+**The voice starts about four times sooner** — the first piece is ~180
+characters rather than 700, with later pieces growing to 900.
+**New conversation stops the voice**, and players are tracked outside the
+DOM so stopping works even after the message is gone.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-i`.
+`2026-09-20-j`.

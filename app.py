@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-i"
-APP_BUILD_NOTES = "voice starts sooner: short first piece, longer ones behind it"
+APP_VERSION = "2026-09-20-j"
+APP_BUILD_NOTES = "repeated clicks can no longer start two voices at once"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4348,6 +4348,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return Math.min(60000, 12000 + (text || "").length * 30);
     }
 
+    // Which speak request is the current one.
+    //
+    // __speakReply is async: it fetches audio before anything plays, and
+    // window.__activeSpeakMsg is only set once the audio fires its "play"
+    // event — seconds later. A second click inside that window passed the
+    // "is something already playing?" check because nothing was playing
+    // yet, so two runs proceeded and two voices spoke over each other.
+    //
+    // Claiming a token synchronously, before the first await, closes that
+    // window: a later click supersedes an earlier run, and the earlier one
+    // throws away whatever it was holding instead of playing it.
+    let speakRunToken = 0;
+
     // Every cloned-voice player ever created, and how to cancel it.
     //
     // new Audio(url) produces an element that is never inserted into the
@@ -5883,14 +5896,25 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
         msgDiv.__speakReply = async function() {
           const activeMsg = window.__activeSpeakMsg;
-          // This message is the one currently playing — toggle it off
-          if (activeMsg === msgDiv) {
+          // This message is already playing, or already being prepared —
+          // either way a second click means stop.
+          if (activeMsg === msgDiv || msgDiv.__speakPending) {
+            msgDiv.__speakPending = false;
+            speakRunToken += 1;          // abandons any run in flight
             window.__stopAllSpeech();
             resetSpeakUI();
             return;
           }
-          // A different message was playing — stop it before starting this one
-          if (activeMsg) window.__stopAllSpeech();
+          // Anything else playing or being prepared stops first, so two
+          // replies can never sound together.
+          speakRunToken += 1;
+          window.__stopAllSpeech();
+          document.querySelectorAll(".msg.assistant").forEach(function (m) {
+            m.__speakPending = false;
+          });
+          const myRun = speakRunToken;
+          // Set before the first await, so a rapid second click sees it.
+          msgDiv.__speakPending = true;
 
           const cleanText = stripMarkdown(replyText);
           // Captures why the cloned voice wasn't used, so it can be shown
@@ -5994,6 +6018,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
             // already playing, so a later failure just ends it early and
             // says so.
             const first = await fetchPiece(pieces[0]);
+            if (myRun !== speakRunToken) {
+              // Superseded while this was in flight. Release the audio
+              // rather than starting a second voice.
+              if (first.url) { try { URL.revokeObjectURL(first.url); } catch (e) {} }
+              return;
+            }
+            msgDiv.__speakPending = false;
             if (first.error) {
               fallbackReason = first.error;
             } else {
@@ -6039,6 +6070,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
                   return;
                 }
                 const next = await (pending || fetchPiece(pieces[index]));
+                if (myRun !== speakRunToken) {
+                  if (next && next.url) {
+                    try { URL.revokeObjectURL(next.url); } catch (e) {}
+                  }
+                  return;
+                }
                 pending = (index + 1 < pieces.length)
                   ? fetchPiece(pieces[index + 1]) : null;
                 if (next.error || stopped) {
@@ -6072,6 +6109,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
           } // end participant-chose-default-voice skip
 
+          msgDiv.__speakPending = false;
+          if (myRun !== speakRunToken) return;
           const ok = J3PSpeech.play(cleanText, {
             onStart: () => {
               window.__activeSpeakMsg = msgDiv;
