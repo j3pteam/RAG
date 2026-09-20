@@ -1,58 +1,55 @@
-# J3P Advisor — build 2026-09-20-g
+# J3P Advisor — build 2026-09-20-h
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-f`.
-
----
-
-## The avatar status is just the status again
-
-It read `SPEAKING (THEIR OWN VOICE)` — and on a fallback, the whole error
-message in capitals beside a participant's session. That detail was added
-while chasing the voice bug. It did its job and became clutter.
-
-```
-Ready
-Thinking
-Responding
-Speaking
-```
-
-No detail on any of them.
-
-**The explanation is still there**, in the note under the reply, where it
-can be read at leisure rather than flashing past under the avatar — "Played
-in their own voice", or "Played in the default voice — …" with the reason
-when something fell back. That is the right home for it: it belongs to the
-reply it describes, and it does not shout.
-
-I also dropped the "(28 parts)" from that note. Same category — how many
-requests the synthesis took is my business, not the participant's.
+`app.py`, plus the pre-deploy checks. Includes everything from `-g`.
 
 ---
 
-## One thing worth raising
+## Why none of my previous stop fixes could work
 
-That reply was **28 parts**, so roughly 19,000 characters — each part its
-own call to ElevenLabs. It works, and playback starts quickly, but it is a
-lot of requests for one reply and it will show up in usage.
+`new Audio(url)` creates an element that is **never inserted into the
+document**. So the sweep I added in `-e` —
+`document.querySelectorAll("audio")` — was reaching nothing at all. It found
+no cloned-voice player because there was never one in the page to find.
 
-Raising the chunk size from 700 to around 1,200 characters would cut the
-call count by about 40% while still starting playback in a couple of
-seconds. I have not changed it, because it trades slightly against how fast
-the first part arrives and that is your call rather than mine. Say the word
-either way.
+That left exactly one handle: a property on the message element. And "New
+conversation" removes those elements, so after clearing the chat there was
+no way for anything on the page to stop the audio. It simply played on.
+
+I shipped that sweep as a fix. It was not one, and I should have checked
+what it actually selected instead of assuming.
+
+## The fix
+
+Every cloned-voice player is now registered in a plain set held in the
+page's own scope, independent of the DOM entirely. It is added when
+playback starts and dropped when it ends. Stopping iterates that set.
+
+That works whether or not the message is still on screen, which is the case
+the previous attempts all missed.
+
+**And New conversation now stops speech**, which it never did — clearing the
+transcript left the reply being read aloud over an empty page.
+
+Verified four ways: a player stops while its message is on the page; a
+player stops after the message element is gone; two queued players both
+stop; and a finished player that has already been dropped is not touched
+again.
 
 ---
 
-## From -f and -e
+## From -g and -f
 
-**Markdown tables render as tables** rather than a wall of pipes — the
-Investment table in your earlier screenshot. **Stopping speech pauses every
-`<audio>` element on the page**, including any this code has lost track of.
+The avatar status reads plain `Speaking` with no voice detail. Markdown
+tables render as tables rather than raw pipes.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-g`.
+`2026-09-20-h`.
+
+The status label in your screenshot still read "SPEAKING (THEIR OWN VOICE)",
+which was removed in `-g` — so the build you tested was older than that. It
+is worth confirming Diagnostics shows `2026-09-20-h` before judging this
+one.

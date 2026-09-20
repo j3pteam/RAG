@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-g"
-APP_BUILD_NOTES = "avatar status reads Speaking, without the voice detail"
+APP_VERSION = "2026-09-20-h"
+APP_BUILD_NOTES = "New conversation stops the voice; players tracked outside the DOM"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4348,6 +4348,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return Math.min(60000, 12000 + (text || "").length * 30);
     }
 
+    // Every cloned-voice player ever created, and how to cancel it.
+    //
+    // new Audio(url) produces an element that is never inserted into the
+    // document, so document.querySelectorAll("audio") cannot see it — the
+    // sweep added for exactly this purpose was reaching nothing. And the
+    // only other handle was a property on the message element, which
+    // "New conversation" removes, leaving audio playing that nothing on
+    // the page could stop.
+    //
+    // This registry is independent of both. A player is added when it
+    // starts and dropped when it finishes, so stopping works whether the
+    // message is still on screen or not.
+    const ClonedVoice = {
+      players: new Set(),
+      add(entry) { this.players.add(entry); },
+      drop(entry) { this.players.delete(entry); },
+      stopAll() {
+        for (const entry of Array.from(this.players)) {
+          try { entry.cancel(); } catch (e) {}
+          this.players.delete(entry);
+        }
+      },
+    };
+
     // Stopping speech has to stop *all* of it. The browser's speech engine
     // and the advisor's cloned voice are two unrelated mechanisms — one is
     // speechSynthesis, the other an <audio> element fetched from the server
@@ -4382,18 +4406,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       });
 
-      // Last resort: any <audio> element on the page, whether or not this
-      // code still holds a reference to it. An element whose reference was
-      // dropped on an error path keeps playing to the end with nothing able
-      // to reach it, and the participant has no way to silence it. Audio
-      // only — the avatar's looping portrait and any talking-head clip are
-      // <video> and must keep running.
-      document.querySelectorAll("audio").forEach(function (el) {
-        try {
-          el.pause();
-          el.currentTime = 0;
-        } catch (e) {}
-      });
+      // The registry catches every cloned-voice player, including one
+      // whose message has since been removed from the page.
+      ClonedVoice.stopAll();
       try { Presence.set("idle"); } catch (e) {}
       window.__activeSpeakMsg = null;
     };
@@ -5975,11 +5990,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
               // swapping audio.src between parts can itself fire pause, so
               // inferring intent from the event would end the sequence at
               // the first join.
-              msgDiv.__stopClonedVoice = function () {
+              const entry = { cancel: function () {
                 stopped = true;
                 try { audio.pause(); } catch (e) {}
                 try { URL.revokeObjectURL(audio.src); } catch (e) {}
                 msgDiv.__serverAudio = null;
+              } };
+              ClonedVoice.add(entry);
+              msgDiv.__stopClonedVoice = function () {
+                entry.cancel();
+                ClonedVoice.drop(entry);
               };
 
               let index = 0;
@@ -5999,6 +6019,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 if (stopped || index >= pieces.length) {
                   msgDiv.__serverAudio = null;
                   msgDiv.__stopClonedVoice = null;
+                  ClonedVoice.drop(entry);
                   resetSpeakUI();
                   return;
                 }
@@ -6022,6 +6043,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
               audio.addEventListener("error", () => {
                 msgDiv.__serverAudio = null;
+                ClonedVoice.drop(entry);
                 resetSpeakUI();
               });
 
@@ -6798,6 +6820,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
     let resetArmed = false;
     resetBtn.addEventListener("click", async () => {
+      // Clearing the conversation has to silence it too. Without this the
+      // reply carries on being read aloud over an empty page, and the
+      // message element it was attached to is gone, so nothing else can
+      // reach it.
+      window.__stopAllSpeech();
+
       // If the last reply is unrated, ask once before wiping the conversation.
       // Showing the nudge and then clearing the chat would be pointless, so the
       // first click surfaces it and the second proceeds.
