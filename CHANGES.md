@@ -1,56 +1,60 @@
-# J3P Advisor — build 2026-09-20-d
+# J3P Advisor — build 2026-09-20-f
 
-`app.py`, plus the pre-deploy checks.
-
----
-
-## Turning Speak off now actually stops the sound
-
-My bug. The Speak toggle called `J3PSpeech.stop()`, which stops the
-**browser's** speech engine. The advisor's cloned voice is a different
-mechanism entirely — an `<audio>` element playing a file fetched from the
-server — and nothing told it to stop. So switching Speak off silenced a
-voice that was not the one talking.
-
-Chunked playback, added in `-c`, made it worse: the sequence would keep
-fetching and playing the remaining parts.
-
-**Every stop path now goes through one function** that halts both the
-browser voice and the cloned voice, cancels any pending parts, and clears
-any audio left over from an earlier reply. The Speak toggle, clicking the
-avatar, and clicking Speak on another reply all use it.
-
-## A second fault found while fixing it
-
-The chunk sequence detected "the participant stopped this" by listening for
-the audio element's `pause` event. But swapping `audio.src` between parts
-can itself fire `pause` — so a long reply would have ended at the first
-join, reporting "stopped after part 1 of 7" for no reason.
-
-Replaced with an explicit cancel that only a real stop triggers. Verified
-both ways: a three-part reply plays through to the end, and a stop during
-part 2 of four cancels the sequence, fetches nothing further, and releases
-the audio.
-
-I should have caught this in `-c` — inferring user intent from a media event
-that the code itself also triggers was the wrong approach from the start.
+`app.py`, plus the pre-deploy checks. Includes everything from `-e`.
 
 ---
 
-## From -c and -b
+## Tables render as tables
 
-**The cloned voice is synthesised in parts**, so playback starts within a
-couple of seconds on a long reply instead of waiting for the whole thing —
-and no reply is long enough to time out. **The reading-voice picker is
-English only**, which is what caused the Danish. **The server-side synthesis
-timeout scales with the text** and always expires before the browser's.
+The Investment table in your screenshot arrived as a wall of pipe
+characters:
+
+```
+| Phase | Scope | Fee | |---|---|---| | Phase A: Leadership Alignment, …
+```
+
+The markdown renderer handled headings, lists, bold, code and links — but
+not tables. The advisor writes pricing, phasing and comparisons as tables,
+so this is not an edge case; it is how a proposal looks.
+
+Now rendered properly, with column alignment honoured (`---:` right-aligns
+a fee column), bold and links working inside cells, and a gold rule under
+the header to match the rest of the reply styling. Wide tables scroll
+inside their own box so they never push the whole reply sideways on a
+phone.
+
+A line that merely contains pipes is left alone — a table is only a header
+row followed by a `|---|---|` separator, so ordinary prose with a pipe in
+it is not mangled.
+
+Verified against a real proposal table: three header cells, three body
+rows, right-aligned fee column, `**Total**` still bold inside its cell, no
+raw pipes left, and the paragraph after the table still rendered.
+
+---
+
+## Still open: the sound not stopping
+
+The tab in your screenshot still shows the speaker icon while the avatar
+reads "Ready", which is the same mismatch as before — so I do not think
+this is resolved yet.
+
+`-e` added a last-resort stop that pauses every `<audio>` element on the
+page. If that is now deployed and the sound still continues, the one thing
+that would tell me where it is actually coming from is, with the reply
+speaking, in the browser console:
+
+```
+window.__stopAllSpeech()
+```
+
+Stops → something is not calling it, which narrows it to the toggle wiring.
+Continues → it is coming from a source I have not accounted for, and the
+console will likely name it.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-d`.
-
-Worth testing directly: start a long reply speaking, then press Speak again
-part-way through. It should stop immediately and stay stopped.
+`2026-09-20-f`.

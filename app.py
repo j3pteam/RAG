@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-d"
-APP_BUILD_NOTES = "turning Speak off stops the cloned voice too"
+APP_VERSION = "2026-09-20-f"
+APP_BUILD_NOTES = "markdown tables render as tables, not raw pipes"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2489,6 +2489,21 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .msg-body a { color: var(--navy); border-bottom: 1px solid var(--gold); text-decoration: none; }
     .msg-body a:hover { color: var(--rust); }
     .msg-body hr { border: none; border-top: 1px solid var(--line); margin: 1rem 0; }
+    /* Tables wrap in their own scroller so a wide one never pushes the
+       whole reply sideways on a phone. */
+    .msg-body .md-table {
+      width: 100%; border-collapse: collapse; margin: 0 0 0.85rem;
+      font-size: 0.88rem; display: block; overflow-x: auto;
+    }
+    .msg-body .md-table th, .msg-body .md-table td {
+      padding: 0.45rem 0.7rem; border-bottom: 1px solid var(--line);
+      vertical-align: top;
+    }
+    .msg-body .md-table th {
+      font-weight: 600; color: var(--navy); white-space: nowrap;
+      border-bottom: 2px solid var(--gold);
+    }
+    .msg-body .md-table tbody tr:last-child td { border-bottom: none; }
     .feedback {
       display: flex; align-items: center;
       gap: 0.5rem; margin-top: 0.6rem;
@@ -4354,12 +4369,30 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
         try { setAvatarSpeaking(active, false); } catch (e) {}
       }
-      // Anything left playing from an earlier reply, belt and braces.
+      // Anything left playing from an earlier reply.
       document.querySelectorAll(".msg.assistant").forEach(function (m) {
-        if (m !== active && m.__serverAudio) {
-          try { m.__serverAudio.pause(); } catch (e) {}
-          m.__serverAudio = null;
+        if (m !== active) {
+          if (typeof m.__stopClonedVoice === "function") {
+            try { m.__stopClonedVoice(); } catch (e) {}
+          }
+          if (m.__serverAudio) {
+            try { m.__serverAudio.pause(); } catch (e) {}
+            m.__serverAudio = null;
+          }
         }
+      });
+
+      // Last resort: any <audio> element on the page, whether or not this
+      // code still holds a reference to it. An element whose reference was
+      // dropped on an error path keeps playing to the end with nothing able
+      // to reach it, and the participant has no way to silence it. Audio
+      // only — the avatar's looping portrait and any talking-head clip are
+      // <video> and must keep running.
+      document.querySelectorAll("audio").forEach(function (el) {
+        try {
+          el.pause();
+          el.currentTime = 0;
+        } catch (e) {}
       });
       try { Presence.set("idle"); } catch (e) {}
       window.__activeSpeakMsg = null;
@@ -4956,10 +4989,48 @@ INDEX_HTML = r"""<!DOCTYPE html>
         if (listType) { html += `</${listType}>`; listType = null; }
       };
 
-      for (const raw of lines) {
-        const line = raw.trim();
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
 
         if (!line) { flushPara(); closeList(); continue; }
+
+        // Tables. The advisor writes pricing and comparisons as markdown
+        // tables, and without this they arrived as a wall of pipe
+        // characters — "| Phase | Scope | Fee | |---|---|---| | Phase A…" —
+        // which is unreadable and looks broken to a participant.
+        //
+        // A table is a header row of pipes followed by a separator row of
+        // dashes. Anything else starting with a pipe is left alone rather
+        // than guessed at.
+        if (line.startsWith("|") && i + 1 < lines.length &&
+            /^\|?[\s:|-]*-[\s:|-]*\|?$/.test(lines[i + 1].trim()) &&
+            lines[i + 1].includes("-")) {
+          flushPara(); closeList();
+          const cells = (row) => row.trim()
+            .replace(/^\|/, "").replace(/\|$/, "")
+            .split("|").map(c => c.trim());
+          const headers = cells(line);
+          const aligns = cells(lines[i + 1]).map(a =>
+            a.startsWith(":") && a.endsWith(":") ? "center"
+            : a.endsWith(":") ? "right" : "left");
+          let body = "";
+          let r = i + 2;
+          for (; r < lines.length; r++) {
+            const rowLine = lines[r].trim();
+            if (!rowLine.startsWith("|")) break;
+            const cols = cells(rowLine);
+            body += "<tr>" + headers.map((_, c) =>
+              `<td style="text-align:${aligns[c] || "left"}">` +
+              renderInline(cols[c] || "") + "</td>").join("") + "</tr>";
+          }
+          html += "<table class=\"md-table\"><thead><tr>" +
+            headers.map((h, c) =>
+              `<th style="text-align:${aligns[c] || "left"}">` +
+              renderInline(h) + "</th>").join("") +
+            "</tr></thead><tbody>" + body + "</tbody></table>";
+          i = r - 1;
+          continue;
+        }
 
         if (/^([-*_])\1{2,}$/.test(line)) {
           flushPara(); closeList(); html += "<hr />"; continue;
