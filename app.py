@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-c"
-APP_BUILD_NOTES = "cloned voice synthesised in parts; playback starts in seconds"
+APP_VERSION = "2026-09-20-d"
+APP_BUILD_NOTES = "turning Speak off stops the cloned voice too"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4333,6 +4333,38 @@ INDEX_HTML = r"""<!DOCTYPE html>
       return Math.min(60000, 12000 + (text || "").length * 30);
     }
 
+    // Stopping speech has to stop *all* of it. The browser's speech engine
+    // and the advisor's cloned voice are two unrelated mechanisms — one is
+    // speechSynthesis, the other an <audio> element fetched from the server
+    // — and code that stopped only the first left the cloned voice playing
+    // with nothing on screen able to halt it. Chunked playback made that
+    // worse: the next part would still be fetched and played.
+    //
+    // Every stop path goes through here.
+    window.__stopAllSpeech = function () {
+      try { J3PSpeech.stop(); } catch (e) {}
+      const active = window.__activeSpeakMsg;
+      if (active) {
+        // Cancels the chunk sequence as well as the part now sounding.
+        if (typeof active.__stopClonedVoice === "function") {
+          try { active.__stopClonedVoice(); } catch (e) {}
+        } else if (active.__serverAudio) {
+          try { active.__serverAudio.pause(); } catch (e) {}
+          active.__serverAudio = null;
+        }
+        try { setAvatarSpeaking(active, false); } catch (e) {}
+      }
+      // Anything left playing from an earlier reply, belt and braces.
+      document.querySelectorAll(".msg.assistant").forEach(function (m) {
+        if (m !== active && m.__serverAudio) {
+          try { m.__serverAudio.pause(); } catch (e) {}
+          m.__serverAudio = null;
+        }
+      });
+      try { Presence.set("idle"); } catch (e) {}
+      window.__activeSpeakMsg = null;
+    };
+
     // Auto-speak state — persists across visits
     const autoSpeakBtn = document.getElementById("autospeak-btn");
     let autoSpeakEnabled = false;
@@ -4361,13 +4393,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
         autoSpeakEnabled = !autoSpeakEnabled;
         try { localStorage.setItem("j3p_autospeak_v2", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
         refreshAutoSpeakUI();
-        // Turning OFF should stop anything currently speaking
-        if (!autoSpeakEnabled) {
-          J3PSpeech.stop();
-          setAvatarSpeaking(window.__activeSpeakMsg, false);
-          Presence.set("idle");
-          window.__activeSpeakMsg = null;
-        }
+        // Turning OFF stops whatever is speaking — the browser voice or
+        // the advisor's own. Previously only the browser voice was stopped,
+        // so switching Speak off left the cloned voice talking.
+        if (!autoSpeakEnabled) window.__stopAllSpeech();
       });
     }
     // Expose to addMessage so a new bot reply can auto-play when enabled
@@ -5770,16 +5799,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
           const activeMsg = window.__activeSpeakMsg;
           // This message is the one currently playing — toggle it off
           if (activeMsg === msgDiv) {
-            J3PSpeech.stop();
-            if (msgDiv.__serverAudio) msgDiv.__serverAudio.pause();
+            window.__stopAllSpeech();
             resetSpeakUI();
             return;
           }
           // A different message was playing — stop it before starting this one
-          if (activeMsg) {
-            J3PSpeech.stop();
-            if (activeMsg.__serverAudio) activeMsg.__serverAudio.pause();
-          }
+          if (activeMsg) window.__stopAllSpeech();
 
           const cleanText = stripMarkdown(replyText);
           // Captures why the cloned voice wasn't used, so it can be shown
@@ -5875,9 +5900,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
               const audio = new Audio(first.url);
               audio.playbackRate = J3PSpeech.getRate();
               msgDiv.__serverAudio = audio;
-              // Clicking Speak again mid-reply has to stop the whole
-              // sequence, not just the piece currently sounding.
-              audio.addEventListener("pause", () => { stopped = audio.ended ? stopped : true; });
+              // An explicit cancel rather than listening for "pause":
+              // swapping audio.src between parts can itself fire pause, so
+              // inferring intent from the event would end the sequence at
+              // the first join.
+              msgDiv.__stopClonedVoice = function () {
+                stopped = true;
+                try { audio.pause(); } catch (e) {}
+                try { URL.revokeObjectURL(audio.src); } catch (e) {}
+                msgDiv.__serverAudio = null;
+              };
 
               let index = 0;
               let pending = pieces.length > 1 ? fetchPiece(pieces[1]) : null;
@@ -5896,6 +5928,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                 index += 1;
                 if (stopped || index >= pieces.length) {
                   msgDiv.__serverAudio = null;
+                  msgDiv.__stopClonedVoice = null;
                   resetSpeakUI();
                   return;
                 }

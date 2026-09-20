@@ -1,69 +1,56 @@
-# J3P Advisor — build 2026-09-20-c
+# J3P Advisor — build 2026-09-20-d
 
 `app.py`, plus the pre-deploy checks.
 
 ---
 
-## First, a likely explanation for the screenshot
+## Turning Speak off now actually stops the sound
 
-That screenshot was taken a minute after the previous one, and `-b` was not
-packaged until after it — so it was almost certainly still the old build.
-Deploying `-b` alone may well have fixed it.
+My bug. The Speak toggle called `J3PSpeech.stop()`, which stops the
+**browser's** speech engine. The advisor's cloned voice is a different
+mechanism entirely — an `<audio>` element playing a file fetched from the
+server — and nothing told it to stop. So switching Speak off silenced a
+voice that was not the one talking.
 
-But raising a timeout was treating the symptom, and I should say so: a long
-enough reply will exceed any fixed limit. Whatever number I pick, there is a
-reply that beats it.
+Chunked playback, added in `-c`, made it worse: the sequence would keep
+fetching and playing the remaining parts.
 
-## The actual fix: synthesise in parts
+**Every stop path now goes through one function** that halts both the
+browser voice and the cloned voice, cancels any pending parts, and clears
+any audio left over from an earlier reply. The Speak toggle, clicking the
+avatar, and clicking Speak on another reply all use it.
 
-A 4,000-character reply was one enormous synthesis request. The participant
-waited for the **whole** thing before hearing a sound, and if it ran long,
-the entire attempt was lost.
+## A second fault found while fixing it
 
-The reply is now split on sentence ends into pieces of at most ~700
-characters. Each is a short request that comes back in a second or two:
+The chunk sequence detected "the participant stopped this" by listening for
+the audio element's `pause` event. But swapping `audio.src` between parts
+can itself fire `pause` — so a long reply would have ended at the first
+join, reporting "stopped after part 1 of 7" for no reason.
 
-| Reply | Parts | Longest part |
-|---|---|---|
-| 80 chars | 1 | 80 |
-| 700 chars | 1 | 700 |
-| 1,500 chars | 3 | 634 |
-| 4,000 chars | 7 | 634 |
+Replaced with an explicit cancel that only a real stop triggers. Verified
+both ways: a three-part reply plays through to the end, and a stop during
+part 2 of four cancels the sequence, fetches nothing further, and releases
+the audio.
 
-**Playback starts after the first part**, not after the last — so a long
-reply begins speaking in about the same time a short one does. The next part
-is fetched while the current one plays, so the joins are seamless. The
-browser's own speech engine already worked this way, for exactly this
-reason.
+I should have caught this in `-c` — inferring user intent from a media event
+that the code itself also triggers was the wrong approach from the start.
 
-Three behaviours worth knowing:
+---
 
-- **Only the first part decides** whether the cloned voice is usable. If it
-  works, playback has started before a later part could fail.
-- **A later failure ends the reply early and says so** — "stopped after part
-  3 of 7". Switching to a different voice halfway through would be worse
-  than stopping in the one already playing.
-- **Clicking Speak again stops the whole sequence**, not just the part
-  currently sounding.
+## From -c and -b
 
-## Also in this build, from -b
-
-The server-side synthesis timeout scales with text and always expires before
-the browser's, so a timeout is reported by the side that actually knows what
-the provider was doing.
-
-**The reading-voice picker is English only.** It previously listed the best
-voice for every installed language, which is why an English reply was read
-in Danish. A preference saved before this change is honoured only if it can
-read English; otherwise it is cleared automatically.
+**The cloned voice is synthesised in parts**, so playback starts within a
+couple of seconds on a long reply instead of waiting for the whole thing —
+and no reply is long enough to time out. **The reading-voice picker is
+English only**, which is what caused the Danish. **The server-side synthesis
+timeout scales with the text** and always expires before the browser's.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-c`.
+`2026-09-20-d`.
 
-On a long reply you should now hear the voice start within a couple of
-seconds, and the note underneath should read "Played in their own voice
-(7 parts)".
+Worth testing directly: start a long reply speaking, then press Speak again
+part-way through. It should stop immediately and stay stopped.
