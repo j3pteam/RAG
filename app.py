@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-19-i"
-APP_BUILD_NOTES = "Knowledge, Users and Biometric collapse like Activity"
+APP_VERSION = "2026-09-20-a"
+APP_BUILD_NOTES = "open a whole conversation from the log; advisor export and import"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -13162,6 +13162,7 @@ def chat():
         record_location_async(interaction_id, client_ip())
         record_acknowledgement(interaction_id)
         record_personality(interaction_id)
+        record_interaction_thread(interaction_id)
     except Exception as e:
         app.logger.error(f"log_interaction failed: {e}")
 
@@ -13394,6 +13395,248 @@ def short_location(value: str) -> str:
         # write it. Dropping the repeat would lose the state entirely.
         parts[1] = _US_STATES.get(parts[1].lower(), parts[1])
     return ", ".join(parts[:2])
+
+
+def _advisor_export_rows(advisors_detail, base_url):
+    """One row per advisor, with everything that can be round-tripped.
+
+    Counts and readiness flags are included even though import ignores
+    them: the export doubles as the roster you send someone, and a file
+    that only carries what the importer reads is less useful than one that
+    answers "who is set up and who is not".
+    """
+    rows = []
+    for a in advisors_detail:
+        rows.append([
+            a["name"],
+            a["slug"],
+            a.get("scheduling_url") or "",
+            ("" if a.get("show_scheduling_override") is None
+             else "show" if a["show_scheduling_override"] else "hide"),
+            f"{base_url}/a/{a['slug']}",
+            a.get("participant_link_count", 0),
+            a.get("doc_count", 0),
+            "yes" if a.get("voice_sample") else "no",
+            "yes" if a.get("portal_token") else "no",
+        ])
+    return rows
+
+
+ADVISOR_EXPORT_HEADERS = [
+    "Name", "Slug", "Scheduling URL", "Booking button", "Session link",
+    "Participant links", "Documents", "Voice sample", "Portal link",
+]
+
+
+def _parse_advisor_upload(file_bytes: bytes, filename: str) -> list:
+    """Read a CSV or XLSX of advisors into {"name", "scheduling_url",
+    "show_scheduling"} dicts.
+
+    Only Name is required. Slug is deliberately ignored on import: it is
+    derived from the name, and letting a file set it would allow two
+    advisors to collide or an existing one to be silently repointed.
+    """
+    ext = (filename.rsplit(".", 1)[-1] or "").lower()
+    if ext in ("xlsx", "xlsm", "xltx"):
+        import io as _io
+        from openpyxl import load_workbook
+        wb = load_workbook(_io.BytesIO(file_bytes), read_only=True, data_only=True)
+        table = [[("" if c is None else str(c)).strip() for c in row]
+                 for row in wb.active.iter_rows(values_only=True)]
+    elif ext == "csv":
+        import csv as _csv, io as _io
+        text = file_bytes.decode("utf-8-sig", errors="replace")
+        table = [[(c or "").strip() for c in row]
+                 for row in _csv.reader(_io.StringIO(text))]
+    else:
+        raise ValueError("That file type isn't supported — use .csv or .xlsx.")
+
+    table = [r for r in table if any(r)]
+    if not table:
+        raise ValueError("That file is empty.")
+
+    header = [h.lower().strip() for h in table[0]]
+    def col(*names):
+        for n in names:
+            if n in header:
+                return header.index(n)
+        return -1
+
+    i_name = col("name", "advisor", "advisor name", "full name")
+    if i_name < 0:
+        raise ValueError("No Name column found. The first row should have a "
+                         "header with a Name column.")
+    i_sched = col("scheduling url", "scheduling link", "calendar", "booking url")
+    i_show = col("booking button", "show booking", "scheduling")
+
+    out = []
+    for row in table[1:]:
+        def cell(idx):
+            return row[idx].strip() if 0 <= idx < len(row) else ""
+        name = cell(i_name)
+        if not name:
+            continue
+        raw_show = cell(i_show).lower()
+        show = (True if raw_show in ("show", "yes", "on", "true", "1")
+                else False if raw_show in ("hide", "no", "off", "false", "0")
+                else None)
+        out.append({"name": name, "scheduling_url": cell(i_sched),
+                    "show_scheduling": show})
+    if not out:
+        raise ValueError("No rows with a name in them.")
+    return out
+
+
+def bulk_upsert_advisors(rows) -> dict:
+    """Create or update one advisor per row. Matching is by slug, so a row
+    whose name matches an existing advisor updates them rather than making
+    a duplicate — re-uploading an edited export does what you would expect.
+
+    Photos are not touched: a spreadsheet cannot carry one, and clearing
+    them on import would quietly wipe work done in the panel.
+    """
+    created, updated, errors = [], [], []
+    existing = {a["slug"] for a in list_advisors()}
+    for row in rows:
+        name = row["name"]
+        try:
+            slug = slugify_advisor(name)
+            if not slug:
+                errors.append({"name": name, "error": "name has no usable characters"})
+                continue
+            was_there = slug in existing
+            ok = save_advisor(
+                slug, name,
+                scheduling_url=(row.get("scheduling_url") or None),
+                show_scheduling_override=(row.get("show_scheduling")
+                                          if row.get("show_scheduling") is not None
+                                          else _UNSET),
+            )
+            if not ok:
+                errors.append({"name": name, "error": "could not be saved"})
+                continue
+            (updated if was_there else created).append({"name": name, "slug": slug})
+            existing.add(slug)
+        except Exception as e:
+            errors.append({"name": name, "error": str(e)[:120]})
+    return {"created": created, "updated": updated, "errors": errors}
+
+
+def _interaction_thread_ensure_table(conn):
+    if _already_ensured("interaction_thread"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS interaction_thread (
+                interaction_id BIGINT PRIMARY KEY,
+                token          TEXT NOT NULL,
+                advisor_slug   TEXT,
+                recorded_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS interaction_thread_token_idx
+            ON interaction_thread (token)
+        """)
+    conn.commit()
+
+
+def record_interaction_thread(interaction_id: int):
+    """Remember which conversation a logged exchange belongs to.
+
+    The conversation log records exchanges one row at a time and has no
+    idea they are part of a thread; chat_history holds the thread but is
+    keyed by participant token, which the log never sees. Without a row
+    here the two cannot be joined, so reading a session in order is
+    impossible — which is the whole point of opening one.
+    """
+    if not interaction_id:
+        return
+    token = participant_token()
+    if not token:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _interaction_thread_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO interaction_thread (interaction_id, token, advisor_slug)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (interaction_id) DO NOTHING
+            """, (int(interaction_id), token, session.get("advisor_slug") or ""))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[thread] record failed: {e}")
+    finally:
+        conn.close()
+
+
+def thread_token_for_interaction(interaction_id: int) -> str:
+    conn = _settings_db_conn()
+    if not conn:
+        return ""
+    try:
+        _interaction_thread_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT token FROM interaction_thread WHERE interaction_id = %s",
+                        (int(interaction_id),))
+            row = cur.fetchone()
+        return row[0] if row else ""
+    except Exception as e:
+        app.logger.error(f"[thread] lookup failed: {e}")
+        return ""
+    finally:
+        conn.close()
+
+
+def thread_messages(token: str, limit: int = 400) -> list:
+    """The whole conversation for one participant, oldest first — the order
+    it was lived, not the newest-first order the log uses."""
+    if not token:
+        return []
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    out = []
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT role, content, created_at FROM chat_history
+                WHERE token = %s ORDER BY id ASC LIMIT %s
+            """, (token, limit))
+            for role, content, when in cur.fetchall():
+                out.append({"role": role, "content": content, "at": when})
+    except Exception as e:
+        app.logger.error(f"[thread] read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
+def thread_participant(token: str) -> dict:
+    """Who this thread belongs to, if it came from a participant link."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT label, first_name, advisor_slug, enabled
+                FROM participant_links WHERE token = %s
+            """, (token,))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        return {"label": row[0], "first_name": row[1] or "",
+                "advisor_slug": row[2] or "", "enabled": bool(row[3])}
+    except Exception as e:
+        app.logger.error(f"[thread] participant lookup failed: {e}")
+        return {}
+    finally:
+        conn.close()
 
 
 def _voice_health(advisors=None):
@@ -14928,6 +15171,86 @@ LEARNING_ARCHIVE_HTML = """<!DOCTYPE html>
   </div>
 </div>
 </body></html>"""
+
+
+ADMIN_CONVERSATION_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Conversation — {{ cfg.persona_name }}</title>
+<link rel="icon" href="{{ cfg.favicon_url }}" />
+<link href="https://fonts.googleapis.com/css2?family=Jost:wght@300;400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --navy: {{ cfg.navy }}; --gold: {{ cfg.gold }}; --paper: {{ cfg.paper }};
+    --line: rgba(39, 51, 74, 0.14); --muted: rgba(39, 51, 74, 0.62);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--navy);
+    font-family: "Jost", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    line-height: 1.6;
+  }
+  .wrap { max-width: 820px; margin: 0 auto; padding: 2rem 1.25rem 4rem; }
+  .back { display: inline-block; margin-bottom: 1.5rem; color: var(--navy);
+          text-decoration: none; font-size: 0.9rem; }
+  .back:hover { text-decoration: underline; }
+  h1 { font-size: 1.5rem; margin: 0 0 0.35rem; font-weight: 600; }
+  .meta { color: var(--muted); font-size: 0.88rem; margin: 0 0 2rem; }
+  .msg { margin-bottom: 1.4rem; }
+  .who { font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase;
+         color: var(--muted); margin-bottom: 0.3rem; }
+  .bubble { padding: 0.9rem 1.1rem; border-radius: 3px; white-space: pre-wrap;
+            word-wrap: break-word; font-size: 0.95rem; }
+  .user .bubble { background: var(--navy); color: #fff; }
+  .assistant .bubble { background: #fff; border: 1px solid var(--line); }
+  .when { font-size: 0.72rem; color: var(--muted); margin-top: 0.3rem; }
+  .empty { background: #fff; border: 1px solid var(--line); border-radius: 3px;
+           padding: 2rem; text-align: center; color: var(--muted); }
+  .note { background: #fff; border: 1px solid var(--line); border-left: 3px solid var(--gold);
+          border-radius: 3px; padding: 0.9rem 1.1rem; font-size: 0.85rem;
+          color: var(--muted); margin-bottom: 2rem; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="/admin?tab=activity">&larr; Back to Activity</a>
+  <h1>
+    {% if who.label %}{{ who.label }}{% else %}Conversation{% endif %}
+  </h1>
+  <p class="meta">
+    with {{ advisor_name }}
+    {%- if who.first_name %} · greeted as {{ who.first_name }}{% endif %}
+    {%- if who.label and not who.enabled %} · link disabled{% endif %}
+    · {{ messages|length }} message{{ 's' if messages|length != 1 }}
+  </p>
+
+  <div class="note">
+    Read-only. This is the participant&#39;s session as it stands, oldest
+    first. Nothing typed here would reach them &mdash; continuing a session
+    on someone&#39;s behalf is a different thing from reading one.
+  </div>
+
+  {% if messages %}
+    {% for m in messages %}
+    <div class="msg {{ 'user' if m.role == 'user' else 'assistant' }}">
+      <div class="who">{{ "Participant" if m.role == "user" else advisor_name }}</div>
+      <div class="bubble">{{ m.content }}</div>
+      {% if m.at %}<div class="when">{{ m.at.strftime("%Y-%m-%d %H:%M") }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="empty">
+      No stored messages for this conversation. History is kept per
+      participant, and a session started before threading was recorded, or
+      one since cleared by the participant, will be empty here.
+    </div>
+  {% endif %}
+</div>
+</body>
+</html>
+"""
 
 
 ADMIN_HTML = """<!DOCTYPE html><html><head>
@@ -16682,6 +17005,37 @@ details.section[open] > summary {
                     border-bottom: 1px dashed var(--line);">
       <summary style="font-size: 0.95rem; font-weight: 600; cursor: pointer;
                       color: var(--navy); margin-bottom: 0.6rem;">
+        Export or import advisors
+      </summary>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+        The export is the roster — names, slugs, booking links and who is set
+        up — and it is the same shape the importer reads, so an edited export
+        can be uploaded straight back. Matching is by name, so a row for an
+        existing advisor updates them rather than creating a duplicate.
+        Photos, voice samples and knowledge are never touched by an import.
+      </p>
+      <div style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;
+                  margin-bottom: 1rem;">
+        <a href="{{ url_for('admin_export_advisors', fmt='csv') }}" class="copy-link">Export CSV</a>
+        <a href="{{ url_for('admin_export_advisors', fmt='xlsx') }}" class="copy-link">Export Excel</a>
+      </div>
+      <form method="POST" action="{{ url_for('admin_import_advisors') }}"
+            enctype="multipart/form-data"
+            style="display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <input type="file" name="advisor_file" accept=".csv,.xlsx" required
+               style="font-family: inherit; font-size: 0.85rem;" />
+        <button type="submit" class="btn">Upload</button>
+      </form>
+      <p class="muted" style="margin: 0.7rem 0 0; font-size: 0.78rem;">
+        A <strong>Name</strong> column is required. <strong>Scheduling URL</strong>
+        and <strong>Booking button</strong> (show / hide / blank) are optional.
+      </p>
+    </details>
+
+    <details style="padding-bottom: 1.1rem; margin-bottom: 1.1rem;
+                    border-bottom: 1px dashed var(--line);">
+      <summary style="font-size: 0.95rem; font-weight: 600; cursor: pointer;
+                      color: var(--navy); margin-bottom: 0.6rem;">
         Add or update an advisor
       </summary>
       <p class="muted" style="margin: 0 0 0.8rem 0; font-size: 0.82rem;">
@@ -17874,7 +18228,14 @@ details.section[open] > summary {
             {{ short_location(locations.get(f.id, '')) or '—' }}
           </td>
           {% endif %}
-          <td class="truncate" style="max-width: 280px;" title="{{ f.user_message }}">{{ f.user_message }}</td>
+          {# The question doubles as the way into the whole conversation.
+             A log row is one exchange out of a session, and reading one
+             exchange out of context is how the log has always been used
+             because there was no other option. #}
+          <td class="truncate" style="max-width: 280px;" title="{{ f.user_message }}">
+            <a href="{{ url_for('admin_view_conversation', interaction_id=f.id) }}"
+               class="adv-link" title="Open the whole conversation">{{ f.user_message }}</a>
+          </td>
           <td class="truncate" style="max-width: 280px;" title="{{ f.bot_reply }}">{{ f.bot_reply }}</td>
           <td class="truncate" title="{{ f.attachment_info or '' }}" style="max-width: 120px; font-size: 0.78rem;">
             {% if f.attachment_info %}📎 {{ f.attachment_info }}{% else %}<span class="muted">—</span>{% endif %}
@@ -19989,6 +20350,120 @@ def _tristate_form_value(name):
     if raw == "":
         return None
     return raw in ("1", "true", "on", "yes")
+
+
+@app.route("/admin/conversation/<int:interaction_id>")
+@require_permission("view_conversation_log")
+def admin_view_conversation(interaction_id):
+    """The whole conversation an exchange belongs to, oldest first.
+
+    Read-only, deliberately. Reading a session and continuing one as the
+    participant are different acts: the first is what the log already
+    permits, the second is impersonation and would put words in their
+    mouth. If continuing is ever wanted it should be built knowingly, not
+    arrive as a side effect of a "view" button.
+    """
+    token = thread_token_for_interaction(interaction_id)
+    if not token:
+        flash("That exchange predates conversation threading — it was logged "
+              "before the link between an exchange and its conversation was "
+              "recorded, so the rest of the session cannot be found.")
+        return redirect(url_for("admin_dashboard", tab="activity"))
+
+    who = thread_participant(token)
+
+    # An account restricted to certain advisors must not reach a session
+    # outside its scope by guessing an id.
+    scope = admin_advisor_scope()
+    if scope is not None and (who.get("advisor_slug") or "") not in scope:
+        flash("That conversation belongs to an advisor you do not have access to.")
+        return redirect(url_for("admin_dashboard", tab="activity"))
+
+    messages = thread_messages(token)
+    advisor = get_advisor(who.get("advisor_slug")) if who.get("advisor_slug") else None
+    app.logger.info(f"[thread] conversation {interaction_id} opened by "
+                    f"{(current_admin_identity() or {}).get('email', 'admin')}")
+    return _cached_render(
+        ADMIN_CONVERSATION_HTML, cfg=CONFIG, messages=messages, who=who,
+        advisor=advisor, interaction_id=interaction_id,
+        advisor_name=(advisor or {}).get("name", "the default persona"),
+    )
+
+
+@app.route("/admin/advisors/export.<fmt>")
+@require_permission("edit_advisors")
+def admin_export_advisors(fmt):
+    """The advisor roster as a file — the same shape the importer reads."""
+    if fmt not in ("csv", "xlsx"):
+        flash("Choose CSV or Excel.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    rows = _advisor_export_rows(advisors_with_detail(), public_base_url())
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    from flask import send_file
+    import io as _io
+    if fmt == "csv":
+        import csv as _csv
+        buf = _io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(ADVISOR_EXPORT_HEADERS)
+        w.writerows(rows)
+        data = _io.BytesIO(buf.getvalue().encode("utf-8-sig"))
+        return send_file(data, mimetype="text/csv", as_attachment=True,
+                         download_name=f"advisors_{stamp}.csv")
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Advisors"
+    ws.append(ADVISOR_EXPORT_HEADERS)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for row in rows:
+        ws.append(row)
+    for i, _ in enumerate(ADVISOR_EXPORT_HEADERS, start=1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = 24
+    data = _io.BytesIO()
+    wb.save(data)
+    data.seek(0)
+    return send_file(
+        data,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True, download_name=f"advisors_{stamp}.xlsx")
+
+
+@app.route("/admin/advisors/import", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_import_advisors():
+    """Create or update advisors from a CSV or XLSX."""
+    file = request.files.get("advisor_file")
+    if not file or not file.filename:
+        flash("Choose a .csv or .xlsx file first.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    try:
+        rows = _parse_advisor_upload(file.read(), file.filename)
+    except ValueError as e:
+        flash(str(e))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    except Exception as e:
+        app.logger.error(f"[advisors] import parse failed: {e}")
+        flash("Could not read that file — check it is a valid .csv or .xlsx.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    result = bulk_upsert_advisors(rows)
+    made, changed, errors = result["created"], result["updated"], result["errors"]
+    parts = []
+    if made:
+        parts.append(f"{len(made)} added")
+    if changed:
+        parts.append(f"{len(changed)} updated")
+    if errors:
+        parts.append(f"{len(errors)} failed")
+    flash(("✓ " if (made or changed) else "") +
+          (", ".join(parts) if parts else "Nothing to do") +
+          (" — photos and voice samples are untouched." if (made or changed) else "") +
+          ("" if not errors else
+           " Failed: " + "; ".join(f"{e['name']} ({e['error']})" for e in errors[:5])))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/scheduling/<slug>", methods=["POST"])

@@ -1,76 +1,69 @@
-# J3P Advisor — build 2026-09-19-i
+# J3P Advisor — build 2026-09-20-a
 
 `app.py`, plus the pre-deploy checks.
 
-**Includes the private-database-address change from `-h`** — the one that
-addresses the slowness. Deploy this.
+---
+
+## Open a conversation from the log
+
+A log row is one exchange out of a session. Reading one exchange out of
+context has been the only option because nothing joined a row to the
+conversation it came from — the log records exchanges, `chat_history` holds
+threads keyed by participant token, and the two had no link.
+
+**The question in each row is now a link.** It opens the whole conversation,
+oldest first, with who it was with and how many messages.
+
+Two decisions worth stating plainly:
+
+**It is read-only.** Reading a session and continuing one as the participant
+are different acts — the first is what the conversation log already permits,
+the second is impersonation and would put words in their mouth. If you want
+an advisor to be able to pick up a thread, that should be built knowingly
+rather than arrive as a side effect of a "view" button. The page says so.
+
+**Advisor scoping is enforced here too.** An account restricted to certain
+advisors cannot reach another advisor's conversation by editing the id in
+the URL. Opening one is logged with the admin's email.
+
+**This works from now on, not backwards.** The link between an exchange and
+its conversation is recorded as exchanges happen, so sessions logged before
+this build will say so rather than show an empty page.
 
 ---
 
-## Every tab now behaves the same way
+## Export and import advisors
 
-Sections collapse and open on click, each with its own summary line:
+Advisors tab → **Export or import advisors**.
 
-**Knowledge**
-```
-▸ Find research            PubMed and OpenAlex · 2 results
-▾ Documents                30 embedded
-▸ Upload Document          PDF, Word, text or Markdown
-▸ Upload Folder            many files at once
-▸ Add Knowledge from URL   fetches and embeds a web page
-▸ Add Knowledge from Text  paste directly
-```
+The export is the roster — name, slug, scheduling URL, booking-button
+setting, session link, and counts for participant links, documents, voice
+sample and portal link. CSV or Excel.
 
-**Manage Users**
-```
-▸ Signed in as             Alan Friedman · owner
-▸ Add a user               invite an administrator
-▾ Existing users (2)       2 accounts
-```
+It is the same shape the importer reads, so an edited export uploads
+straight back. Matching is by name, so a row for an existing advisor updates
+them rather than creating a duplicate.
 
-**Biometric data**
-```
-▸ Upload a file            Apple Health, Oura, Whoop exports
-▾ Files                    3 files
-```
+Only **Name** is required; Scheduling URL and Booking button are optional.
+Slug is deliberately ignored on import — it is derived from the name, and
+letting a file set it would allow two advisors to collide or an existing one
+to be silently repointed. **Photos, voice samples and knowledge are never
+touched by an import**, because a spreadsheet cannot carry them and clearing
+them would quietly wipe work done in the panel.
 
-**Settings** — Participant Access collapses; the rest of that tab is one
-form and was already compact.
+Verified against a file with a quoted comma in a name, a blank row, and
+missing optional columns; a file with no Name column and a wrong file type
+are both rejected with a message that says what to fix.
 
-In each case the section people arrive for stays open — Documents,
-Existing users, Files — and the actions that create new things start
-closed, since they are occasional.
-
-## Two tabs left alone, deliberately
-
-**Overview** is a single card of four numbers. A collapsible wrapper round
-one card is cost without benefit.
-
-**Diagnostics** exists to be read all at once when something is wrong.
-Making someone open six sections to find which one is red would defeat what
-it is for. Say the word if you would rather it matched anyway.
-
-**Advisors** already worked this way — one card open at a time, from `-f`.
-
----
-
-## Still the main thing
-
-`-h` added automatic use of Railway's private database address. Until that
-variable is set, Diagnostics → Database connections will show:
-
-```
-Database address   roundhouse.proxy.rlwy.net
-                   public proxy — every connection leaves the datacentre
-```
-
-Measured: two queries on an open connection take 68 ms; two that each open
-one take 2.2 seconds. Setting `DATABASE_PRIVATE_URL` on the web service is
-what closes that gap, and no code change achieves the same.
+*(This completes work I started and left half-finished last turn — the
+parsing helpers were in the file with nothing calling them.)*
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-19-i`.
+`2026-09-20-a`.
+
+Run `./check.sh` first — it now covers syntax, undefined names, module-level
+definition order, and HTML well-formedness across all eight tabs.
