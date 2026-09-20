@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-j"
-APP_BUILD_NOTES = "repeated clicks can no longer start two voices at once"
+APP_VERSION = "2026-09-20-k"
+APP_BUILD_NOTES = "the speaker button and the avatar both stop the voice"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -4385,6 +4385,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
       },
     };
 
+    // True while a reply is sounding, or while its audio is being fetched.
+    // The pending case matters: between the click and the first sound there
+    // are a couple of seconds where nothing is audible yet but a click
+    // clearly means "stop that".
+    window.__isSpeakingNow = function () {
+      try { if (J3PSpeech.isSpeaking()) return true; } catch (e) {}
+      if (window.__activeSpeakMsg) return true;
+      return Array.from(document.querySelectorAll(".msg.assistant"))
+        .some(function (m) { return m.__speakPending; });
+    };
+
     // Stopping speech has to stop *all* of it. The browser's speech engine
     // and the advisor's cloned voice are two unrelated mechanisms — one is
     // speechSynthesis, the other an <audio> element fetched from the server
@@ -4451,6 +4462,22 @@ INDEX_HTML = r"""<!DOCTYPE html>
       autoSpeakEnabled = false;
     } else if (autoSpeakBtn) {
       autoSpeakBtn.addEventListener("click", () => {
+        // While something is speaking, this button means stop — not
+        // "switch the setting". Reaching for the speaker to silence a reply
+        // and having it start reading the next one instead is the opposite
+        // of what the gesture means.
+        if (window.__isSpeakingNow()) {
+          window.__stopAllSpeech();
+          if (autoSpeakEnabled) {
+            // It was reading everything aloud, so stop that too — one press
+            // to silence it, rather than one to stop and another to
+            // prevent the next reply starting.
+            autoSpeakEnabled = false;
+            try { localStorage.setItem("j3p_autospeak_v2", "0"); } catch (e) {}
+            refreshAutoSpeakUI();
+          }
+          return;
+        }
         autoSpeakEnabled = !autoSpeakEnabled;
         try { localStorage.setItem("j3p_autospeak_v2", autoSpeakEnabled ? "1" : "0"); } catch (e) {}
         refreshAutoSpeakUI();
@@ -5400,6 +5427,14 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Clicking the presence speaks the most recent reply
       if (frame) {
         frame.addEventListener("click", async () => {
+          // Clicking the advisor while they are speaking stops them,
+          // whichever reply is playing and whether or not the audio has
+          // started sounding yet.
+          if (window.__isSpeakingNow && window.__isSpeakingNow()
+              && !root.classList.contains("video")) {
+            window.__stopAllSpeech();
+            return;
+          }
           const msgs = Array.from(document.querySelectorAll(".msg.assistant"))
             .filter(m => !m.className.includes("typing"));
           const last = msgs[msgs.length - 1];
