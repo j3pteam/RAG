@@ -1,61 +1,64 @@
-# J3P Advisor — build 2026-09-20-l
+# J3P Advisor — build 2026-09-20-m
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-k`.
+`app.py`, plus the pre-deploy checks. Includes everything from `-l`.
 
 ---
 
-## Reply latency is now measured
+## Why the Word file did not match the screen
 
-The chat route had **no timing at all** — only admin page loads were
-instrumented. So "taking a very long time to respond" had nothing behind it,
-and I would have been guessing between the model, retrieval, history, the
-database and the voice.
-
-Every reply is now timed by phase:
-
-- request parsed and attachments read
-- conversation history loaded
-- knowledge retrieval (embedding + search)
-- prompt assembly
-- **model call**
-- reply post-processing (scrubbers, formatting)
-
-**Diagnostics → Reply times** shows the last twelve, newest first, with the
-total coloured by severity and the breakdown beside it:
+I opened the .docx you sent. It contains **76 paragraphs and zero tables**.
+The Investment and Timing Summary tables arrived as single paragraphs of
+pipe characters:
 
 ```
-23:33:59   14.2s   request parsed 12ms · history 48ms · retrieval 610ms ·
-                   prompt 3ms · model call 13400ms · post-processing 160ms
+| Phase | Scope | Fee | |---|---|---| | Phase A: Leadership Alignment, …
 ```
 
-The same line goes to the deploy logs as `[timing] /chat: …`.
+So it is the opposite of what I first assumed. The page renders those tables
+properly as of `-f`; the export does not, because `exports.py` builds
+documents paragraph by paragraph and has no notion of a table. The screen
+and the document have disagreed ever since the page learned to render them.
 
-## What to expect, and what it would mean
+## What this build does
 
-The model call is normally the great majority of it, and that is Anthropic
-generating the reply — a long proposal legitimately takes ten to twenty
-seconds and no change here would alter that. **If the model call dominates,
-the latency is inherent.**
+Tables are flattened into labelled blocks before the document is generated:
 
-What would be worth acting on is anything *else* being large:
+```
+**Phase A: Leadership Alignment**
+- Scope: Behavioral assessments, 360 feedback
+- Fee: $68,000
 
-- **retrieval** over a second — the embedding call or the vector search,
-  which is fixable
-- **history** over a second — the conversation is being re-read from the
-  database on every turn
-- **post-processing** over a second — the scrubbers, which run over the
-  whole reply
+**Total**
+- Fee: $258,000
+```
 
-Send a message, open Diagnostics, and tell me what the row says. That turns
-this into one specific thing rather than another round of guesses.
+Every value survives, in order, and it reads as prose instead of debris.
+Verified on your actual tables: all three fees, both scope descriptions,
+every period and activity in the Timing Summary, and the sentence after the
+table all present, with zero pipe characters left.
 
-One note: the figures are per worker, and there are two. A reply handled by
-the other worker will not appear — reload once or send a second message if
-the table looks empty.
+## This is a workaround, and I want to be clear about that
+
+A real Word table has to be built by `exports.py`, which is the one file in
+this project I have never had. Labelled blocks are readable and lossless,
+but a proposal with a pricing table should have a pricing table.
+
+**Send me `exports.py` and I will do it properly** — a real table in Word
+and PDF, with the header row and column widths, rather than a good
+approximation. It is a contained change to one function in that file.
+
+---
+
+## From -l
+
+**Reply latency is measured.** Diagnostics → Reply times shows the last
+twelve replies with the time broken down by phase — history, retrieval,
+prompt, model call, post-processing — so "slow to respond" can be attributed
+rather than guessed at.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-l`.
+`2026-09-20-m`.

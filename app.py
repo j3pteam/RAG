@@ -266,8 +266,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-l"
-APP_BUILD_NOTES = "reply latency is measured and shown in Diagnostics"
+APP_VERSION = "2026-09-20-m"
+APP_BUILD_NOTES = "exported documents no longer show tables as raw pipes"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -1346,6 +1346,55 @@ def raise_safety_alert(user_message: str, ip: str = ""):
 # which db.update_feedback_rating doesn't cover.
 
 _feedback_table_cache = None
+
+
+def flatten_markdown_tables(text: str) -> str:
+    """Turn markdown tables into labelled blocks before export.
+
+    exports.py builds documents paragraph by paragraph and has no notion of
+    a table, so a markdown table arrived in Word as one long paragraph of
+    pipe characters — the Investment and Timing Summary tables in the
+    proposal came out as an unreadable wall. The page renders them properly,
+    so the document and the screen disagreed.
+
+    A real Word table has to be built in exports.py, which this file does
+    not own. Until then, each row becomes a short labelled block: every
+    value survives, in order, and it reads as prose rather than as debris.
+    """
+    lines = (text or "").replace("\r\n", "\n").split("\n")
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i].strip()
+        is_table = (
+            line.startswith("|") and i + 1 < len(lines)
+            and re.fullmatch(r"\|?[\s:|-]*-[\s:|-]*\|?", lines[i + 1].strip() or "x")
+        )
+        if not is_table:
+            out.append(lines[i])
+            i += 1
+            continue
+
+        def cells(row):
+            return [c.strip() for c in
+                    row.strip().removeprefix("|").removesuffix("|").split("|")]
+
+        headers = cells(line)
+        i += 2
+        while i < len(lines) and lines[i].strip().startswith("|"):
+            values = cells(lines[i])
+            # The first column is the row's subject, so it leads; the rest
+            # are labelled with their header so nothing is ambiguous.
+            title = values[0] if values else ""
+            title = re.sub(r"\*\*(.+?)\*\*", r"\1", title).strip()
+            if title:
+                out.append(f"**{title}**")
+            for col in range(1, len(headers)):
+                value = values[col].strip() if col < len(values) else ""
+                if value:
+                    out.append(f"- {headers[col]}: {value}")
+            out.append("")
+            i += 1
+    return "\n".join(out)
 
 
 def _feedback_table(conn):
@@ -13660,7 +13709,8 @@ def export_response(fmt):
         return jsonify({"error": f"Unsupported format: {fmt}"}), 400
 
     try:
-        buffer, filename, mimetype = exports.build(fmt, text, title)
+        buffer, filename, mimetype = exports.build(
+            fmt, flatten_markdown_tables(text), title)
     except Exception as e:
         app.logger.error(f"Export failed ({fmt}): {e}")
         return jsonify({"error": f"Could not generate {fmt.upper()}: {str(e)[:200]}"}), 500
