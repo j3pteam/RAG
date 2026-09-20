@@ -238,8 +238,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-h"
-APP_BUILD_NOTES = "New conversation stops the voice; players tracked outside the DOM"
+APP_VERSION = "2026-09-20-i"
+APP_BUILD_NOTES = "voice starts sooner: short first piece, longer ones behind it"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -5928,12 +5928,27 @@ INDEX_HTML = r"""<!DOCTYPE html>
             //
             // Split on sentence ends so the joins land where a speaker
             // would pause anyway.
-            const pieces = (function splitForSynthesis(text, maxLen) {
+            const pieces = (function splitForSynthesis(text) {
+              // Pieces grow as they go.
+              //
+              // Every piece costs about the same fixed overhead plus time
+              // proportional to its length, and nothing is heard until the
+              // first one is finished. A uniform 700 characters meant
+              // waiting for 700 characters of synthesis before any sound —
+              // the delay reported. A short opening piece is spoken while
+              // the longer ones behind it are still being made.
+              //
+              // They keep growing rather than staying short because each
+              // piece is its own request: all-short would triple the calls
+              // to the voice service for no benefit once playback is under
+              // way and prefetching is ahead of the listener.
+              const sizeFor = (i) => (i === 0 ? 180 : i === 1 ? 420 : 900);
               const out = [];
               let buf = "";
               for (const sentence of String(text || "")
                      .split(/(?<=[.!?])\s+/).filter(Boolean)) {
-                if ((buf + " " + sentence).trim().length > maxLen && buf) {
+                const limit = sizeFor(out.length);
+                if ((buf + " " + sentence).trim().length > limit && buf) {
                   out.push(buf.trim());
                   buf = sentence;
                 } else {
@@ -5942,7 +5957,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
               }
               if (buf.trim()) out.push(buf.trim());
               return out.length ? out : [String(text || "")];
-            })(cleanText, 700);
+            })(cleanText);
 
             Presence.set("thinking");
 

@@ -1,55 +1,48 @@
-# J3P Advisor — build 2026-09-20-h
+# J3P Advisor — build 2026-09-20-i
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-g`.
-
----
-
-## Why none of my previous stop fixes could work
-
-`new Audio(url)` creates an element that is **never inserted into the
-document**. So the sweep I added in `-e` —
-`document.querySelectorAll("audio")` — was reaching nothing at all. It found
-no cloned-voice player because there was never one in the page to find.
-
-That left exactly one handle: a property on the message element. And "New
-conversation" removes those elements, so after clearing the chat there was
-no way for anything on the page to stop the audio. It simply played on.
-
-I shipped that sweep as a fix. It was not one, and I should have checked
-what it actually selected instead of assuming.
-
-## The fix
-
-Every cloned-voice player is now registered in a plain set held in the
-page's own scope, independent of the DOM entirely. It is added when
-playback starts and dropped when it ends. Stopping iterates that set.
-
-That works whether or not the message is still on screen, which is the case
-the previous attempts all missed.
-
-**And New conversation now stops speech**, which it never did — clearing the
-transcript left the reply being read aloud over an empty page.
-
-Verified four ways: a player stops while its message is on the page; a
-player stops after the message element is gone; two queued players both
-stop; and a finished player that has already been dropped is not touched
-again.
+`app.py`, plus the pre-deploy checks. Includes everything from `-h`.
 
 ---
 
-## From -g and -f
+## The voice starts sooner
 
-The avatar status reads plain `Speaking` with no voice detail. Markdown
-tables render as tables rather than raw pipes.
+Nothing is heard until the first piece has finished synthesising, and every
+piece was up to 700 characters — so you waited for 700 characters of
+synthesis before any sound, however long the reply.
+
+Pieces now **grow as they go**: about 180 characters for the first, 420 for
+the second, 900 after that. The opening line is spoken while the longer
+pieces behind it are still being made.
+
+| Reply | First piece | Sound starts | Was | Pieces (was) |
+|---|---|---|---|---|
+| 600 chars | 95 chars | ~0.7s | ~2.7s | 3 (1) |
+| 2,000 chars | 95 chars | ~0.7s | ~3.0s | 4 (3) |
+| 6,000 chars | 95 chars | ~0.7s | ~3.0s | 9 (9) |
+| 19,000 chars | 95 chars | ~0.7s | ~3.0s | 24 (29) |
+
+Roughly four times faster to first sound, and no slower overall — playback
+of one piece overlaps synthesis of the next, so the listener never catches
+up with the fetching.
+
+They grow rather than staying short because each piece is a separate call to
+the voice service. All-short would triple the request count for no benefit
+once playback is under way. On your 19,000-character reply this is actually
+*fewer* calls than before — 24 instead of 29 — while starting far sooner,
+which also answers the usage question I raised earlier.
+
+---
+
+## Still worth confirming
+
+Your last few screenshots showed the old status label, so the build in the
+browser was older than `-g`. If `/health` does not report
+`2026-09-20-i` after deploying, none of the recent fixes — including the
+New-conversation stop — are live yet.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-h`.
-
-The status label in your screenshot still read "SPEAKING (THEIR OWN VOICE)",
-which was removed in `-g` — so the build you tested was older than that. It
-is worth confirming Diagnostics shows `2026-09-20-h` before judging this
-one.
+`2026-09-20-i`.
