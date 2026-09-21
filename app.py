@@ -226,10 +226,10 @@ def _with_render_time(html: str) -> str:
     verdict = ("fast" if total < 500 else
                "acceptable" if total < 1000 else
                "slow — the largest phase below is where to look")
-    colour = ("var(--ok)" if total < 500 else
+    color = ("var(--ok)" if total < 500 else
               "var(--warn)" if total < 1000 else "var(--bad)")
     block = (f'<p style="margin:0 0 1rem;font-size:1.4rem;font-weight:600;'
-             f'color:{colour};">{total:.0f} ms '
+             f'color:{color};">{total:.0f} ms '
              f'<span style="font-size:0.9rem;font-weight:400;" class="muted">'
              f'— {verdict}</span></p>'
              f'<table>{rows}</table>')
@@ -266,8 +266,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-m"
-APP_BUILD_NOTES = "exported documents no longer show tables as raw pipes"
+APP_VERSION = "2026-09-20-n"
+APP_BUILD_NOTES = "context questions at session start, with a switch for both intakes"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -428,6 +428,7 @@ _SETTINGS_DEFAULTS = {
     "default_scheduling_url": "",
     # Show the optional five-question personality gate after acknowledgment
     "personality_assessment_enabled": True,
+    "context_intake_enabled": False,
 }
 _settings_cache = None
 _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
@@ -847,7 +848,7 @@ def record_acknowledgement(interaction_id: int):
 
 
 def acknowledgements_for(interaction_ids):
-    """Map interaction_id -> acknowledgement timestamp for the admin table."""
+    """Map interaction_id -> acknowledgment timestamp for the admin table."""
     out = {}
     ids = [int(i) for i in interaction_ids if i]
     if not ids:
@@ -1349,7 +1350,7 @@ _feedback_table_cache = None
 
 
 def flatten_markdown_tables(text: str) -> str:
-    """Turn markdown tables into labelled blocks before export.
+    """Turn markdown tables into labeled blocks before export.
 
     exports.py builds documents paragraph by paragraph and has no notion of
     a table, so a markdown table arrived in Word as one long paragraph of
@@ -1358,7 +1359,7 @@ def flatten_markdown_tables(text: str) -> str:
     so the document and the screen disagreed.
 
     A real Word table has to be built in exports.py, which this file does
-    not own. Until then, each row becomes a short labelled block: every
+    not own. Until then, each row becomes a short labeled block: every
     value survives, in order, and it reads as prose rather than as debris.
     """
     lines = (text or "").replace("\r\n", "\n").split("\n")
@@ -1383,7 +1384,7 @@ def flatten_markdown_tables(text: str) -> str:
         while i < len(lines) and lines[i].strip().startswith("|"):
             values = cells(lines[i])
             # The first column is the row's subject, so it leads; the rest
-            # are labelled with their header so nothing is ambiguous.
+            # are labeled with their header so nothing is ambiguous.
             title = values[0] if values else ""
             title = re.sub(r"\*\*(.+?)\*\*", r"\1", title).strip()
             if title:
@@ -2289,7 +2290,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       0%, 100% { transform: scale(1); }
       50%      { transform: scale(1.035); }
     }
-    /* Thinking: gold ring travelling round the edge */
+    /* Thinking: gold ring traveling round the edge */
     @keyframes av-think {
       0%   { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
@@ -2507,6 +2508,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
       border-bottom: 1px dashed var(--line);
     }
     .pq-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    .cq-row { margin: 0 0 1.15rem; text-align: left; }
+    .cq-label {
+      display: block; font-size: 0.9rem; font-weight: 600;
+      color: var(--navy); margin: 0 0 0.45rem;
+    }
+    .cq-input {
+      width: 100%; box-sizing: border-box; padding: 0.7rem 0.85rem;
+      border: 1px solid var(--line); border-radius: 8px;
+      font-family: inherit; font-size: 0.95rem; color: var(--ink);
+      background: #fff;
+    }
+    .cq-input:focus { outline: none; border-color: var(--gold); }
     .pq-statement { margin: 0 0 0.6rem 0; font-size: 0.9rem; line-height: 1.5; }
     .pq-scale { display: flex; gap: 0.4rem; }
     .pq-opt {
@@ -2719,7 +2732,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       0%, 100% { transform: scale(1); }
       50%      { transform: scale(1.028); }
     }
-    /* Thinking: ring travelling round the frame */
+    /* Thinking: ring traveling round the frame */
     .presence-loop {
       position: absolute; inset: 0; width: 100%; height: 100%;
       border-radius: 50%; object-fit: cover; border: 2px solid var(--gold);
@@ -3346,6 +3359,56 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  {% if context_intake_enabled %}
+  <div id="context-overlay" class="ack-overlay" role="dialog" aria-modal="true"
+       aria-labelledby="context-title" aria-describedby="context-body" hidden>
+    <div class="ack-box">
+      <div class="ack-head">
+        <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="ack-logo" />
+        <span class="ack-divider"></span>
+        <span class="ack-tag">Quick context</span>
+      </div>
+      <div class="ack-content">
+        <h2 id="context-title">Tell me a little about your work</h2>
+        <div id="context-body" class="ack-text">
+          <p>
+            Two quick questions so I can pitch my answers at the right level.
+            Both are optional.
+          </p>
+        </div>
+        <button type="button" id="context-skip" class="ack-secondary">Skip for now</button>
+        <div id="context-questions">
+          <div class="cq-row">
+            <label class="cq-label" for="context-position">What is your position?</label>
+            <input type="text" id="context-position" class="cq-input"
+                   list="context-position-list" autocomplete="off"
+                   placeholder="For example: Department Chair, Nurse Manager, Program Director" />
+            <datalist id="context-position-list">
+              {% for option in context_position_options %}
+              <option value="{{ option }}"></option>
+              {% endfor %}
+            </datalist>
+          </div>
+          <div class="cq-row">
+            <label class="cq-label" for="context-specialization">
+              What is your area of specialization?
+            </label>
+            <input type="text" id="context-specialization" class="cq-input"
+                   list="context-specialization-list" autocomplete="off"
+                   placeholder="For example: Orthopaedic Surgery, Nursing, Neurosurgery" />
+            <datalist id="context-specialization-list">
+              {% for option in context_specialization_options %}
+              <option value="{{ option }}"></option>
+              {% endfor %}
+            </datalist>
+          </div>
+        </div>
+        <button type="button" id="context-continue">Continue</button>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+
   {% if personality_enabled %}
   <div id="personality-overlay" class="ack-overlay" role="dialog" aria-modal="true"
        aria-labelledby="personality-title" aria-describedby="personality-body" hidden>
@@ -3687,6 +3750,15 @@ INDEX_HTML = r"""<!DOCTYPE html>
         personalityDone = true;
       }
 
+      const contextOverlay = document.getElementById("context-overlay");
+      const CONTEXT_KEY = "j3p_context_done";
+      let contextDone = false;
+      try {
+        contextDone = !!sessionStorage.getItem(CONTEXT_KEY);
+      } catch (e) {
+        contextDone = true;
+      }
+
       function openPersonalityGate() {
         if (!personalityOverlay || personalityDone) {
           setComposerBlocked(false);
@@ -3695,6 +3767,62 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
         setComposerBlocked(true);
         personalityOverlay.hidden = false;
+      }
+
+      // Two plain questions are a gentler opening than a ten-item rating
+      // scale, so the context intake comes first when both are switched on.
+      // Each is dismissed on its own: skipping one must not skip the other.
+      function openIntakeGate() {
+        if (!contextOverlay || contextDone) {
+          openPersonalityGate();
+          return;
+        }
+        setComposerBlocked(true);
+        contextOverlay.hidden = false;
+      }
+
+      if (contextOverlay) {
+        const positionBox = document.getElementById("context-position");
+        const specialtyBox = document.getElementById("context-specialization");
+        const contextContinue = document.getElementById("context-continue");
+        const contextSkip = document.getElementById("context-skip");
+
+        function closeContext(save) {
+          try { sessionStorage.setItem(CONTEXT_KEY, "1"); } catch (e) {}
+          contextDone = true;
+          if (save) {
+            const payload = {
+              position: (positionBox && positionBox.value || "").trim(),
+              specialization: (specialtyBox && specialtyBox.value || "").trim(),
+            };
+            if (payload.position || payload.specialization) {
+              try {
+                fetch("/context", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                  keepalive: true,
+                }).catch(() => {});
+              } catch (e) { /* non-blocking — never hold up entry */ }
+            }
+          }
+          contextOverlay.hidden = true;
+          openPersonalityGate();
+        }
+
+        if (contextContinue) {
+          contextContinue.addEventListener("click", () => closeContext(true));
+        }
+        if (contextSkip) {
+          contextSkip.addEventListener("click", () => closeContext(false));
+        }
+        // Enter in either box moves on, rather than doing nothing.
+        [positionBox, specialtyBox].forEach(function (box) {
+          if (!box) return;
+          box.addEventListener("keydown", (e) => {
+            if (e.key === "Enter") { e.preventDefault(); closeContext(true); }
+          });
+        });
       }
 
       if (personalityOverlay && personalityContinueBtn) {
@@ -3739,7 +3867,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       }
 
-      if (!ackOverlay) { openPersonalityGate(); return; }
+      if (!ackOverlay) { openIntakeGate(); return; }
 
       let alreadyAcked = false;
       try {
@@ -3749,7 +3877,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         // rather than silently skipping it.
         alreadyAcked = false;
       }
-      if (alreadyAcked) { openPersonalityGate(); return; }
+      if (alreadyAcked) { openIntakeGate(); return; }
 
       setComposerBlocked(true);
       ackOverlay.hidden = false;
@@ -3774,7 +3902,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }).catch(() => {});
         } catch (e) { /* non-blocking — never hold up entry */ }
         ackOverlay.hidden = true;
-        openPersonalityGate();
+        openIntakeGate();
       });
 
       // Enter on the checkbox accepts; Esc must not dismiss the gate
@@ -5566,7 +5694,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     // ---------------------------------------------------------------
     // Animated, interactive avatar
     // ---------------------------------------------------------------
-    // Three states: idle breathes gently, thinking shows a travelling ring
+    // Three states: idle breathes gently, thinking shows a traveling ring
     // while a reply is being generated, speaking radiates pulses while the
     // reply is read aloud. Clicking it starts or stops that reply's audio,
     // which is the same action as the SPEAK button beside the message.
@@ -6425,7 +6553,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
             await navigator.share({ title: shareTitle, text: shareText, url: shareUrl });
             return;
           } catch (err) {
-            // User cancelled or share failed — fall through to menu
+            // User canceled or share failed — fall through to menu
             if (err.name === "AbortError") return;
           }
         }
@@ -7043,7 +7171,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // click stops and sends. Cancelling is now an explicit button/Escape,
       // since there's no hold to drag away from anymore.
       let recording = false;
-      let cancelled = false;
+      let canceled = false;
       let startedAt = 0;
       let baseText = "";
       let finalText = "";
@@ -7072,7 +7200,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       function startRecording() {
         if (recording) return;
         recording = true;
-        cancelled = false;
+        canceled = false;
         startedAt = Date.now();
         finalText = "";
         interimText = "";
@@ -7096,13 +7224,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
       function stopRecording(cancelIt) {
         if (!recording) return;
         recording = false;
-        cancelled = !!cancelIt;
+        canceled = !!cancelIt;
         if (timerId) { clearInterval(timerId); timerId = null; }
         micBtn.classList.remove("recording");
         micBtn.setAttribute("aria-label", "Record a voice message");
         micBtn.title = "Click to start recording — click again to send";
 
-        setHint(cancelled ? "Cancelled" : "Transcribing\u2026", cancelled);
+        setHint(canceled ? "Canceled" : "Transcribing\u2026", canceled);
         try { recognition.stop(); } catch (err) {}
         // recognition "end" fires shortly after stop(); submission happens there
       }
@@ -7135,7 +7263,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
         const spoken = (finalText + interimText).trim();
         const message = ((baseText ? baseText + " " : "") + spoken).trim();
 
-        if (cancelled) {
+        if (canceled) {
           input.value = baseText;
           setTimeout(() => showHint(false), 900);
           return;
@@ -7727,7 +7855,7 @@ def prepare_avatar(raw: bytes):
         im = im.convert("RGB")
         w, h = im.size
         side = min(w, h)
-        # Bias the crop upward — faces sit above centre in most headshots
+        # Bias the crop upward — faces sit above center in most headshots
         left = (w - side) // 2
         top = max(0, int((h - side) * 0.28))
         im = im.crop((left, top, left + side, top + side))
@@ -8412,7 +8540,7 @@ def search_pubmed(query: str, limit: int = 10) -> list:
             pmid = art.findtext(".//PMID") or ""
             title = _clean_ws(" ".join(art.find(".//ArticleTitle").itertext())
                               if art.find(".//ArticleTitle") is not None else "")
-            # Structured abstracts arrive as several labelled sections; keep
+            # Structured abstracts arrive as several labeled sections; keep
             # the labels, they carry meaning (Background, Methods, Results).
             parts = []
             for node in art.findall(".//Abstract/AbstractText"):
@@ -9461,6 +9589,32 @@ def participant_materials_block(budget=24000) -> str:
 # is a light personalization touch, not a clinical assessment, and results
 # are never surfaced back to the participant as a label, a type, or a score.
 
+# Suggestions only — the boxes are free text, because no list of titles or
+# specialties is ever complete and being absent from a dropdown is a poor
+# welcome. These just save typing for the common cases.
+CONTEXT_POSITION_OPTIONS = [
+    "Department Chair", "Division Chief", "Service Line Director",
+    "Medical Director", "Chief Medical Officer", "Chief Nursing Officer",
+    "Program Director", "Residency Program Director", "Section Chief",
+    "Vice Chair", "Dean", "Associate Dean", "Nurse Manager",
+    "Practice Manager", "Administrator", "Attending Physician",
+    "Fellow", "Resident", "Advanced Practice Provider", "Researcher",
+]
+
+CONTEXT_SPECIALIZATION_OPTIONS = [
+    "Anesthesiology", "Cardiology", "Critical Care", "Dermatology",
+    "Emergency Medicine", "Endocrinology", "Family Medicine",
+    "Gastroenterology", "General Surgery", "Geriatrics", "Hematology",
+    "Hospital Medicine", "Infectious Disease", "Internal Medicine",
+    "Nephrology", "Neurology", "Neurosurgery", "Nursing",
+    "Obstetrics and Gynecology", "Oncology", "Ophthalmology",
+    "Orthopaedic Surgery", "Otolaryngology", "Pathology", "Pediatrics",
+    "Physical Medicine and Rehabilitation", "Plastic Surgery",
+    "Psychiatry", "Pulmonology", "Radiation Oncology", "Radiology",
+    "Rheumatology", "Thoracic Surgery", "Urology", "Vascular Surgery",
+    "Administration", "Research", "Population Health",
+]
+
 TIPI_ITEMS = [
     {"id": 1, "text": "Extraverted, enthusiastic", "trait": "extraversion", "reverse": False},
     {"id": 2, "text": "Critical, quarrelsome", "trait": "agreeableness", "reverse": True},
@@ -9637,6 +9791,117 @@ def _personality_ensure_table(conn):
             except Exception:
                 pass
     conn.commit()
+
+
+# Two questions asked once at the start of a session: the participant's
+# position and their clinical or professional specialization. Unlike the
+# personality survey these are plain facts the advisor can use directly —
+# an orthopaedic chair and a nurse manager asking the same question need
+# different answers.
+_CONTEXT_FIELDS = ("position", "specialization")
+
+
+def _context_ensure_table(conn):
+    if _already_ensured("participant_context"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS participant_context (
+                token       TEXT PRIMARY KEY,
+                position    TEXT,
+                specialization TEXT,
+                updated_at  TIMESTAMP DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_participant_context(values: dict) -> bool:
+    """Stores the intake answers against this session's history token.
+
+    Scoped like the personality survey — _history_token(), not
+    participant_token() — so a fresh visit asks again rather than silently
+    reusing something answered weeks ago.
+    """
+    clean = {}
+    for field in _CONTEXT_FIELDS:
+        raw = (values.get(field) or "").strip()
+        if raw:
+            clean[field] = raw[:120]
+    if not clean:
+        return False
+
+    conn = _settings_db_conn()
+    if not conn:
+        session["participant_context"] = clean
+        session.permanent = True
+        return True
+    try:
+        _context_ensure_table(conn)
+        token = _history_token()
+        cols = ", ".join(clean.keys())
+        placeholders = ", ".join(["%s"] * len(clean))
+        updates = ", ".join(f"{k} = EXCLUDED.{k}" for k in clean)
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                INSERT INTO participant_context (token, {cols}, updated_at)
+                VALUES (%s, {placeholders}, NOW())
+                ON CONFLICT (token) DO UPDATE SET {updates}, updated_at = NOW()
+            """, (token, *clean.values()))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.warning(f"[context] could not save: {type(e).__name__}")
+        session["participant_context"] = clean
+        session.permanent = True
+        return True
+
+
+def load_participant_context() -> dict:
+    stored = session.get("participant_context")
+    if stored:
+        return dict(stored)
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    try:
+        _context_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT position, specialization FROM participant_context "
+                        "WHERE token = %s", (_history_token(),))
+            row = cur.fetchone()
+        if not row:
+            return {}
+        out = {}
+        if row[0]:
+            out["position"] = row[0]
+        if row[1]:
+            out["specialization"] = row[1]
+        return out
+    except Exception:
+        return {}
+
+
+def context_prompt_line() -> str:
+    """One line for the system prompt. Kept short deliberately — it is
+    context for tailoring an answer, not a persona to perform."""
+    ctx = load_participant_context()
+    if not ctx:
+        return ""
+    bits = []
+    if ctx.get("position"):
+        bits.append(f"their role is {ctx['position']}")
+    if ctx.get("specialization"):
+        bits.append(f"they work in {ctx['specialization']}")
+    return ("The person you are speaking with has told you that "
+            + " and ".join(bits)
+            + ". Pitch examples, terminology and level of detail accordingly, "
+              "without commenting on it or repeating it back to them.")
+
+
+def context_prompt_block() -> str:
+    line = context_prompt_line()
+    return f"\n\n{line}" if line else ""
 
 
 def save_personality_scores(answers: dict) -> bool:
@@ -11098,7 +11363,7 @@ def delete_biometric_file(file_id: int) -> bool:
 # ---------------------------------------------------------------------------
 # A deliberately thin profile: first name, role, specialty. No institution, no
 # surname, no email beyond what sign-in already holds, nothing that would
-# identify the person or their organisation. Enough for the advisor to stop
+# identify the person or their organization. Enough for the advisor to stop
 # being generic; not enough to be a personnel record.
 
 PROFILE_FIELDS = ("first_name", "role", "specialty")
@@ -11308,7 +11573,7 @@ def profile_guidance() -> str:
     lines.append(
         "  NEVER ask for, and never record, their institution, hospital, "
         "employer, city, surname, or anything else that would identify them or "
-        "their organisation. If they volunteer such detail, use it in the reply "
+        "their organization. If they volunteer such detail, use it in the reply "
         "if helpful but do not treat it as something to collect. Keep what you "
         "hold to first name, role and specialty."
     )
@@ -11548,7 +11813,7 @@ def participant_label() -> str:
 
 
 def build_briefing() -> str:
-    """Summarise the conversation for the advisor. Empty string if too thin."""
+    """Summarize the conversation for the advisor. Empty string if too thin."""
     history = load_history()
     if len(history) < 2:
         return ""
@@ -12184,7 +12449,7 @@ def _avatar_cache_version() -> int:
     those is another request that reads the JPEG back out of Postgres. This
     changes at most once every five minutes, so a returning participant
     reuses the cached photo while a newly uploaded one still appears
-    promptly. The admin panel keeps the old behaviour, since an admin who
+    promptly. The admin panel keeps the old behavior, since an admin who
     just uploaded a photo should see it immediately.
     """
     return int(time.time() // 300)
@@ -12325,6 +12590,10 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         personality_questions=TIPI_ITEMS,
         personality_enabled=_effective("personality_override",
                                         "personality_assessment_enabled", True),
+        context_intake_enabled=_effective("context_intake_override",
+                                           "context_intake_enabled", False),
+        context_position_options=CONTEXT_POSITION_OPTIONS,
+        context_specialization_options=CONTEXT_SPECIALIZATION_OPTIONS,
         avatar_version=_avatar_cache_version(),
         page_advisor_slug=(active["slug"] if active else ""),
         page_voice_mode=page_voice_mode,
@@ -12912,7 +13181,7 @@ def chat():
             "\n\n---\n"
             "LESSONS FROM PRIOR FEEDBACK — reviewed examples from real sessions on "
             "questions like this one. Some show replies that landed well and some "
-            "show replies that did not; each is labelled. Follow the patterns that "
+            "show replies that did not; each is labeled. Follow the patterns that "
             "worked and avoid the ones that did not. Do NOT mention these lessons "
             "to the participant; just internalize them.\n\n"
             + "\n\n".join(lesson_items)
@@ -13226,6 +13495,7 @@ def chat():
             + open_commitments_block()
             + participant_materials_block()
             + personality_style_block()
+            + context_prompt_block()
             + advisor_voice_guard(active_advisor)
         )
     else:
@@ -13233,7 +13503,7 @@ def chat():
             base_prompt + lessons_block + scope_guard + voice_guard
             + document_guard + contact_guard + profile_guidance()
             + open_commitments_block() + participant_materials_block()
-            + personality_style_block()
+            + personality_style_block() + context_prompt_block()
             + advisor_voice_guard(active_advisor)
         )
 
@@ -13667,6 +13937,22 @@ def save_personality():
     trait_scores = score_tipi(raw_answers)
     if save_personality_scores(trait_scores):
         app.logger.info("[personality] self-report saved")
+        return jsonify({"ok": True})
+    return jsonify({"ok": False}), 400
+
+
+@app.route("/context", methods=["POST"])
+@paywall.paywall_required
+def save_context():
+    """Records the optional position/specialization intake. Skipping is a
+    normal, silent outcome — this is only hit when someone answers."""
+    data = request.get_json(silent=True) or {}
+    if not isinstance(data, dict):
+        return jsonify({"ok": False}), 400
+    if save_participant_context(data):
+        # The answers themselves are participant text and stay out of the
+        # deploy logs, as everywhere else.
+        app.logger.info("[context] intake saved")
         return jsonify({"ok": True})
     return jsonify({"ok": False}), 400
 
@@ -16130,7 +16416,7 @@ input[type="file"], input[type="text"] {
      background.brand.bold   B400 #0052CC -> navy  #27334A
      background.danger.bold  R400 #DE350B -> rust  #9D432C
      background.selected     B50  #DEEBFF -> gold tint
-     neutrals N0-N800        cool grey    -> warmed toward paper #FAF6F0
+     neutrals N0-N800        cool gray    -> warmed toward paper #FAF6F0
 
    The warming matters: Atlassian's greys are blue-leaning, and dropped in
    beside this paper and gold they read as grubby. N10 IS the paper, and
@@ -16430,15 +16716,15 @@ tbody tr:hover td { background: var(--N10); }
   .btn, .tab-btn, .advisor-section summary::before { transition: none; }
 }
 /* ===========================================================================
-   Colour layer
+   Color layer
    ---------------------------------------------------------------------------
-   The palette was navy, gold and warm grey, which is correct for the brand
+   The palette was navy, gold and warm gray, which is correct for the brand
    but leaves every state looking the same. These are Atlassian's status
-   colours, pulled warm so they sit with the paper rather than fighting it:
+   colors, pulled warm so they sit with the paper rather than fighting it:
    each hue is desaturated toward the J3P neutrals instead of using ADS's
    own cooler greens and blues.
 
-   Colour is applied only where it carries information. A figure that is
+   Color is applied only where it carries information. A figure that is
    always green tells you nothing; the helpful rate is green above 80%,
    amber above 60%, rust below.
    =========================================================================== */
@@ -16486,7 +16772,7 @@ tbody tr:hover td { background: var(--N10); }
 .stat-value.is-bad  { color: var(--bad); }
 .stat-value.is-info { color: var(--info); }
 
-/* --- Group captions: a colour key down the left of each card ------------- */
+/* --- Group captions: a color key down the left of each card ------------- */
 .advisor-section-group {
   display: flex; align-items: center; gap: var(--sp-100);
 }
@@ -16902,7 +17188,7 @@ details.section[open] > summary {
           <div class="stat-value {{ 'is-bad' if stats.down else '' }}">{{ stats.down }}</div>
           <div class="stat-label">Thumbs down</div>
         </div>
-        {# Colour the rate by what it actually says: 80%+ is healthy, under
+        {# Color the rate by what it actually says: 80%+ is healthy, under
            60% wants looking at. A figure that is always green says nothing. #}
         {% set rate = (100 * stats.up / stats.total)|round(0)|int if stats.total else None %}
         <div class="stat">
@@ -18163,6 +18449,69 @@ details.section[open] > summary {
   {% if admin_perms.edit_settings %}
   {% if active_tab == "settings" %}
   <div class="tab-pane" data-tab="settings">
+  <h2 class="group-heading">Session start</h2>
+
+  <details class="section">
+    <summary>
+      <h2>What participants are asked before they begin</h2>
+      <span class="section-note">
+        {{ 'context questions' if settings.context_intake_enabled else '' }}
+        {{ 'and' if settings.context_intake_enabled and settings.personality_assessment_enabled else '' }}
+        {{ 'personality survey' if settings.personality_assessment_enabled else '' }}
+        {{ 'nothing' if not settings.context_intake_enabled
+                    and not settings.personality_assessment_enabled else '' }}
+      </span>
+    </summary>
+    <p class="muted" style="margin: 0 0 1.1rem; font-size: 0.85rem; line-height: 1.6;">
+      Both are optional for the participant and both can be skipped. When
+      both are on, the context questions come first. Individual advisors can
+      override either of these on their own card in Advisors.
+    </p>
+
+    <form method="POST" action="/admin/settings" style="margin: 0 0 1.4rem;">
+      <input type="hidden" name="_fields" value="context_intake_enabled" />
+      <input type="hidden" name="return_to" value="settings" />
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+        <input type="checkbox" name="context_intake_enabled" value="1"
+               {% if settings.context_intake_enabled %}checked{% endif %}
+               style="width: 17px; height: 17px; margin-top: 2px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Ask two context questions</strong><br />
+          <span class="muted">
+            Position and area of specialization — for example Department
+            Chair, and Orthopaedic Surgery. Free text with suggestions.
+            The advisor uses the answers to pitch its replies at the right
+            level, and they appear in the conversation log.
+          </span>
+        </span>
+      </label>
+      <button type="submit" class="btn" style="margin-top: 0.9rem;">Save</button>
+    </form>
+
+    <form method="POST" action="/admin/settings">
+      <input type="hidden" name="_fields" value="personality_assessment_enabled" />
+      <input type="hidden" name="return_to" value="settings" />
+      <label style="display: flex; align-items: flex-start; gap: 0.7rem;
+                    cursor: pointer; font-size: 0.9rem; line-height: 1.5;">
+        <input type="checkbox" name="personality_assessment_enabled" value="1"
+               {% if settings.personality_assessment_enabled %}checked{% endif %}
+               style="width: 17px; height: 17px; margin-top: 2px;
+                      accent-color: var(--navy); cursor: pointer;" />
+        <span>
+          <strong>Ask the personality survey</strong><br />
+          <span class="muted">
+            The ten-item TIPI. This switch has existed since the survey was
+            built but was never shown in this panel, so there was no way to
+            turn it off short of a code change.
+          </span>
+        </span>
+      </label>
+      <button type="submit" class="btn" style="margin-top: 0.9rem;">Save</button>
+    </form>
+  </details>
+
   <h2 class="group-heading">Access</h2>
 
   <details class="section">
@@ -19287,7 +19636,7 @@ details.section[open] > summary {
             await navigator.share({ title: subject, text: body, url: url });
             return;
           } catch (err) {
-            if (err && err.name === "AbortError") return;   // they cancelled
+            if (err && err.name === "AbortError") return;   // they canceled
           }
         }
 
@@ -21254,6 +21603,7 @@ def admin_settings():
         "auto_learning": ("Continuous learning", "on", "off"),
         "require_login": ("Sign-in", "required", "not required"),
         "personality_assessment_enabled": ("Personality survey", "on", "off"),
+        "context_intake_enabled": ("Context questions", "on", "off"),
     }
     messages = []
 
@@ -22088,7 +22438,7 @@ def admin_delete_all_feedback():
     """Wipe ALL feedback. Form must include confirm='YES' to prevent accidents."""
     confirm = (request.form.get("confirm") or "").strip()
     if confirm != "YES":
-        flash("Clear-all cancelled — confirmation text did not match.")
+        flash("Clear-all canceled — confirmation text did not match.")
         return redirect(url_for("admin_dashboard", tab="activity"))
     try:
         count = db.delete_all_feedback()
