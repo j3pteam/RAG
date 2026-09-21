@@ -27,7 +27,7 @@ def mkadv(slug,name):
       documents=[],personality={"scores":{"openness":5.5},"completed_at":now},
       behavioral={"scores":{"communication":4.0},"completed_at":now},
       feedback_360=L(id=1,filename="360.pdf",size_bytes=2_000_000,uploaded_at=now),
-      voice_sample=VS,suggested_bio=LOREM[:200])
+      voice_sample=VS,suggested_bio=LOREM[:200],internal_only=(slug=="alan-friedman"))
 advisors=[mkadv("alan-friedman","Alan Friedman"),mkadv("bruce-gewertz","Bruce Gewertz, MD"),
           mkadv("david-nash","David Nash"),mkadv("eddie-erlandson","Eddie Erlandson, MD")]
 by_adv={a["slug"]:[l for l in links if l["advisor_slug"]==a["slug"]] for a in advisors}

@@ -266,8 +266,8 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-n"
-APP_BUILD_NOTES = "context questions at session start, with a switch for both intakes"
+APP_VERSION = "2026-09-20-o"
+APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
@@ -2099,6 +2099,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .brand { display: flex; align-items: center; gap: 1rem; min-width: 0; flex: 1; }
     .brand-logo { height: 60px; width: auto; display: block; flex-shrink: 0; }
+    /* Deliberately loud, and at the very top of the page rather than
+       tucked in a corner. Someone with this link open has the normal
+       disclosure protections switched off, and the cost of them not
+       noticing is a client hearing internal detail. */
+    .internal-banner {
+      background: #7A2E2E; color: #fff; padding: 0.6rem 1.1rem;
+      font-size: 0.82rem; line-height: 1.5; text-align: center;
+    }
+    .internal-banner strong { letter-spacing: 0.04em; text-transform: uppercase; }
+    .brand-internal {
+      margin-left: 0.6rem; padding: 0.12rem 0.5rem; border-radius: 4px;
+      background: #7A2E2E; color: #fff; font-size: 0.62rem;
+      letter-spacing: 0.12em; text-transform: uppercase; vertical-align: middle;
+    }
     .brand-divider { width: 1px; height: 38px; background: rgba(210, 188, 141, 0.35); flex-shrink: 0; }
     .brand-tag {
       font-size: 0.92rem; letter-spacing: 0.22em;
@@ -3471,11 +3485,19 @@ INDEX_HTML = r"""<!DOCTYPE html>
     </div>
   </div>
 
+  {% if internal_only %}
+  <div class="internal-banner" role="status">
+    <strong>Internal J3P session.</strong>
+    This advisor names colleagues, clients and internal detail that every
+    other advisor is built to withhold. Do not share this link outside J3P.
+  </div>
+  {% endif %}
   <header>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
+      {% if internal_only %}<span class="brand-internal">Internal</span>{% endif %}
     </div>
     <button id="autospeak-btn" aria-label="Toggle speak mode" title="Speak — read every response aloud">
       <svg class="autospeak-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -7949,6 +7971,21 @@ def _advisors_ensure_table(conn):
                         "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
         except Exception:
             pass
+        # Added later: an internal-only advisor. Every other profile is
+        # written for people outside J3P, so the prompt forbids naming the
+        # firm's people and brands and a scrubber deletes any passage that
+        # slips through. An internal advisor is for J3P staff, where those
+        # names are the subject rather than a leak.
+        #
+        # This is the only flag in the app that REMOVES a protection, so it
+        # is deliberately awkward: it defaults to false, it cannot be set
+        # from the same form as ordinary display options, and the pages and
+        # links it produces are marked everywhere they appear.
+        try:
+            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                        "internal_only BOOLEAN NOT NULL DEFAULT FALSE")
+        except Exception:
+            pass
         # Added later: an advisor's own external booking link (Calendly,
         # Acuity, etc). Empty means "use the shared J3P scheduling link."
         try:
@@ -8216,13 +8253,14 @@ def list_advisors():
                        COALESCE(scheduling_url, ''), show_scheduling_override,
                        show_avatar_override, allow_materials_override,
                        personality_override, portal_token, COALESCE(client_bio, ''),
-                       COALESCE(expertise, '')
+                       COALESCE(expertise, ''), COALESCE(internal_only, FALSE)
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
                  show_scheduling_override, show_avatar_override,
                  allow_materials_override, personality_override,
-                 portal_token, client_bio, expertise) in cur.fetchall():
+                 portal_token, client_bio, expertise,
+                 internal_only) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -8233,7 +8271,8 @@ def list_advisors():
                             "personality_override": personality_override,
                             "portal_token": portal_token or "",
                             "client_bio": client_bio or "",
-                            "expertise": expertise or ""})
+                            "expertise": expertise or "",
+                            "internal_only": bool(internal_only)})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -8255,7 +8294,8 @@ def get_advisor(slug: str):
                                   show_scheduling_override, show_avatar_override,
                                   allow_materials_override, personality_override,
                                   portal_token, COALESCE(client_bio, ''),
-                                  COALESCE(expertise, '')
+                                  COALESCE(expertise, ''),
+                                  COALESCE(internal_only, FALSE)
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
@@ -8266,7 +8306,8 @@ def get_advisor(slug: str):
                 "personality_override": row[7],
                 "portal_token": row[8] or "",
                 "client_bio": row[9] or "",
-                "expertise": row[10] or ""} if row else None
+                "expertise": row[10] or "",
+                "internal_only": bool(row[11])} if row else None
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -9017,6 +9058,20 @@ def create_participant_link(label: str, advisor_slug: str = "", first_name: str 
     email = (email or "").strip()[:200]
     if not label:
         return {"ok": False, "error": "A label is required."}
+
+    # Guarded in the one function every creation path goes through — the
+    # single form, the bulk CSV upload, and anything added later — rather
+    # than at each call site, where the next one added would miss it.
+    if advisor_slug:
+        target = get_advisor(advisor_slug)
+        if target and target.get("internal_only"):
+            return {"ok": False,
+                    "error": (f"\u201c{target.get('name') or advisor_slug}\u201d is "
+                              "an internal advisor. Participant links cannot point "
+                              "at it — a link would let whoever holds it reach the "
+                              "internal persona. J3P staff reach it by signing in "
+                              "to the admin panel and opening its own link.")}
+
     conn = _settings_db_conn()
     if not conn:
         return {"ok": False, "error": "Database not available."}
@@ -9369,6 +9424,25 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
         return False
     finally:
         conn.close()
+
+
+def set_advisor_internal(slug: str, internal: bool) -> bool:
+    """Flips the internal-only flag. One implementation, because the
+    one-click creator and the per-advisor switch both set it, and two
+    copies of this statement would eventually disagree."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET internal_only = %s WHERE slug = %s",
+                        (bool(internal), slug))
+        conn.commit()
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] internal flag failed: {type(e).__name__}")
+        return False
 
 
 def delete_advisor(slug: str) -> bool:
@@ -12596,6 +12670,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         context_specialization_options=CONTEXT_SPECIALIZATION_OPTIONS,
         avatar_version=_avatar_cache_version(),
         page_advisor_slug=(active["slug"] if active else ""),
+        internal_only=bool(active and active.get("internal_only")),
         page_voice_mode=page_voice_mode,
     )
     _phase_mark("template render")
@@ -12628,6 +12703,40 @@ def index_with_scheduling():
     return _render_chat(force_scheduling=True)
 
 
+def internal_advisor_visible(advisor) -> bool:
+    """Whether the caller may see an internal-only advisor.
+
+    An internal advisor names J3P, J3P Health, colleagues, pricing and
+    positioning freely, and its contact scrubber is switched off. That is
+    correct for a colleague and wrong for anyone else, so the prompt is not
+    where this can be enforced — a prompt does not stop someone opening a
+    URL.
+
+    The participant sign-in decorator was not enough on its own: it only
+    bites when the global "Sign-in required" setting is on, so with that
+    setting off the page was open to anyone who knew or guessed the slug.
+    This requires a signed-in admin-panel account — the closest thing the
+    app has to "a J3P colleague" — regardless of any other setting.
+    """
+    if not (advisor and advisor.get("internal_only")):
+        return True
+    return bool(current_admin_role())
+
+
+def _guard_internal(advisor, slug):
+    """Returns a response to send instead, or None to carry on.
+
+    Deliberately the same not-found page an unknown slug gets. A distinct
+    "forbidden" would confirm to a stranger that the advisor exists, which
+    is the one fact worth withholding here.
+    """
+    if internal_advisor_visible(advisor):
+        return None
+    app.logger.info("[internal] blocked an unauthenticated request for an "
+                    "internal advisor")
+    return _advisor_not_found(slug)
+
+
 @app.route("/a/<slug>")
 @paywall.paywall_required
 @login_required
@@ -12636,6 +12745,9 @@ def advisor_index(slug):
     advisor = get_advisor(slug)
     if not advisor:
         return _advisor_not_found(slug)
+    blocked = _guard_internal(advisor, slug)
+    if blocked is not None:
+        return blocked
     session.pop("force_scheduling", None)
     return _render_chat(advisor=advisor)
 
@@ -12647,6 +12759,9 @@ def advisor_index_with_scheduling(slug):
     advisor = get_advisor(slug)
     if not advisor:
         return _advisor_not_found(slug)
+    blocked = _guard_internal(advisor, slug)
+    if blocked is not None:
+        return blocked
     return _render_chat(force_scheduling=True, advisor=advisor)
 
 
@@ -12657,6 +12772,9 @@ def advisor_index_without_scheduling(slug):
     advisor = get_advisor(slug)
     if not advisor:
         return _advisor_not_found(slug)
+    blocked = _guard_internal(advisor, slug)
+    if blocked is not None:
+        return blocked
     return _render_chat(force_scheduling=False, advisor=advisor)
 
 
@@ -12673,6 +12791,9 @@ def advisor_index_tolerant(slug, rest):
     advisor = get_advisor(slug)
     if not advisor:
         return _advisor_not_found(slug)
+    blocked = _guard_internal(advisor, slug)
+    if blocked is not None:
+        return blocked
 
     first = (rest or "").split("/")[0].strip().lower()
     if first.startswith("no-scheduling") or first.startswith("no%20scheduling"):
@@ -12754,6 +12875,16 @@ def participant_link_index(token):
 
     advisor = get_advisor(link["advisor_slug"]) if link["advisor_slug"] else None
     _phase_mark("advisor lookup")
+
+    # A participant link is a credential in itself, which is exactly why it
+    # must not reach an internal advisor: handing the link to a client would
+    # otherwise hand them the unscrubbed internal persona. Links to internal
+    # advisors are refused at creation, and refused again here in case one
+    # predates that rule or the advisor was switched to internal afterwards.
+    if advisor and advisor.get("internal_only") and not current_admin_role():
+        app.logger.warning("[internal] participant link points at an internal "
+                           "advisor; refused")
+        return _participant_link_unavailable("disabled")
     if not advisor:
         # This link is for the default/shared persona — make sure a stale
         # advisor_slug from some earlier visit on this browser can't bleed in.
@@ -13453,7 +13584,43 @@ def chat():
     )
 
     # All human contact routes through client services, never an individual.
-    contact_guard = (
+    # This session's named advisor, if any — resolved once and reused for
+    # the contact guard, the voice/expertise layer below, and the API call's
+    # logging. Resolved here rather than further down because whether this
+    # is an internal advisor decides which contact guard is built.
+    active_advisor = get_advisor(session.get("advisor_slug"))
+
+    # Internal mode is decided here, so this is where it has to be checked.
+    # Gating only the page would leave /chat reachable directly with an
+    # internal slug in the session, which would hand over the unscrubbed
+    # prompt without ever loading the page that was guarded.
+    if not internal_advisor_visible(active_advisor):
+        app.logger.warning("[internal] refused a chat request for an "
+                           "internal advisor without an admin session")
+        return jsonify({"error": "This advisor is not available."}), 403
+
+    internal_mode = bool(active_advisor and active_advisor.get("internal_only"))
+
+    if internal_mode:
+        # The inverse of the guard below. Stated positively and at the same
+        # strength, so the model does not fall back on the caution it was
+        # trained into by the rest of the prompt.
+        contact_guard = (
+            "\n\n---\n"
+            "INTERNAL SESSION — this overrides anything else about naming:\n\n"
+            "1. You are speaking with a J3P Health colleague, not a client. "
+            "Name J3P, J3P Health, J3 Personica, Residency Select and "
+            "individual colleagues freely and by name where it is useful.\n\n"
+            "2. Internal email addresses, direct lines and calendars may be "
+            "given when they appear in the knowledge base.\n\n"
+            "3. Speak plainly about internal matters — pricing, positioning, "
+            "staffing, what has worked and what has not. Do not soften "
+            "into client-facing language.\n\n"
+            "4. This is still not a place for anything a colleague has told "
+            "you in confidence about a third party.\n"
+        )
+    else:
+        contact_guard = (
         "\n\n---\n"
         "CONTACT & REFERRALS — this overrides anything in the knowledge base:\n\n"
         f"1. THE ONLY CONTACT IS {CONFIG['contact_email']}. Whenever the user "
@@ -13473,11 +13640,7 @@ def chat():
         "and that the team will route the request.\n\n"
         "4. SCHEDULING. For booking time, point to the scheduling button in the "
         f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
-    )
-
-    # This session's named advisor, if any — resolved once and reused both
-    # for the voice/expertise layer below and for the API call's logging.
-    active_advisor = get_advisor(session.get("advisor_slug"))
+        )
 
     if context:
         composed_prompt = (
@@ -13671,7 +13834,11 @@ def chat():
 
     replaced_any = False
     cleaned_paras = []
-    for para in assistant_text.split("\n\n"):
+    # An internal session is the one case where naming a colleague and
+    # giving their address is the correct answer rather than a leak, so the
+    # referral scrubber does not run. Everything downstream of here — the
+    # voice scrubber, grounding check, logging — is unchanged.
+    for para in ([] if internal_mode else assistant_text.split("\n\n")):
         has_staff = _names_a_third_party(para)
         has_internal_email = any(_is_internal_email(a)
                                  for a in _INTERNAL_EMAIL_RE.findall(para))
@@ -13685,7 +13852,8 @@ def chat():
             lambda m: CONTACT if _is_internal_email(m.group(0)) else m.group(0), para)
         cleaned_paras.append(para)
 
-    scrubbed_text = "\n\n".join(cleaned_paras).strip()
+    scrubbed_text = (assistant_text.strip() if internal_mode
+                     else "\n\n".join(cleaned_paras).strip())
 
     if not scrubbed_text and assistant_text.strip():
         # Everything matched. Redact the identifiers in place instead of
@@ -13718,10 +13886,11 @@ def chat():
                     f"and the team will route it.")
             assistant_text = (assistant_text + "\n\n" + line).strip() if assistant_text else line
 
-    for forbidden, replacement in FORBIDDEN_NAMES:
-        # Case-insensitive, whole-phrase replacement
-        pattern = _re.compile(_re.escape(forbidden), _re.IGNORECASE)
-        assistant_text = pattern.sub(replacement, assistant_text)
+    if not internal_mode:
+        for forbidden, replacement in FORBIDDEN_NAMES:
+            # Case-insensitive, whole-phrase replacement
+            pattern = _re.compile(_re.escape(forbidden), _re.IGNORECASE)
+            assistant_text = pattern.sub(replacement, assistant_text)
 
     # Voice scrubber: catch generic-AI phrasing that leaks past the system prompt.
     # We strip a small set of high-signal opener/closer phrases. This runs on every
@@ -17853,6 +18022,32 @@ details.section[open] > summary {
         </form>
       </details>
 
+      {% if admin_perms.edit_advisors and not has_internal_advisor %}
+      <details class="section">
+        <summary>
+          <h2>Internal J3P advisor</h2>
+          <span class="section-note">not set up</span>
+        </summary>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+          An advisor for sessions with J3P colleagues rather than clients. It
+          may name J3P, J3P Health, J3 Personica, Residency Select and
+          individual colleagues, give internal email addresses from its
+          knowledge base, and talk plainly about pricing, positioning and
+          staffing. The referral scrubber does not run on its replies.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+          <strong>Only signed-in admin accounts can open it.</strong> The
+          page, the chat behind it, and participant links pointing at it are
+          all refused for anyone else — an unauthenticated request gets the
+          same not-found page as an unknown advisor, so its existence is not
+          confirmed to a stranger who guesses the address.
+        </p>
+        <form method="POST" action="/admin/advisors/create-internal">
+          <button type="submit" class="btn">Create the internal J3P advisor</button>
+        </form>
+      </details>
+      {% endif %}
+
       {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
                                    participant_links_by_advisor.get("", []),
                                    admin_perms.edit_participant_links) }}
@@ -17873,9 +18068,17 @@ details.section[open] > summary {
              style="width: 48px; height: 48px; border-radius: 50%;
                     object-fit: cover; border: 1.5px solid var(--gold);" />
         <div style="flex: 1 1 auto; min-width: 0;">
-          <strong style="font-size: 0.98rem;">{{ adv.name }}</strong><br />
+          <strong style="font-size: 0.98rem;">{{ adv.name }}</strong>
+          {% if adv.internal_only %}
+          {# Visible without opening the card: whoever is about to copy a
+             link needs to see this before they copy it, not after. #}
+          <span style="margin-left: 0.45rem; padding: 0.1rem 0.42rem;
+                       border-radius: 3px; background: #7A2E2E; color: #fff;
+                       font-size: 0.6rem; letter-spacing: 0.1em;
+                       text-transform: uppercase; vertical-align: middle;">Internal</span>
+          {% endif %}<br />
           <span class="muted" style="font-size: 0.76rem;">
-            {{ adv.slug }}{% if adv.no_photo %} · initials, no photo{% elif not adv.has_photo %} · using the default photo{% endif %}
+            {{ adv.slug }}{% if adv.no_photo %} · initials, no photo{% elif not adv.has_photo %} · using the default photo{% endif %}{% if adv.internal_only %} · J3P staff only — do not share links{% endif %}
           </span>
         </div>
         {# Inside a <summary>, so the click has to be stopped from also
@@ -17947,6 +18150,48 @@ details.section[open] > summary {
                  placeholder="https://calendly.com/... — blank uses the shared J3P link"
                  style="flex: 1 1 100%; padding: 0.45rem; border: 1px solid var(--line);
                         border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+
+          <div style="flex: 1 1 100%; margin-top: 0.9rem; padding: 0.8rem 0.9rem;
+                      border: 1px solid {{ '#7A2E2E' if adv.internal_only else 'var(--line)' }};
+                      border-radius: 4px;
+                      background: {{ '#FBF2F2' if adv.internal_only else 'transparent' }};">
+            <label class="muted" style="display: block; font-size: 0.72rem;
+                          text-transform: uppercase; letter-spacing: 0.08em;
+                          margin-bottom: 0.4rem; color: #7A2E2E;">
+              Internal use
+            </label>
+            {% if adv.internal_only %}
+            <p style="margin: 0 0 0.6rem; font-size: 0.82rem; line-height: 1.55;">
+              <strong>{{ adv.name }} is an internal J3P advisor.</strong>
+              Replies may name J3P, J3P Health, J3 Personica, Residency Select
+              and individual colleagues, and may give internal email addresses
+              from the knowledge base. The referral scrubber does not run.
+              Every page and link for this advisor is marked.
+              Only signed-in admin accounts can open it, and participant links
+              pointing at it are refused.
+            </p>
+            <form method="POST" action="/admin/advisors/internal/{{ adv.slug }}">
+              <input type="hidden" name="internal_only" value="0" />
+              <button type="submit" class="btn">Make client-facing again</button>
+            </form>
+            {% else %}
+            <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.8rem; line-height: 1.55;">
+              Turns off the protections that keep J3P's own names, people and
+              internal addresses out of replies. For sessions with J3P staff
+              only — once internal, only signed-in admin accounts can open
+              this advisor, and its existing participant links stop working.
+              Type <strong>INTERNAL</strong> to confirm.
+            </p>
+            <form method="POST" action="/admin/advisors/internal/{{ adv.slug }}"
+                  style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+              <input type="hidden" name="internal_only" value="1" />
+              <input type="text" name="confirm" placeholder="INTERNAL" autocomplete="off"
+                     style="padding: 0.45rem; border: 1px solid var(--line);
+                            border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+              <button type="submit" class="btn">Mark internal</button>
+            </form>
+            {% endif %}
+          </div>
 
           <div style="flex: 1 1 100%; margin-top: 0.7rem; padding-top: 0.7rem;
                       border-top: 1px dashed var(--line);">
@@ -20778,6 +21023,8 @@ def admin_dashboard():
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
+        has_internal_advisor=any(r.get("internal_only")
+                                  for r in (_advisor_rows or [])),
         initials_for=initials_for,
         personality_summary_tag=personality_summary_tag,
         behavioral_summary_tag=behavioral_summary_tag,
@@ -20933,6 +21180,80 @@ def admin_save_advisor():
     else:
         flash("Could not save the advisor — check the database connection.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/advisors/create-internal", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_create_internal_advisor():
+    """Creates the internal J3P advisor in one step.
+
+    Doing this by hand means creating an advisor, then finding the internal
+    switch on its card, then typing INTERNAL to confirm — three steps where
+    stopping after the first leaves a client-facing advisor named something
+    like "J3P Internal", which is the worst of both outcomes. One action
+    that either produces the whole thing or nothing.
+    """
+    slug = "j3p-internal"
+    existing = get_advisor(slug)
+    if existing:
+        flash("The internal J3P advisor already exists \u2014 it is on this page.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    if not save_advisor(slug, "J3P Internal"):
+        flash("Could not create the advisor \u2014 the database was unavailable.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    if not set_advisor_internal(slug, True):
+        # Never leave a client-facing advisor behind under this name: it
+        # would look internal and behave as though it were not.
+        delete_advisor(slug)
+        flash("Could not mark the advisor internal, so it was removed again. "
+              "Nothing was changed.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    app.logger.info("[internal] internal J3P advisor created")
+    flash("\u2713 Created the internal J3P advisor. It is reachable at "
+          "/a/j3p-internal by signed-in admin accounts only, and participant "
+          "links to it are refused. Add its knowledge base on the Knowledge tab.")
+    return redirect(url_for("admin", tab="advisors"))
+
+
+@app.route("/admin/advisors/internal/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_advisor_internal(slug):
+    """Marks an advisor internal-only, or returns it to client-facing.
+
+    Separate from the advisor settings form on purpose. Everything on that
+    form changes how an advisor looks; this changes what it is allowed to
+    disclose, and a mis-click there would be silent. Turning it ON needs the
+    word typed; turning it OFF does not, because the safe direction should
+    never be obstructed.
+    """
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("No such advisor.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    turning_on = request.form.get("internal_only") == "1"
+    if turning_on and (request.form.get("confirm") or "").strip().upper() != "INTERNAL":
+        flash(f"{advisor['name']} was not changed — type INTERNAL to confirm.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    # The helper reports a database failure the same way as any other
+    # failure, so a separate connection check here would be a second way of
+    # saying the same thing.
+    if not set_advisor_internal(slug, turning_on):
+        flash("Could not change that — nothing was saved.")
+        return redirect(url_for("admin", tab="advisors"))
+
+    # Worth a log line of its own: this is the setting most worth being able
+    # to answer "when did that change, and who changed it" about.
+    app.logger.info(f"[advisors] {slug} internal_only -> {turning_on} "
+                    f"by {session.get('admin_user') or 'owner'}")
+    flash(f"{advisor['name']} is now "
+          + ("an internal J3P advisor — its link must not be shared outside J3P."
+             if turning_on else "client-facing again."))
+    return redirect(url_for("admin", tab="advisors"))
 
 
 @app.route("/admin/advisors/delete/<slug>", methods=["POST"])

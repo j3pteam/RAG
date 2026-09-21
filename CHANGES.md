@@ -1,73 +1,67 @@
-# J3P Advisor — build 2026-09-20-n
+# J3P Advisor — build 2026-09-20-o
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-m`.
+`app.py`, plus the pre-deploy checks. Includes everything from `-n`.
 
 ---
 
-## Context questions at the start of a session
+## The internal advisor
 
-Two questions, asked once, before the first message:
+Much of this already existed — the database column, the inverted contact
+guard, the scrubber bypass, the per-advisor switch, the badges on the page
+and in the panel. What was missing was the part that actually makes it
+internal.
 
-- **What is your position?** — Department Chair, Nurse Manager, Program
-  Director, and so on
-- **What is your area of specialization?** — Orthopaedic Surgery, Nursing,
-  Neurosurgery, and so on
+### What was missing: anyone could open it
 
-Both are free text with a suggestion list attached. Free text on purpose: no
-list of titles or specialties is complete, and being absent from a dropdown
-is a poor welcome for someone starting a session. The suggestions just save
-typing.
+The advisor page is decorated `@login_required`, but that only bites when
+the global **Sign-in required** setting is on. With that setting off — which
+is how it runs — `/a/j3p-internal` was reachable by anyone who knew or
+guessed the slug. An advisor that names pricing, staffing, colleagues and
+internal email addresses, on an open URL.
 
-Both are optional and the whole thing is skippable, like the personality
-survey. When both are switched on, the context questions come first — two
-plain factual questions are a gentler opening than a ten-item rating scale —
-and each is dismissed separately, so skipping one does not skip the other.
+A prompt cannot fix that. A prompt does not stop someone opening a page.
 
-The answers go into the system prompt as a single line, instructing the
-advisor to pitch examples, terminology and depth accordingly **without
-commenting on it or repeating it back**. An orthopaedic chair and a nurse
-manager asking the same question should get different answers, not the same
-answer with a preamble about their job.
+**Internal advisors now require a signed-in admin account**, regardless of
+any other setting. Closed at three points, not one:
 
-Stored against the session token rather than the long-lived participant
-token, so a fresh visit asks again instead of silently reusing something
-answered weeks ago — the same scoping the personality survey uses, and for
-the same reason.
+- **The page** — all four advisor routes
+- **`/chat`** — otherwise the page could be skipped and the internal slug
+  posted straight to the endpoint, which is where the unscrubbed prompt is
+  actually built
+- **Participant links** — refused at creation *and* again when served, since
+  a link is itself a credential and handing one to a client would hand over
+  the internal persona
 
-## The personality toggle you could not find
+An unauthenticated request gets **the same not-found page as an unknown
+advisor**, rather than a "forbidden". A distinct error would confirm to a
+stranger that the advisor exists, which is the one fact worth withholding.
 
-It was not there. The setting existed, the save handler existed, the label
-existed — but **no checkbox for it was ever rendered in the admin panel**,
-so there was no way to turn the survey off short of a code change.
+### Creating it
 
-**Settings → Session start** now holds both switches, with a note saying
-which are active. Individual advisors can still override either on their own
-card in Advisors.
+**Advisors → Internal J3P advisor → Create the internal J3P advisor.**
 
-Context questions default to **off**, so nothing changes for participants
-until you switch them on.
+One action, because doing it by hand is three steps — create the advisor,
+find the internal switch, type INTERNAL — and stopping after the first
+leaves a *client-facing* advisor called "J3P Internal", which is the worst
+possible outcome. If the flag cannot be set, the advisor is removed again
+rather than left in that state.
 
-## American English
+The section disappears once one exists. Add its knowledge base on the
+Knowledge tab as normal.
 
-You were right, and the "centre" was mine rather than the app's — I will
-keep to American spelling.
+### Also
 
-I checked the app as well and found 31 lines to fix, across prompt text sent
-to the model, admin copy, and comments: *organisation, behaviour, colour,
-labelled, cancelled, centre, travelling, summarise, acknowledgement, grey*.
-
-One deliberate exception: a scrubber at line 7604 matches both
-`behavioral health` and `behavioural health`, because that one reads
-*participant* input and has to catch either spelling. Changing it would have
-broken the scrubber.
+The internal flag now has one implementation shared by the creator and the
+per-advisor switch, instead of the same UPDATE written twice. The switch's
+warning text now says that turning it on stops its existing participant
+links working — previously that happened silently.
 
 ---
 
 ## Installing
 
 Replace `app.py`, commit to `main`. Diagnostics should report version
-`2026-09-20-n`.
+`2026-09-20-o`.
 
-To switch the questions on: **Settings → Session start → Ask two context
-questions → Save**. The first participant to start a session after that will
-see them.
+Worth testing: open `/a/j3p-internal` in a private window with no admin
+session. You should get the ordinary not-found page.
