@@ -177,6 +177,34 @@ _CHAT_TIMINGS_MAX = 12
 _CHAT_TIMINGS_LOCK = threading.Lock()
 
 
+# The same ring buffer, for admin page loads. "The admin panel is slow" has
+# come up repeatedly and every round has been guesswork, because the phase
+# breakdown only existed in the deploy logs or behind ?timing=1 — neither of
+# which is in front of the person who notices the slowness.
+_PAGE_TIMINGS = []
+_PAGE_TIMINGS_MAX = 12
+_PAGE_TIMINGS_LOCK = threading.Lock()
+
+
+def _record_page_timing(label: str):
+    phases = getattr(g, "_phases", None)
+    if phases is None:
+        return
+    total = (time.perf_counter() - phases.t0) * 1000
+    entry = {"label": label,
+             "total_ms": round(total),
+             "phases": [(n, round(ms)) for n, ms in phases.marks if ms >= 1],
+             "at": datetime.now()}
+    with _PAGE_TIMINGS_LOCK:
+        _PAGE_TIMINGS.insert(0, entry)
+        del _PAGE_TIMINGS[_PAGE_TIMINGS_MAX:]
+
+
+def page_timings():
+    with _PAGE_TIMINGS_LOCK:
+        return list(_PAGE_TIMINGS)
+
+
 def _record_chat_timing():
     phases = getattr(g, "_phases", None)
     if phases is None:
@@ -266,7 +294,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-g"
+APP_VERSION = "2026-09-21-h"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18741,6 +18769,38 @@ details.section[open] > summary {
   </div>
 
   <div class="section">
+    <h2>Admin page times</h2>
+    <p class="muted" style="margin: 0 0 1rem;">
+      The last few admin pages you loaded, and where the time went. Load the
+      tab that feels slow, then come back here — the breakdown names the
+      phase responsible instead of leaving it to guesswork.
+    </p>
+    {% if diag.page_timings %}
+    <table>
+      <tr><th style="width: 12%;">When</th><th style="width: 20%;">Page</th>
+          <th style="width: 10%;">Total</th><th>Where the time went</th></tr>
+      {% for t in diag.page_timings %}
+      <tr>
+        <td class="muted">{{ t.at.strftime("%H:%M:%S") }}</td>
+        <td class="muted" style="font-size: 0.8rem;">{{ t.label }}</td>
+        <td><strong style="color: {{ 'var(--bad)' if t.total_ms > 4000
+                                    else 'var(--warn)' if t.total_ms > 1500
+                                    else 'var(--ok)' }};">
+          {{ "%.2f"|format(t.total_ms / 1000) }}s</strong></td>
+        <td class="muted" style="font-size: 0.78rem;">
+          {% for name, ms in t.phases %}{{ name }} {{ ms }}ms{{ " · " if not loop.last }}{% endfor %}
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% else %}
+    <p class="muted" style="margin: 0;">
+      Nothing recorded on this worker yet. Open another tab and come back.
+    </p>
+    {% endif %}
+  </div>
+
+  <div class="section">
     <h2>Reply times</h2>
     <p class="muted" style="margin: 0 0 1rem;">
       How long the last few replies took, and where the time went. The model
@@ -21141,6 +21201,7 @@ def admin_dashboard():
             "voice": _voice_diag,
             "grounding": _grounding_snapshot(),
             "chat_timings": chat_timings() if active_tab == "diagnostics" else [],
+            "page_timings": page_timings() if active_tab == "diagnostics" else [],
         },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
         settings=_settings,
@@ -21193,6 +21254,7 @@ def admin_dashboard():
     _phase_mark("template render")
     if FIRST_REQUEST_BOOT_MS is not None:
         _phase_mark(f"[cold start on an earlier request: {FIRST_REQUEST_BOOT_MS:.0f}ms]")
+    _record_page_timing(f"/admin?tab={active_tab}")
     return _with_render_time(html) + _phase_finish()
 
 

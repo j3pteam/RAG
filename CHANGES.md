@@ -1,50 +1,54 @@
-# J3P Advisor — build 2026-09-21-g
+# J3P Advisor — build 2026-09-21-h
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## The internal card now shows only what applies to it
+## Admin page times, in Diagnostics
 
-Gone from that card: **Voice Sample**, **Onboarding**, and **Pre-Call
-Briefings** (with the Activity heading that only held it).
+"The admin panel is slow" has come round several times and every round has
+been guesswork, because the phase breakdown only ever existed in the deploy
+logs or behind `?timing=1` — neither of which is in front of the person who
+notices the slowness.
 
-Each was not merely unused but misleading:
-
-- A **voice sample** clones a real person's voice. An internal advisor is
-  not a person — leaving the section there invites someone to upload Alan's
-  voice to it.
-- **Onboarding** records a real person's assessments, so its counter would
-  have read 0/2 forever, looking like something left undone.
-- **Pre-call briefings** are prepared when someone books time through an
-  advisor's link. An internal advisor has no booking button, so the section
-  could only ever be empty.
-
-**Knowledge stays**, since that is the one thing on the card that does apply
-— and it now explains that it reads the shared J3P base.
-
-## The chips said the wrong thing too
-
-The summary row read:
+**Diagnostics → Admin page times** now shows the last twelve admin pages
+loaded, newest first:
 
 ```
-0 PARTICIPANT LINKS · 0 DOCUMENTS · ONBOARDING 0/2 ·
-NO VOICE SAMPLE · NO PORTAL LINK
+22:56:04  /admin?tab=advisors  3.12s  list_advisors 180ms ·
+          personality map 290ms · behavioral map 310ms · 360 map 280ms ·
+          voice map 300ms · briefings 270ms · participant links 620ms ·
+          documents 410ms · template render 340ms
 ```
 
-Five things reported as absent, reading like five things left undone, when
-none of them apply. Replaced with two that are true:
+Every map is timed separately, so the breakdown names the culprit rather
+than lumping them together.
 
-```
-Reads the shared J3P knowledge base · Admin sign-in required
-```
+**Load the Advisors tab, then open Diagnostics, and tell me what the row
+says.** That turns this into one specific fix.
 
-Client-facing cards keep every section and chip. Confirmed card by card in
-the render test.
+## What I checked, so we do not repeat it
+
+I looked for the obvious cause first. All five per-advisor lookups —
+personality, behavioral, 360, voice, briefings — are already **one query
+each for every advisor at once**. There is no N+1 loop hiding on that tab,
+which was my first suspicion and is wrong.
+
+What that leaves, and what the numbers will distinguish between:
+
+- **Many phases each a few hundred ms** — that is per-connection overhead,
+  about nine round trips on that tab. It points back at the database being
+  reached over the public proxy, which the Diagnostics section above already
+  reports, and at `DB_REUSE_SHARED_CONN` still being off.
+- **One phase dominating** — a specific query to fix.
+- **template render large** — the page itself, not the database.
+
+These have different fixes, and right now I cannot tell them apart from
+here.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-g`.
+report `2026-09-21-h`.
