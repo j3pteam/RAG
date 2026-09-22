@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-e"
+APP_VERSION = "2026-09-22-f"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -7843,8 +7843,10 @@ def load_history() -> list:
             cur.execute("""
                 SELECT role, content FROM chat_history
                 WHERE token = %s AND conversation_id IS NOT DISTINCT FROM %s
+                      AND COALESCE(advisor_slug, '') = %s
                 ORDER BY id DESC LIMIT 200
-            """, (token, _conversation_id(),))
+            """, (token, _conversation_id(),
+                  session.get("advisor_slug") or ""))
             used = 0
             for role, content in cur.fetchall():
                 used += len(content or "")
@@ -7891,13 +7893,22 @@ def _conversation_id() -> str:
     """The conversation being added to right now.
 
     Held in the session so it survives page loads, and rotated rather than
-    cleared when a new conversation starts — which is what makes the old
-    one still readable afterwards.
+    cleared when a new conversation starts — which is what makes the old one
+    still readable afterwards.
+
+    Also rotated when the advisor changes. The id was previously kept per
+    session and the session spans every advisor, so walking from one advisor
+    to another carried the conversation across: the next advisor loaded the
+    previous advisor's messages as its own context and answered against
+    them. A conversation belongs to one advisor, and this is where that is
+    enforced.
     """
+    here = session.get("advisor_slug") or ""
     cid = session.get("conversation_id")
-    if not cid:
+    if not cid or session.get("conversation_advisor") != here:
         cid = secrets.token_urlsafe(12)
         session["conversation_id"] = cid
+        session["conversation_advisor"] = here
         session.permanent = True
     return cid
 
@@ -7993,6 +8004,7 @@ def clear_history():
 
     if keep:
         session.pop("conversation_id", None)   # the next message starts a new one
+        session.pop("conversation_advisor", None)
         app.logger.info("[history] internal session: previous conversation kept")
         return
 
@@ -14785,6 +14797,7 @@ def open_my_conversation(conversation_id):
     if not messages:
         return jsonify({"error": "That conversation is no longer available."}), 404
     session["conversation_id"] = conversation_id
+    session["conversation_advisor"] = session.get("advisor_slug") or ""
     session.permanent = True
     return jsonify({
         "ok": True,

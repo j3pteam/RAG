@@ -1,48 +1,50 @@
-# J3P Advisor — build 2026-09-22-e
+# J3P Advisor — build 2026-09-22-f
 
 `app.py`, the pre-deploy checks, and `DEPLOYING_A_CLIENT.md`.
 
 ---
 
-## A client conversation was in the internal history
+## A conversation was following you between advisors
 
-My bug, and the more serious of the two things in your screenshot.
+My bug, and it explains both of the last two reports.
 
-`chat_history` rows are keyed by the history token, and that token is
-derived from **your email** — so it is identical across every advisor you
-use while signed in. Nothing recorded which advisor a conversation happened
-with. The internal rail listed conversations by token alone, so it listed
-everything you had ever said to any advisor.
+`conversation_id` was stored per **session**, and a session spans every
+advisor you visit. `load_history()` filtered by that id but not by advisor.
+So moving from one advisor to another carried the conversation across: the
+next advisor loaded the previous one's messages as its own context and
+answered against them.
 
-Rows now carry `advisor_slug`, and listing, opening and deleting are all
-filtered by it:
+That is why the internal advisor appeared to hold on to the last
+conversation — it genuinely had it in context. It is also why a client email
+thread you had pasted elsewhere was sitting in an internal session.
 
-| | Before | After |
-|---|---|---|
-| Internal rail | your client threads **and** internal ones | internal only |
-| Default advisor | same mixed list | its own only |
+Two changes:
 
-Your earlier conversations have no advisor recorded, so they will not appear
-in the internal rail — which is the correct outcome, since they were not
-internal conversations.
+- **The conversation id rotates when the advisor changes.** A conversation
+  belongs to one advisor, and the id is now paired with the advisor it was
+  started under.
+- **History loading is filtered by advisor** as well as by conversation, so
+  even a stale id cannot reach across.
 
-The same filter is on the delete, so a conversation can only be deleted from
-the advisor it belongs to.
+Verified: two messages to two advisors in one session now sit in separate
+conversations, and the internal advisor's context contains only what was
+said to it.
 
-## "I cannot access the message"
+## Why this kept surfacing as something else
 
-Clicking a conversation that could not be opened did nothing at all, which
-is indistinguishable from a click that missed. The rail now says why —
-"That conversation is no longer available" for a 404, "Could not open that
-conversation" otherwise.
+Each time, the visible symptom pointed somewhere other than the cause — a
+history list showing the wrong rows, then an advisor answering the wrong
+question. The shared root was that a conversation had no owner. It has one
+now.
 
-I cannot tell from here which of those you were hitting. If it persists on
-this build, the message will name the failure and I can fix the actual
-cause rather than the next guess.
+Worth knowing: the pasted email was in that session's context, so it was
+sent to the model as part of the conversation. That is a reason to run
+**New Conversation** after pasting anything personal or client-confidential,
+until deletion-on-request exists.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-22-e`.
+report `2026-09-22-f`.
