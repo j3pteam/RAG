@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-j"
+APP_VERSION = "2026-09-22-a"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -2602,6 +2602,20 @@ INDEX_HTML = r"""<!DOCTYPE html>
       cursor: pointer;
     }
     .hist-item:hover { background: rgba(255,255,255,0.07); }
+    .hist-row { position: relative; display: flex; align-items: stretch; }
+    .hist-row .hist-item { flex: 1 1 auto; padding-right: 2rem; }
+    .hist-del {
+      position: absolute; right: 0.25rem; top: 50%; transform: translateY(-50%);
+      background: none; border: none; color: #6f7c93; cursor: pointer;
+      font-size: 0.95rem; line-height: 1; padding: 0.3rem 0.4rem;
+      border-radius: 5px; opacity: 0; transition: opacity 0.12s ease;
+    }
+    .hist-row:hover .hist-del, .hist-del:focus { opacity: 1; }
+    .hist-del:hover { color: #e6a5a5; background: rgba(255,255,255,0.08); }
+    .hist-del.confirming {
+      opacity: 1; color: #f0d7d7; background: #7d3535;
+      font-size: 0.68rem; letter-spacing: 0.06em; text-transform: uppercase;
+    }
     .hist-item.current { background: rgba(210,188,141,0.16); color: #f0e5cf; }
     .hist-when { display: block; font-size: 0.68rem; color: #8d99b0; margin-top: 0.15rem; }
     .hist-empty { padding: 0.6rem; font-size: 0.8rem; color: #8d99b0; line-height: 1.5; }
@@ -2618,8 +2632,18 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     @media (min-width: 1100px) {
       body.hist-on .hist-rail { transform: translateX(0); }
-      body.hist-on .chat-shell { margin-left: 264px; }
+      /* The page shifts as a whole. My first attempt moved ".chat-shell",
+         which does not exist on this page — the header, transcript and
+         composer are ordinary flow children of body — so the rule matched
+         nothing and the rail sat on top of the content, cutting off the
+         banner and the first line of every message. */
+      body.hist-on { padding-left: 264px; }
       body.hist-on .hist-toggle { display: none; }
+    }
+    /* Below that width the rail is an overlay, so the page must not shift
+       underneath it. */
+    @media (max-width: 1099px) {
+      body.hist-on { padding-left: 0; }
     }
 
     .cq-row { margin: 0 0 1.15rem; text-align: left; }
@@ -7502,6 +7526,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
           }
           histList.innerHTML = "";
           for (const c of items) {
+            const row = document.createElement("div");
+            row.className = "hist-row";
+
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "hist-item" + (c.current ? " current" : "");
@@ -7514,7 +7541,58 @@ INDEX_HTML = r"""<!DOCTYPE html>
             btn.appendChild(title);
             btn.appendChild(when);
             btn.addEventListener("click", () => openConversation(c.id, btn));
-            histList.appendChild(btn);
+
+            // Two clicks to delete, and the second one says what it does.
+            // A browser confirm() would do the job, but a whole modal for
+            // removing one row is heavier than the action deserves — and a
+            // single unguarded click would eventually remove the wrong
+            // conversation, which cannot be undone.
+            const del = document.createElement("button");
+            del.type = "button";
+            del.className = "hist-del";
+            del.title = "Delete this conversation";
+            del.setAttribute("aria-label", "Delete conversation: " + c.title);
+            del.textContent = "\u00d7";
+            let armed = false;
+            let disarm = null;
+            del.addEventListener("click", async (e) => {
+              e.stopPropagation();
+              if (!armed) {
+                armed = true;
+                del.classList.add("confirming");
+                del.textContent = "Delete?";
+                disarm = setTimeout(() => {
+                  armed = false;
+                  del.classList.remove("confirming");
+                  del.textContent = "\u00d7";
+                }, 4000);
+                return;
+              }
+              if (disarm) clearTimeout(disarm);
+              del.disabled = true;
+              try {
+                const r = await fetch("/conversations/" + encodeURIComponent(c.id),
+                                      { method: "DELETE" });
+                if (!r.ok) { del.disabled = false; return; }
+                const out = await r.json();
+                if (out.started_new) {
+                  // The conversation on screen is the one just deleted.
+                  if (window.__stopAllSpeech) window.__stopAllSpeech();
+                  chat.innerHTML = "";
+                  const opening = document.createElement("div");
+                  opening.className = "msg assistant";
+                  opening.textContent = OPENING;
+                  chat.appendChild(opening);
+                }
+                refreshConversations();
+              } catch (err) {
+                del.disabled = false;
+              }
+            });
+
+            row.appendChild(btn);
+            row.appendChild(del);
+            histList.appendChild(row);
           }
         } catch (e) {
           histList.innerHTML = "";
@@ -14513,6 +14591,48 @@ def open_my_conversation(conversation_id):
         "ok": True,
         "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
     })
+
+
+@app.route("/conversations/<conversation_id>", methods=["DELETE"])
+@paywall.paywall_required
+def delete_my_conversation(conversation_id):
+    """Removes one conversation from this token's history, for good.
+
+    Scoped to the caller's own history token in the WHERE clause rather
+    than checked beforehand — a conversation id from someone else's history
+    then matches nothing instead of deleting their transcript.
+    """
+    if not _internal_session_or_403():
+        return jsonify({"error": "Not available."}), 403
+    token = _history_token()
+    conn = _settings_db_conn()
+    if not conn:
+        return jsonify({"error": "Database unavailable."}), 503
+    try:
+        _history_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM chat_history "
+                        "WHERE token = %s AND conversation_id = %s",
+                        (token, conversation_id))
+            removed = cur.rowcount
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[history] delete failed: {type(e).__name__}")
+        return jsonify({"error": "Could not delete that."}), 500
+    finally:
+        conn.close()
+
+    if not removed:
+        return jsonify({"error": "That conversation is no longer there."}), 404
+
+    # Deleting the conversation currently on screen leaves the session
+    # pointing at rows that no longer exist, so it starts a fresh one.
+    started_new = False
+    if session.get("conversation_id") == conversation_id:
+        session.pop("conversation_id", None)
+        started_new = True
+    app.logger.info(f"[history] a conversation was deleted ({removed} messages)")
+    return jsonify({"ok": True, "started_new": started_new})
 
 
 @app.route("/context", methods=["POST"])

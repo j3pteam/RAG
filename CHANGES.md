@@ -1,62 +1,54 @@
-# J3P Advisor — build 2026-09-21-j
+# J3P Advisor — build 2026-09-22-a
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## Conversation history, internal advisor only
+## Deleting a conversation
 
-A rail down the left of `/a/j3p-internal`, listing past conversations
-newest first. Each is titled with the first thing you said — a timestamp
-alone tells you nothing about which one you are looking for.
+A × appears on each row in the rail. **First click arms it and it changes to
+"Delete?"; second click removes the conversation.** It disarms itself after
+four seconds if you do not follow through.
 
-Clicking one **loads it and continues it**, rather than showing a frozen
-copy. Going back to a conversation usually means carrying on with it, and a
-read-only view would mean copying text out to continue.
+Two clicks rather than one because this cannot be undone, and rather than a
+browser `confirm()` because a modal for removing one row is heavier than the
+action deserves. The second state says what it will do instead of just being
+a second click.
 
-Open by default on wide screens, off-canvas behind a "Conversations" button
-on narrow ones, and the choice is remembered.
+Deleting the conversation currently on screen starts a fresh one rather than
+leaving the page pointing at messages that no longer exist.
 
-## What had to change underneath
+The delete is scoped in the SQL itself:
 
-**"New conversation" was deleting the transcript.** There was no history to
-list because the rows were being removed — nothing distinguished one
-conversation from the next, so clearing was the only option.
+```sql
+DELETE FROM chat_history WHERE token = %s AND conversation_id = %s
+```
 
-`chat_history` now carries a `conversation_id`, added automatically on the
-existing table. New conversation **rotates** that id instead of deleting, so
-the previous conversation stays readable.
+The token comes from the session, never the request. A conversation id from
+someone else's history matches nothing rather than deleting their
+transcript — the check cannot be forgotten because it is part of the
+statement.
 
-**Only on an internal advisor.** Everywhere else New Conversation still
-deletes, exactly as before. A participant pressing that button is entitled
-to expect their transcript gone, and quietly retaining it because a feature
-elsewhere finds it useful would change what the button means. That is a
-promise worth keeping even when no one would notice.
+## The rail was covering the page
 
-Existing rows have no conversation id and are treated as one earlier
-conversation; nothing is lost.
+Your screenshot shows the banner reading "ON." and the greeting reading
+"ello" — the rail was sitting on top of the content instead of moving it
+across.
 
-## Access
+My fault: the rule shifted `.chat-shell`, an element that **does not exist**
+on this page. The header, transcript and composer are ordinary flow children
+of `body`, so the selector matched nothing and the margin was never applied.
 
-Both endpoints check the server side, not just the sidebar:
+The page now shifts as a whole (`body.hist-on { padding-left: 264px }`), and
+explicitly does not shift on narrow screens, where the rail is an overlay
+and moving the page under it would be wrong.
 
-| Caller | Result |
-|---|---|
-| Client-facing advisor | 403 |
-| Internal advisor, not signed in as admin | 403 |
-| Internal advisor, signed-in admin | allowed |
-| No advisor (default persona) | 403 |
-
-Hiding a sidebar does not stop anyone calling the endpoint behind it, and
-these endpoints return whole transcripts. On client pages the script is
-inert — the rail element does not exist, so no request is ever made.
+I should have caught that — I wrote a selector for a structure I had not
+checked.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-j`.
-
-The first conversation you have after deploying starts the history; earlier
-ones were already deleted by the old behavior and cannot be recovered.
+report `2026-09-22-a`.
