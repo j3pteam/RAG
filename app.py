@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-e"
+APP_VERSION = "2026-09-21-f"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -3322,6 +3322,13 @@ INDEX_HTML = r"""<!DOCTYPE html>
   </style>
 </head>
 <body>
+  {# None of the client-entry gates apply to an internal session. The
+     release is a liability waiver for someone receiving coaching; asking a
+     J3P colleague to accept it before asking about pricing is both odd and
+     meaningless. The personality survey and the position/specialization
+     questions exist to tailor advice to a client — a colleague's role is
+     not what this advisor needs to know. #}
+  {% if not internal_only %}
   <div id="ack-overlay" class="ack-overlay" role="dialog" aria-modal="true"
        aria-labelledby="ack-title" aria-describedby="ack-body" hidden>
     <div class="ack-box">
@@ -3372,6 +3379,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  {% endif %}
 
   {% if context_intake_enabled %}
   <div id="context-overlay" class="ack-overlay" role="dialog" aria-modal="true"
@@ -12589,6 +12597,8 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     if advisor and advisor.get("internal_only"):
         show = False
 
+    is_internal = bool(advisor and advisor.get("internal_only"))
+
     page_cfg = dict(CONFIG)
     # A name for the default photo, so the general link can read "Alan
     # Friedman" rather than the app's own name.
@@ -12672,10 +12682,17 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         release_body=RELEASE_BODY_HTML,
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=TIPI_ITEMS,
-        personality_enabled=_effective("personality_override",
-                                        "personality_assessment_enabled", True),
-        context_intake_enabled=_effective("context_intake_override",
-                                           "context_intake_enabled", False),
+        # Both intakes are off for an internal session regardless of the
+        # site setting or the advisor's own override. Decided here rather
+        # than hidden in the template, so the flags the page reads are
+        # actually false — there is no overlay to skip and no half-state
+        # where the markup is absent but the entry gate still waits on it.
+        personality_enabled=(False if is_internal else
+                             _effective("personality_override",
+                                        "personality_assessment_enabled", True)),
+        context_intake_enabled=(False if is_internal else
+                                _effective("context_intake_override",
+                                           "context_intake_enabled", False)),
         context_position_options=CONTEXT_POSITION_OPTIONS,
         context_specialization_options=CONTEXT_SPECIALIZATION_OPTIONS,
         avatar_version=_avatar_cache_version(),
