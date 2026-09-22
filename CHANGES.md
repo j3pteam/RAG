@@ -1,62 +1,64 @@
-# J3P Advisor — build 2026-09-21-b
+# J3P Advisor — build 2026-09-21-c
 
-`app.py`, plus the pre-deploy checks — **including a new one,
-`urlfor_check.py`.** Copy that across too.
+`app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## The 500
+## No booking button on an internal advisor
 
-My bug, and a plain one. The route redirected with:
+"Schedule time with J3P Internal" is meaningless — there is no such person
+to book — and it is exactly the sort of thing that ends up in a screenshot.
 
-```python
-url_for("admin", tab="advisors")
-```
+An internal advisor now never shows the booking button, whatever the site
+setting, the per-advisor override, or the `/scheduling` variant of the link
+says. Enforced at render rather than set as a default when the advisor is
+created, so it also covers an advisor switched to internal later, and a
+stray click on its card cannot undo it.
 
-The admin view function is called `admin_dashboard`. There is no endpoint
-named `admin`, so Flask raised before anything else ran — the moment the
-button was clicked.
+`/a/j3p-internal` is therefore already the link without scheduling.
 
-**Eight call sites were wrong, and only four of them were mine.** The other
-four were in the existing "Make internal / Make client-facing again" switch,
-which means that switch would have produced the same 500 whenever it was
-next used. It had been sitting there. All eight now point at
-`admin_dashboard`.
+## Pinned to the top and set apart
 
-## Why nothing caught it, and what now will
-
-None of the four pre-deploy checks could see this:
-
-- the syntax is valid
-- the endpoint is a **string**, not an identifier, so pyflakes sees nothing
-  to resolve
-- definition order is irrelevant
-- the render test renders templates; it never follows a redirect
-
-So it could only fail at the moment someone clicked — the worst time to find
-out, and exactly what happened to you.
-
-**`urlfor_check.py` is now step 5 of `check.sh`.** It parses every
-`@app.route` to collect the real endpoint names, then checks every
-`url_for("…")` in the file — Python call sites and the ones inside the Jinja
-templates — against that list.
+Internal advisors now sort above every client-facing card, under their own
+heading, with a dark red left border and tint:
 
 ```
-5/5  url_for targets resolve
-     ok  (124 routes, every url_for resolves)
+Internal — J3P staff only
+  [J3P Internal]
+
+Client-facing advisors
+  [Alan Friedman]
+  …
 ```
 
-Confirmed against the actual bug: reintroducing the bad call makes the check
-fail and name the line.
+Verified by rendering with the internal advisor deliberately **second** in
+the input — it still comes out first, with the headings falling in the right
+places.
 
-This is the fifth check, and like the other four it exists because something
-shipped broken without it.
+They behave differently from every other card on that page — different
+naming rules, different access, no booking button — so mixing them in
+alphabetically invites someone to treat one like the rest.
+
+## The knowledge base
+
+It was already correct, and the card was not saying so. An internal advisor
+reads the **shared J3P knowledge base** — every document with no advisor
+assignment, which is exactly what the default advisor reads. Documents
+assigned to a named advisor stay with that advisor.
+
+Two changes so the page tells the truth:
+
+- The **Knowledge-Base Portal** section is gone for internal advisors. A
+  portal is a self-service link for a person to manage their own documents.
+  An internal advisor is not a person and has no separate base — offering
+  one invites building a second knowledge base that nothing would read.
+- Its **Knowledge** section now states plainly that it answers from the
+  shared J3P base, the same documents the default advisor uses, "without a
+  separate base to keep in step".
 
 ---
 
 ## Installing
 
-Replace `app.py` **and add `urlfor_check.py`** alongside the other check
-scripts. Commit to `main`. Diagnostics should report `2026-09-21-b`.
-
-Then the button should work: Advisors → Internal J3P advisor → Create.
+Replace `app.py`, keep the check scripts alongside. Diagnostics should
+report `2026-09-21-c`.

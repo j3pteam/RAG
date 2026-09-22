@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-b"
+APP_VERSION = "2026-09-21-c"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -12579,6 +12579,16 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     if force_scheduling is None and "force_scheduling" in session:
         show = bool(session["force_scheduling"])
 
+    # An internal advisor never offers a booking button, whatever the
+    # setting, the per-advisor override, or the /scheduling variant of the
+    # link says. "Schedule time with J3P Internal" is meaningless — there is
+    # no such person to book — and it is the sort of thing that gets
+    # screenshotted. Enforced here rather than set as a default at creation,
+    # so it also covers an advisor switched to internal later and cannot be
+    # undone by a stray click on its card.
+    if advisor and advisor.get("internal_only"):
+        show = False
+
     page_cfg = dict(CONFIG)
     # A name for the default photo, so the general link can read "Alan
     # Friedman" rather than the app's own name.
@@ -16398,6 +16408,12 @@ input[type="file"], input[type="text"] {
   border-top: 1px solid var(--line);
 }
 .advisor-section-group:first-of-type { margin-top: 0.5rem; }
+/* An internal advisor is marked at a glance, not only by its badge. */
+.advisor-section-group.is-internal { color: #8a3b3b; opacity: 1; font-weight: 600; }
+.advisor-block.is-internal-card {
+  border-left: 3px solid #8a3b3b;
+  background: linear-gradient(90deg, rgba(138, 59, 59, 0.04), transparent 45%);
+}
 .advisor-section > *:not(summary) { margin-top: 0.75rem; }
 
 /* Live "what will the initials look like" preview beside the name field */
@@ -18061,8 +18077,25 @@ details.section[open] > summary {
 
 
     {% if advisors %}
-    {% for adv in advisors %}
-    <details class="advisor-block" name="advisor-cards">
+    {# Internal advisors first and visually set apart. They behave
+       differently from every other card on this page — different naming
+       rules, different access, no booking button — so mixing them in
+       alphabetically invites someone to treat one like the rest. #}
+    {% set internal_advisors = advisors | selectattr("internal_only") | list %}
+    {% set client_advisors = advisors | rejectattr("internal_only") | list %}
+    {% if internal_advisors %}
+    <div class="advisor-section-group is-internal">
+      Internal — J3P staff only
+    </div>
+    {% endif %}
+    {% for adv in (internal_advisors + client_advisors) %}
+    {# The heading lands once, on the first client-facing card, and only
+       when an internal card precedes it. #}
+    {% if internal_advisors and loop.index0 == internal_advisors | length %}
+    <div class="advisor-section-group">Client-facing advisors</div>
+    {% endif %}
+    <details class="advisor-block{{ ' is-internal-card' if adv.internal_only else '' }}"
+             name="advisor-cards">
       <summary class="advisor-head">
         <img src="/a/{{ adv.slug }}/photo.jpg" alt=""
              onerror="this.style.display='none'"
@@ -18264,6 +18297,11 @@ details.section[open] > summary {
 
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
+      {# A portal is a self-service link for an individual advisor to manage
+         their own documents. An internal advisor is not a person and has no
+         separate base to manage — offering one here invites building a
+         second knowledge base that nothing would read. #}
+      {% if not adv.internal_only %}
       <details class="advisor-section">
         <summary>Knowledge-Base Portal</summary>
         <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
@@ -18307,6 +18345,7 @@ details.section[open] > summary {
         </form>
         {% endif %}
       </details>
+      {% endif %}
 
       <details class="advisor-section">
         <summary>Onboarding</summary>
@@ -18426,6 +18465,13 @@ details.section[open] > summary {
           Only {{ adv.name }}'s sessions retrieve these. The shared J3P base is
           available to them as well. Reassigning or deleting one here does the
           same thing it would from the main Documents table under Knowledge.
+        </p>
+        {% elif adv.internal_only %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          {{ adv.name }} reads <strong>the shared J3P knowledge base</strong> —
+          the same documents the default advisor uses. That is the intent: it
+          answers from what J3P already knows, without a separate base to keep
+          in step. Documents assigned to a specific advisor are not included.
         </p>
         {% else %}
         <p class="muted" style="margin: 0; font-size: 0.8rem;">
