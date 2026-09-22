@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-20-o"
+APP_VERSION = "2026-09-21-a"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -17863,6 +17863,32 @@ details.section[open] > summary {
       across all of them.
     </p>
 
+    {% if admin_perms.edit_advisors and not has_internal_advisor %}
+    <details class="section">
+      <summary>
+        <h2>Internal J3P advisor</h2>
+        <span class="section-note">not set up</span>
+      </summary>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+        An advisor for sessions with J3P colleagues rather than clients. It
+        may name J3P, J3P Health, J3 Personica, Residency Select and
+        individual colleagues, give internal email addresses from its
+        knowledge base, and talk plainly about pricing, positioning and
+        staffing. The referral scrubber does not run on its replies.
+      </p>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
+        <strong>Only signed-in admin accounts can open it.</strong> The
+        page, the chat behind it, and participant links pointing at it are
+        all refused for anyone else — an unauthenticated request gets the
+        same not-found page as an unknown advisor, so its existence is not
+        confirmed to a stranger who guesses the address.
+      </p>
+      <form method="POST" action="/admin/advisors/create-internal">
+        <button type="submit" class="btn">Create the internal J3P advisor</button>
+      </form>
+    </details>
+    {% endif %}
+
     <details style="padding-bottom: 1.1rem; margin-bottom: 1.1rem;
                     border-bottom: 1px dashed var(--line);">
       <summary style="font-size: 0.95rem; font-weight: 600; cursor: pointer;
@@ -18022,31 +18048,6 @@ details.section[open] > summary {
         </form>
       </details>
 
-      {% if admin_perms.edit_advisors and not has_internal_advisor %}
-      <details class="section">
-        <summary>
-          <h2>Internal J3P advisor</h2>
-          <span class="section-note">not set up</span>
-        </summary>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
-          An advisor for sessions with J3P colleagues rather than clients. It
-          may name J3P, J3P Health, J3 Personica, Residency Select and
-          individual colleagues, give internal email addresses from its
-          knowledge base, and talk plainly about pricing, positioning and
-          staffing. The referral scrubber does not run on its replies.
-        </p>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
-          <strong>Only signed-in admin accounts can open it.</strong> The
-          page, the chat behind it, and participant links pointing at it are
-          all refused for anyone else — an unauthenticated request gets the
-          same not-found page as an unknown advisor, so its existence is not
-          confirmed to a stranger who guesses the address.
-        </p>
-        <form method="POST" action="/admin/advisors/create-internal">
-          <button type="submit" class="btn">Create the internal J3P advisor</button>
-        </form>
-      </details>
-      {% endif %}
 
       {{ participant_links_section("", settings.avatar_name or cfg.persona_name,
                                    participant_links_by_advisor.get("", []),
