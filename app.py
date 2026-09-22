@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-c"
+APP_VERSION = "2026-09-21-d"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -17966,6 +17966,10 @@ details.section[open] > summary {
       </form>
     </details>
 
+{# The default persona's card, as a macro so it can be emitted at the
+   right point in the ordering rather than being fixed in place.
+   Internal advisors sort above it. #}
+{% macro default_persona_card() %}
     <details class="advisor-block" name="advisor-cards">
       <summary class="advisor-head">
         <img src="{{ cfg.avatar_url }}?v={{ avatar_version }}" alt=""
@@ -18074,25 +18078,33 @@ details.section[open] > summary {
       {{ voice_sample_section(default_persona_slug, settings.avatar_name or cfg.persona_name,
                                default_persona_voice_sample, admin_perms.edit_voice) }}
     </details>
+{% endmacro %}
 
 
-    {% if advisors %}
-    {# Internal advisors first and visually set apart. They behave
-       differently from every other card on this page — different naming
-       rules, different access, no booking button — so mixing them in
-       alphabetically invites someone to treat one like the rest. #}
+    {# Internal advisors come first on the page — above the default
+       persona's card, not merely above the other advisors. They are the
+       ones with different rules, and the first thing on the page is where
+       someone looks. The default card is emitted from its macro at the
+       boundary, so it keeps its position relative to everything else. #}
     {% set internal_advisors = advisors | selectattr("internal_only") | list %}
     {% set client_advisors = advisors | rejectattr("internal_only") | list %}
+    {% set ns = namespace(default_emitted=false) %}
+
     {% if internal_advisors %}
     <div class="advisor-section-group is-internal">
       Internal — J3P staff only
     </div>
     {% endif %}
+
     {% for adv in (internal_advisors + client_advisors) %}
-    {# The heading lands once, on the first client-facing card, and only
-       when an internal card precedes it. #}
-    {% if internal_advisors and loop.index0 == internal_advisors | length %}
+    {# Once the internal cards are done, the default persona's card lands,
+       then the heading for everything that follows. #}
+    {% if not ns.default_emitted and not adv.internal_only %}
+    {{ default_persona_card() }}
+    {% set ns.default_emitted = true %}
+    {% if internal_advisors %}
     <div class="advisor-section-group">Client-facing advisors</div>
+    {% endif %}
     {% endif %}
     <details class="advisor-block{{ ' is-internal-card' if adv.internal_only else '' }}"
              name="advisor-cards">
@@ -18262,6 +18274,29 @@ details.section[open] > summary {
 
       <div class="advisor-section-group is-links">Links</div>
 
+      {% if adv.internal_only %}
+      {# An internal advisor has exactly one link: the app itself. There is
+         no one to book, and a participant link would hand the internal
+         persona to whoever held it — creation is refused server-side, so
+         showing the form would only produce a form that cannot succeed. #}
+      <div class="advisor-link-row">
+        <div class="muted advisor-link-label">Link to the advisor</div>
+        <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+          <a href="/a/{{ adv.slug }}" target="_blank" class="adv-link"
+             >{{ base_url }}/a/{{ adv.slug }}</a>
+          <button type="button" class="copy-link"
+                  data-copy="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
+        </div>
+      </div>
+      <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem; line-height: 1.6;">
+        Opens the ordinary session interface. Only signed-in admin accounts
+        can load it — anyone else gets the not-found page — so it is safe to
+        keep in a bookmark, though not to paste anywhere a client could see.
+        No booking button is shown, and participant links are not available
+        for an internal advisor.
+      </p>
+      {% else %}
+
       <details class="advisor-section">
         <summary>Booking button</summary>
         <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
@@ -18292,6 +18327,7 @@ details.section[open] > summary {
       {{ participant_links_section(adv.slug, adv.name,
                                    participant_links_by_advisor.get(adv.slug, []),
                                    admin_perms.edit_participant_links) }}
+      {% endif %}
 
       <div class="advisor-section-group is-setup">Setup</div>
 
@@ -18517,7 +18553,14 @@ details.section[open] > summary {
       </details>
     </details>
     {% endfor %}
-    {% else %}
+
+    {# No client-facing advisors, so the boundary above never arrived — the
+       default card still has to appear, after whatever did render. #}
+    {% if not ns.default_emitted %}
+    {{ default_persona_card() }}
+    {% endif %}
+
+    {% if not advisors %}
     <p class="muted">
       No advisor profiles yet. The links above still work and use the default
       photo; add a profile above to give someone their own.

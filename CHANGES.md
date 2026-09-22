@@ -1,64 +1,56 @@
-# J3P Advisor — build 2026-09-21-c
+# J3P Advisor — build 2026-09-21-d
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## No booking button on an internal advisor
+## Internal is now genuinely first on the page
 
-"Schedule time with J3P Internal" is meaningless — there is no such person
-to book — and it is exactly the sort of thing that ends up in a screenshot.
+Last build put it above the other advisors but still below the Default
+persona's card. It now comes before that too — first thing under the tab,
+which is where someone looks.
 
-An internal advisor now never shows the booking button, whatever the site
-setting, the per-advisor override, or the `/scheduling` variant of the link
-says. Enforced at render rather than set as a default when the advisor is
-created, so it also covers an advisor switched to internal later, and a
-stray click on its card cannot undo it.
+That needed the default persona's card to become a Jinja macro so it could
+be emitted at the right point in the ordering rather than being fixed where
+it happened to sit in the file. No markup was duplicated.
 
-`/a/j3p-internal` is therefore already the link without scheduling.
+Verified in three configurations:
 
-## Pinned to the top and set apart
+| Advisors present | Order rendered |
+|---|---|
+| internal + 2 client | internal → default → client → client |
+| internal only | internal → default |
+| no internal | default → client |
 
-Internal advisors now sort above every client-facing card, under their own
-heading, with a dark red left border and tint:
+The default card appears exactly once in each — including the case with no
+client-facing advisors, where the boundary that triggers it never arrives.
+
+## One link, and nothing else
+
+The internal card's Links section is now a single row:
 
 ```
-Internal — J3P staff only
-  [J3P Internal]
-
-Client-facing advisors
-  [Alan Friedman]
-  …
+Link to the advisor
+  https://…/a/j3p-internal   [Copy]
 ```
 
-Verified by rendering with the internal advisor deliberately **second** in
-the input — it still comes out first, with the headings falling in the right
-places.
+with a line explaining that it opens the ordinary session interface, only
+signed-in admin accounts can load it, and it is safe to bookmark but not to
+paste anywhere a client could see.
 
-They behave differently from every other card on that page — different
-naming rules, different access, no booking button — so mixing them in
-alphabetically invites someone to treat one like the rest.
+Gone from that card: **Booking button** and **Participant Links**.
 
-## The knowledge base
+The participant-links form was worse than redundant — creation is refused
+server-side for internal advisors, so the form could only ever fail. That is
+what produced the bare "Please fill out this field" in your screenshot: a
+form that cannot succeed, giving no reason.
 
-It was already correct, and the card was not saying so. An internal advisor
-reads the **shared J3P knowledge base** — every document with no advisor
-assignment, which is exactly what the default advisor reads. Documents
-assigned to a named advisor stay with that advisor.
-
-Two changes so the page tells the truth:
-
-- The **Knowledge-Base Portal** section is gone for internal advisors. A
-  portal is a self-service link for a person to manage their own documents.
-  An internal advisor is not a person and has no separate base — offering
-  one invites building a second knowledge base that nothing would read.
-- Its **Knowledge** section now states plainly that it answers from the
-  shared J3P base, the same documents the default advisor uses, "without a
-  separate base to keep in step".
+Client-facing cards are unchanged — booking button, participant links and
+knowledge portal all still there. Confirmed card by card in the render test.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-c`.
+report `2026-09-21-d`.
