@@ -1,55 +1,50 @@
-# J3P Advisor — build 2026-09-21-f
+# J3P Advisor — build 2026-09-21-g
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## An internal session starts straight in the conversation
+## The internal card now shows only what applies to it
 
-Three client-entry gates are gone for an internal advisor:
+Gone from that card: **Voice Sample**, **Onboarding**, and **Pre-Call
+Briefings** (with the Activity heading that only held it).
 
-- **Release & Acknowledgment.** It is a liability waiver for someone
-  receiving coaching. Asking a J3P colleague to release J3P from liability
-  before they can ask about pricing is both odd and legally pointless.
-- **Personality survey.** Ten rating items to tailor coaching to a client.
-- **Position and specialization questions.** Added yesterday to pitch
-  replies at a client's level. A colleague's role is not what this advisor
-  needs to know.
+Each was not merely unused but misleading:
 
-The scheduling overlay goes with them, since an internal advisor has no
-booking button to reach it.
+- A **voice sample** clones a real person's voice. An internal advisor is
+  not a person — leaving the section there invites someone to upload Alan's
+  voice to it.
+- **Onboarding** records a real person's assessments, so its counter would
+  have read 0/2 forever, looking like something left undone.
+- **Pre-call briefings** are prepared when someone books time through an
+  advisor's link. An internal advisor has no booking button, so the section
+  could only ever be empty.
 
-Opening `/a/j3p-internal` now lands directly in the conversation with the
-composer ready.
+**Knowledge stays**, since that is the one thing on the card that does apply
+— and it now explains that it reads the shared J3P base.
 
-## Decided server-side, not hidden in the page
+## The chips said the wrong thing too
 
-Both intake flags are set to false in the render call rather than the markup
-merely being left out. The page reads flags that are actually false, so
-there is no half-state where an overlay is absent but the entry chain is
-still waiting on it — which is exactly the sort of thing that would leave a
-composer permanently blocked.
+The summary row read:
 
-Verified: with every overlay absent the entry chain still unblocks the
-composer and focuses the message box. Client-facing pages are unchanged —
-all four gates still present.
+```
+0 PARTICIPANT LINKS · 0 DOCUMENTS · ONBOARDING 0/2 ·
+NO VOICE SAMPLE · NO PORTAL LINK
+```
 
-## One thing I left alone
+Five things reported as absent, reading like five things left undone, when
+none of them apply. Replaced with two that are true:
 
-The small footer lines are still there:
+```
+Reads the shared J3P knowledge base · Admin sign-in required
+```
 
-> For informational purposes only. Not official advice.
-> The J3P Advisor is AI and can make mistakes. Please double-check
-> responses.
-
-The second is true for a colleague as much as a client. The first is
-client-facing language and I can drop it for internal sessions if you want —
-I did not, because you named the modal rather than the footer, and removing
-an accuracy caveat felt like the wrong thing to assume.
+Client-facing cards keep every section and chip. Confirmed card by card in
+the render test.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-f`.
+report `2026-09-21-g`.

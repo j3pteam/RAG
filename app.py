@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-f"
+APP_VERSION = "2026-09-21-g"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18159,6 +18159,14 @@ details.section[open] > summary {
         {% set adv_kb = advisor_docs.get(adv.slug, []) %}
         {% set onboarding_done = (1 if adv.personality else 0) + (1 if adv.behavioral else 0) %}
         <div class="advisor-chips">
+          {# The chips summarize what a card contains. An internal advisor's
+             card has none of participant links, onboarding, a voice sample
+             or a portal, so reporting them as absent reads like four things
+             left undone rather than four that do not apply. #}
+          {% if adv.internal_only %}
+          <span class="advisor-chip info">Reads the shared J3P knowledge base</span>
+          <span class="advisor-chip off">Admin sign-in required</span>
+          {% else %}
           <span class="advisor-chip {{ 'info' if adv_links else 'off' }}">
             {{ adv_links|length }} participant link{{ '' if adv_links|length == 1 else 's' }}
           </span>
@@ -18177,6 +18185,7 @@ details.section[open] > summary {
           <span class="advisor-chip {{ 'on' if adv.portal_token else 'off' }}">
             {{ 'Portal link active' if adv.portal_token else 'No portal link' }}
           </span>
+          {% endif %}
         </div>
       </summary>
 
@@ -18352,6 +18361,12 @@ details.section[open] > summary {
 
       <div class="advisor-section-group is-setup">Setup</div>
 
+      {# A voice sample clones a real person's voice; onboarding records a
+         real person's assessments. An internal advisor is neither — it is a
+         mode of the J3P knowledge base. Leaving these on its card invites
+         someone to upload Alan's voice to it, or to wonder why its
+         onboarding is stuck at 0/2 forever. #}
+      {% if not adv.internal_only %}
       {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
 
       {# A portal is a self-service link for an individual advisor to manage
@@ -18503,6 +18518,7 @@ details.section[open] > summary {
           {% endif %}
         </form>
       </details>
+      {% endif %}
 
       <details class="advisor-section">
         {% set adv_docs = advisor_docs.get(adv.slug, []) %}
@@ -18539,6 +18555,10 @@ details.section[open] > summary {
         {% endif %}
       </details>
 
+      {# Pre-call briefings are prepared when someone books time through an
+         advisor's link. An internal advisor has no booking button, so this
+         section can only ever be empty. #}
+      {% if not adv.internal_only %}
       <div class="advisor-section-group is-activity">Activity</div>
 
       <details class="advisor-section">
@@ -18572,6 +18592,7 @@ details.section[open] > summary {
         </p>
         {% endif %}
       </details>
+      {% endif %}
     </details>
     {% endfor %}
 
