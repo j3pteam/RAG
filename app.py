@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-a"
+APP_VERSION = "2026-09-21-b"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -21198,11 +21198,11 @@ def admin_create_internal_advisor():
     existing = get_advisor(slug)
     if existing:
         flash("The internal J3P advisor already exists \u2014 it is on this page.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     if not save_advisor(slug, "J3P Internal"):
         flash("Could not create the advisor \u2014 the database was unavailable.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     if not set_advisor_internal(slug, True):
         # Never leave a client-facing advisor behind under this name: it
@@ -21210,13 +21210,13 @@ def admin_create_internal_advisor():
         delete_advisor(slug)
         flash("Could not mark the advisor internal, so it was removed again. "
               "Nothing was changed.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     app.logger.info("[internal] internal J3P advisor created")
     flash("\u2713 Created the internal J3P advisor. It is reachable at "
           "/a/j3p-internal by signed-in admin accounts only, and participant "
           "links to it are refused. Add its knowledge base on the Knowledge tab.")
-    return redirect(url_for("admin", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/internal/<slug>", methods=["POST"])
@@ -21233,19 +21233,19 @@ def admin_advisor_internal(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("No such advisor.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     turning_on = request.form.get("internal_only") == "1"
     if turning_on and (request.form.get("confirm") or "").strip().upper() != "INTERNAL":
         flash(f"{advisor['name']} was not changed — type INTERNAL to confirm.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     # The helper reports a database failure the same way as any other
     # failure, so a separate connection check here would be a second way of
     # saying the same thing.
     if not set_advisor_internal(slug, turning_on):
         flash("Could not change that — nothing was saved.")
-        return redirect(url_for("admin", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="advisors"))
 
     # Worth a log line of its own: this is the setting most worth being able
     # to answer "when did that change, and who changed it" about.
@@ -21254,7 +21254,7 @@ def admin_advisor_internal(slug):
     flash(f"{advisor['name']} is now "
           + ("an internal J3P advisor — its link must not be shared outside J3P."
              if turning_on else "client-facing again."))
-    return redirect(url_for("admin", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
 @app.route("/admin/advisors/delete/<slug>", methods=["POST"])

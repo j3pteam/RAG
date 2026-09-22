@@ -1,37 +1,62 @@
-# J3P Advisor — build 2026-09-21-a
+# J3P Advisor — build 2026-09-21-b
 
-`app.py`, plus the pre-deploy checks. Includes everything from `-o`.
+`app.py`, plus the pre-deploy checks — **including a new one,
+`urlfor_check.py`.** Copy that across too.
 
 ---
 
-## The internal advisor section is now where you would look for it
+## The 500
 
-I put it in a poor place. It sat below the Default persona card, most of a
-page down — for a one-time setup action someone goes looking for
-deliberately, which belongs near the top.
+My bug, and a plain one. The route redirected with:
 
-It now appears directly under the **Advisor Profiles** intro, above
-"Export or import advisors":
-
-```
-Advisor Profiles
-  Internal J3P advisor          <- here
-  Export or import advisors
-  Add or update an advisor
-  [advisor cards]
+```python
+url_for("admin", tab="advisors")
 ```
 
-It only shows when no internal advisor exists yet, and only to accounts that
-can edit advisors. Once you create one, the section disappears and the
-advisor's own card carries the internal badge and the switch.
+The admin view function is called `admin_dashboard`. There is no endpoint
+named `admin`, so Flask raised before anything else ran — the moment the
+button was clicked.
 
-## If it still is not there
+**Eight call sites were wrong, and only four of them were mine.** The other
+four were in the existing "Make internal / Make client-facing again" switch,
+which means that switch would have produced the same 500 whenever it was
+next used. It had been sitting there. All eight now point at
+`admin_dashboard`.
 
-Check **Diagnostics → Build → Version** reads `2026-09-21-a`. The section
-was added in `-o`, so anything earlier will not have it at all.
+## Why nothing caught it, and what now will
+
+None of the four pre-deploy checks could see this:
+
+- the syntax is valid
+- the endpoint is a **string**, not an identifier, so pyflakes sees nothing
+  to resolve
+- definition order is irrelevant
+- the render test renders templates; it never follows a redirect
+
+So it could only fail at the moment someone clicked — the worst time to find
+out, and exactly what happened to you.
+
+**`urlfor_check.py` is now step 5 of `check.sh`.** It parses every
+`@app.route` to collect the real endpoint names, then checks every
+`url_for("…")` in the file — Python call sites and the ones inside the Jinja
+templates — against that list.
+
+```
+5/5  url_for targets resolve
+     ok  (124 routes, every url_for resolves)
+```
+
+Confirmed against the actual bug: reintroducing the bad call makes the check
+fail and name the line.
+
+This is the fifth check, and like the other four it exists because something
+shipped broken without it.
 
 ---
 
 ## Installing
 
-Replace `app.py`, commit to `main`.
+Replace `app.py` **and add `urlfor_check.py`** alongside the other check
+scripts. Commit to `main`. Diagnostics should report `2026-09-21-b`.
+
+Then the button should work: Advisors → Internal J3P advisor → Create.

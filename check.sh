@@ -10,17 +10,17 @@
 #                        defined. Would have caught the decorator that
 #                        stopped every worker booting.
 set -e
-echo "1/4  syntax"
+echo "1/5  syntax"
 python3 -c "import ast,sys; ast.parse(open('app.py').read()); print('     ok')"
-echo "2/4  undefined names"
+echo "2/5  undefined names"
 if python3 -m pyflakes app.py 2>/dev/null | grep -i 'undefined name'; then
   echo "     FAILED — fix the names above before deploying"; exit 1
 else
   echo "     ok"
 fi
-echo "3/4  module-level definition order"
+echo "3/5  module-level definition order"
 python3 import_order_check.py app.py >/dev/null && echo "     ok"
-echo "4/4  rendered HTML is well-formed"
+echo "4/5  rendered HTML is well-formed"
 # Catches unbalanced or stray tags in ADMIN_HTML — a </details> that should
 # have been a </div>, a duplicated closing tag. Browsers paper over these,
 # so they survive visual checks.
@@ -45,5 +45,13 @@ PYEOF
 else
   echo "     skipped (no render_test.py)"
 fi
+echo
+echo "5/5  url_for targets resolve"
+if [ -f urlfor_check.py ]; then
+  python3 urlfor_check.py app.py || exit 1
+else
+  echo "     skipped (no urlfor_check.py)"
+fi
+
 echo
 echo "All checks passed."
