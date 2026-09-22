@@ -1,54 +1,66 @@
-# J3P Advisor — build 2026-09-21-h
+# J3P Advisor — build 2026-09-21-i
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## Admin page times, in Diagnostics
-
-"The admin panel is slow" has come round several times and every round has
-been guesswork, because the phase breakdown only ever existed in the deploy
-logs or behind `?timing=1` — neither of which is in front of the person who
-notices the slowness.
-
-**Diagnostics → Admin page times** now shows the last twelve admin pages
-loaded, newest first:
+## What your numbers say so far
 
 ```
-22:56:04  /admin?tab=advisors  3.12s  list_advisors 180ms ·
-          personality map 290ms · behavioral map 310ms · 360 map 280ms ·
-          voice map 300ms · briefings 270ms · participant links 620ms ·
-          documents 410ms · template render 340ms
+2847 ms total
+  list_documents          504 ms
+  list_advisors          1309 ms   ← dominant
+  feedback stats + log     66 ms
+  settings                248 ms
+  page-specific lookups   622 ms
+  template render          98 ms
 ```
 
-Every map is timed separately, so the breakdown names the culprit rather
-than lumping them together.
+I checked `list_advisors` first, because 1309 ms for five advisors looks
+like a query problem. **It is not.** That query already selects
+`(photo IS NOT NULL)` rather than the photo bytes, returns five rows, and
+has no join. There is nothing in it that takes a second.
 
-**Load the Advisors tab, then open Diagnostics, and tell me what the row
-says.** That turns this into one specific fix.
+Nor is it an N+1 loop: every per-advisor lookup on that page is already one
+query covering all advisors at once. I confirmed that before writing any of
+this.
 
-## What I checked, so we do not repeat it
+That leaves one explanation consistent with the shape of these numbers —
+several phases each in the hundreds of milliseconds, on trivial queries.
+**The time is in reaching the database, not in the work it does.**
 
-I looked for the obvious cause first. All five per-advisor lookups —
-personality, behavioral, 360, voice, briefings — are already **one query
-each for every advisor at once**. There is no N+1 loop hiding on that tab,
-which was my first suspicion and is wrong.
+## So this build separates the two
 
-What that leaves, and what the numbers will distinguish between:
+The timing panel now reports connection opens as their own line:
 
-- **Many phases each a few hundred ms** — that is per-connection overhead,
-  about nine round trips on that tab. It points back at the database being
-  reached over the public proxy, which the Diagnostics section above already
-  reports, and at `DB_REUSE_SHARED_CONN` still being off.
-- **One phase dominating** — a specific query to fix.
-- **template render large** — the page itself, not the database.
+```
+list_advisors                                1309 ms
+settings                                      248 ms
+[of which: opening 2 database connections]    990 ms
+```
 
-These have different fixes, and right now I cannot tell them apart from
-here.
+Every physical `psycopg.connect` is counted and timed, on both the
+persistent path and the fallback. It appears in the panel and in the
+`[timing]` log line beside the phases it was hiding inside.
+
+**Load the Advisors tab and read that line.** It decides between two very
+different fixes:
+
+- **Large (most of the page)** — the database is being reached over the
+  public proxy, and connections are not surviving between requests. The fix
+  is the `DATABASE_PRIVATE_URL` environment variable, which costs nothing
+  and needs no code. Check what Diagnostics → Database connections reports
+  for the address; if it is not a `.railway.internal` host, that is the
+  whole answer.
+- **Small or absent** — connections are being reused properly and the time
+  really is in the queries, which means I have something specific to
+  optimize and will need the row to say which.
+
+I would rather send you one line to read than another build that guesses.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-h`.
+report `2026-09-21-i`.

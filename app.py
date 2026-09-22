@@ -152,6 +152,14 @@ def _phase_finish():
     phases = getattr(g, "_phases", None)
     if phases is None:
         return ""
+    opens = getattr(g, "_db_opens", 0)
+    if opens:
+        # Named as its own phase so it appears in the panel and the logs
+        # beside the phases it is hiding inside.
+        phases.marks.append(
+            (f"[of which: opening {opens} database connection"
+             f"{'' if opens == 1 else 's'}]",
+             getattr(g, "_db_open_ms", 0.0)))
     line = phases.summary()
     app.logger.info("[timing] " + line)
     return f"\n<!-- {line} -->\n"
@@ -294,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-h"
+APP_VERSION = "2026-09-21-i"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -577,7 +585,9 @@ def _persistent_conn(key: str, url: str):
                 pass
             conns.pop(key, None)
     import psycopg
+    _t0 = time.perf_counter()
     conn = psycopg.connect(url)
+    _note_connection_opened(time.perf_counter() - _t0)
     conns[key] = conn
     return conn
 
@@ -601,6 +611,22 @@ def _reuse_database_connection():
     except Exception as e:
         # Fall through to database.py opening its own, as before.
         app.logger.warning(f"[db] could not reuse a connection: {e}")
+
+
+def _note_connection_opened(seconds: float):
+    """Records that a *physical* connection had to be opened.
+
+    A phase like "list_advisors 1309ms" does not say whether that was the
+    query or the handshake in front of it, and those have opposite fixes:
+    one is an index or a narrower SELECT, the other is the network path to
+    the database. Counting opens separately settles it without another
+    round of guessing.
+    """
+    try:
+        g._db_opens = getattr(g, "_db_opens", 0) + 1
+        g._db_open_ms = getattr(g, "_db_open_ms", 0.0) + seconds * 1000
+    except Exception:
+        pass  # outside a request context
 
 
 def _settings_db_conn():
@@ -632,7 +658,9 @@ def _settings_db_conn():
                                    f"opening a fresh one: {e}")
                 real_conn = None
         if real_conn is None:
+            _t0 = time.perf_counter()
             real_conn = psycopg.connect(url)
+            _note_connection_opened(time.perf_counter() - _t0)
         g.settings_db_conn = _NonClosingConnProxy(real_conn)
     except Exception as e:
         app.logger.warning(f"[settings] Postgres unavailable: {e}")
