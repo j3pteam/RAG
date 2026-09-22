@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-c"
+APP_VERSION = "2026-09-22-e"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -313,11 +313,85 @@ MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 MAX_IMAGE_MB = int(os.environ.get("MAX_IMAGE_MB", "5"))
 MAX_IMAGE_BYTES = MAX_IMAGE_MB * 1024 * 1024
 
+# ---------------------------------------------------------------------------
+# Who this deployment belongs to.
+#
+# Every brand-bearing string a participant can see is built from these four
+# values. Defaults are J3P's, so this deployment is unchanged by their
+# introduction; a client deployment sets the environment variables and the
+# product speaks in their name instead.
+#
+# Deliberately four values and not a theme system: a name, a short form, a
+# legal entity and a product name are what the copy actually needs, and a
+# configuration surface larger than that is one more thing to get wrong per
+# client.
+# ---------------------------------------------------------------------------
+ORG_NAME = os.environ.get("ORG_NAME", "J3P Health")
+ORG_SHORT = os.environ.get("ORG_SHORT", "") or ORG_NAME.split()[0]
+ORG_LEGAL_NAME = os.environ.get("ORG_LEGAL_NAME",
+                                "Residency Select LLC dba J3P Health")
+PRODUCT_NAME = os.environ.get("PERSONA_NAME", f"{ORG_SHORT} Advisor")
+
+# The person whose thinking the persona is grounded in. Named in the system
+# prompt, so it cannot stay hardcoded in a product sold to other firms.
+ORG_PRINCIPAL = os.environ.get("ORG_PRINCIPAL", "Alan Friedman")
+
+# Rules telling the model how to handle names that could be confused with
+# the organization's own. J3P has several (J3 Personica, Residency Select,
+# and an unrelated "J3P Healthcare Solutions"), and the prompt has to be
+# explicit about them. Most firms have none, so a client deployment sets
+# this to an empty string and the whole section drops out of the prompt.
+ORG_NAMING_RULES = os.environ.get("ORG_NAMING_RULES", "__default__")
+
+
+def brand_configuration_warnings() -> list:
+    """Settings a client deployment must change, and hasn't.
+
+    The failure mode this prevents is quiet: a client deployment that runs
+    perfectly well while telling their leaders to contact J3P, and releasing
+    Residency Select LLC from liability. Nothing errors, so nothing gets
+    noticed until a participant asks who J3P is.
+
+    Checked by pairing: once ORG_NAME is not the default, the other J3P
+    defaults are no longer defaults — they are leftovers.
+    """
+    if ORG_NAME == "J3P Health":
+        return []          # this is J3P's own deployment; nothing to warn about
+    problems = []
+    if ORG_LEGAL_NAME == "Residency Select LLC dba J3P Health":
+        problems.append("ORG_LEGAL_NAME is still J3P's legal entity — the "
+                        "release participants accept names the wrong company")
+    if ORG_PRINCIPAL == "Alan Friedman":
+        problems.append("ORG_PRINCIPAL is still Alan Friedman — the persona "
+                        "describes itself as grounded in his thinking")
+    if os.environ.get("CONTACT_EMAIL", "") in ("", "clientservices@j3p.health"):
+        problems.append("CONTACT_EMAIL is still J3P's — participants are "
+                        "directed to J3P for help")
+    if ORG_NAMING_RULES == "__default__":
+        problems.append("ORG_NAMING_RULES still carries J3P's entity "
+                        "disambiguation — set it to an empty string, or to "
+                        "this organization's own")
+    return problems
+
+
+for _problem in brand_configuration_warnings():
+    print(f"[config] WARNING: {_problem}", flush=True)
+
+
+def brand(text: str) -> str:
+    """Fills {org}, {short}, {legal} and {product} in a copy string."""
+    return (text.replace("{org}", ORG_NAME)
+                .replace("{short}", ORG_SHORT)
+                .replace("{legal}", ORG_LEGAL_NAME)
+                .replace("{principal}", ORG_PRINCIPAL)
+                .replace("{product}", PRODUCT_NAME))
+
+
 CONFIG = {
-    "persona_name": os.environ.get("PERSONA_NAME", "J3P Advisor"),
+    "persona_name": PRODUCT_NAME,
     "opening": os.environ.get(
         "PERSONA_OPENING",
-        "Hello, welcome to your session with the J3P Advisor.",
+        brand("Hello, welcome to your session with the {product}."),
     ),
     "placeholder": os.environ.get("PERSONA_PLACEHOLDER", "How can I help you?"),
     "system_prompt": load_system_prompt(),
@@ -339,18 +413,21 @@ CONFIG = {
     ),
     "footer_cta_text": os.environ.get(
         "FOOTER_CTA_TEXT",
-        "To schedule time with a J3P Advisor, please",
+        brand("To schedule time with a {product}, please"),
     ),
     "contact_email": os.environ.get("CONTACT_EMAIL", "clientservices@j3p.health"),
+    # A client deployment must set CONTACT_EMAIL; the default is J3P's own
+    # and is wrong for anyone else. Startup checks this — see below.
     "max_upload_mb": MAX_UPLOAD_MB,
     "max_image_mb": MAX_IMAGE_MB,
     "footer_ai_note": os.environ.get(
         "FOOTER_AI_NOTE",
-        "The J3P Advisor is AI and can make mistakes. Please double-check responses.",
+        brand("The {product} is AI and can make mistakes. "
+              "Please double-check responses."),
     ),
     "footer_cta_label": os.environ.get(
         "FOOTER_CTA_LABEL",
-        "Schedule Time With a J3P Advisor",
+        brand("Schedule Time With a {product}"),
     ),
     "footer_cta_url": os.environ.get(
         "FOOTER_CTA_URL",
@@ -2129,9 +2206,9 @@ RELEASE_BODY_HTML = """
     decisions and actions.
   </p>
   <p>
-    To the extent permitted by law, I release Residency Select LLC dba
-    J3P Health, its coaches, employees, and representatives from liability
-    arising from my voluntary use of the J3P Advisor.
+    To the extent permitted by law, I release {legal}, its coaches,
+    employees, and representatives from liability arising from my
+    voluntary use of the {product}.
   </p>
 """
 
@@ -3879,7 +3956,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                  accept=".pdf,.docx,.doc,.pptx,.xlsx,.csv,.txt,.md,.rtf" />
           <label class="mat-share">
             <input type="checkbox" id="mat-share-upload" />
-            <span>Also share with J3P so the team can review it. Leave unticked
+            <span>Also share with {{ org_short }} so the team can review it. Leave unticked
               to keep it entirely private to your sessions.</span>
           </label>
           <button type="button" class="btn" id="mat-upload-btn">Add to my library</button>
@@ -3892,7 +3969,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
                     placeholder="Paste an article, notes, a bio, a draft…"></textarea>
           <label class="mat-share">
             <input type="checkbox" id="mat-share-text" />
-            <span>Also share with J3P so the team can review it.</span>
+            <span>Also share with {{ org_short }} so the team can review it.</span>
           </label>
           <button type="button" class="btn" id="mat-save-btn">Add to my library</button>
         </div>
@@ -4115,6 +4192,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
     const chatWrap = document.getElementById("chat-wrap");
     const OPENING = {{ cfg.opening|tojson }};
     const PERSONA_NAME = {{ cfg.persona_name|tojson }};
+    const ORG_NAME = {{ org_name|tojson }};
     // Which advisor THIS page load is actually for — sent with every /chat
     // request so a reply always reflects the advisor this specific tab is
     // showing, not whatever a session cookie shared with another tab
@@ -6613,8 +6691,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
       function buildCitation(style) {
         const now = new Date();
         const url = window.location.origin + window.location.pathname;
-        const org = "J3P Health";
-        const tool = PERSONA_NAME || "J3P Advisor";
+        const org = ORG_NAME;
+        const tool = PERSONA_NAME;
         if (style === "apa") {
           // OpenAI-style APA 7 format for a large language model tool:
           // Publisher. (Year). Tool [Large language model]. URL
@@ -6726,7 +6804,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // === SHARE button ===
       const shareBtn = wrap.querySelector(".share-btn");
       const shareMenu = wrap.querySelector(".share-wrap > .share-menu");
-      const shareTitle = "From J3P Advisor";
+      const shareTitle = "From " + PERSONA_NAME;
       // Truncate share text to keep social/SMS messages under sane limits
       const shareText = replyText.length > 600
         ? replyText.slice(0, 600).trim() + "…"
@@ -7623,6 +7701,16 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       }
 
+      function histNote(text) {
+        // A click that silently does nothing is indistinguishable from a
+        // click that missed. If opening fails, the rail says so.
+        const note = document.createElement("p");
+        note.className = "hist-empty";
+        note.textContent = text;
+        histList.prepend(note);
+        setTimeout(() => note.remove(), 6000);
+      }
+
       async function openConversation(id, btn) {
         if (btn && btn.classList.contains("current")) return;
         try {
@@ -7630,7 +7718,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
           if (window.__stopAllSpeech) window.__stopAllSpeech();
           const r = await fetch("/conversations/" + encodeURIComponent(id),
                                 { method: "POST" });
-          if (!r.ok) return;
+          if (!r.ok) {
+            histNote(r.status === 404
+              ? "That conversation is no longer available."
+              : "Could not open that conversation.");
+            return;
+          }
           const data = await r.json();
           chat.innerHTML = "";
           for (const m of (data.messages || [])) {
@@ -7639,7 +7732,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
           chat.scrollTop = chat.scrollHeight;
           refreshConversations();
           if (window.innerWidth < 1100) setRail(false);
-        } catch (e) { /* leave the page as it was */ }
+        } catch (e) {
+          histNote("Could not open that conversation.");
+        }
       }
 
       window.__refreshConversations = refreshConversations;
@@ -7693,6 +7788,13 @@ def _history_ensure_table(conn):
         # conversation from the next, so the transcript had to go.
         cur.execute("ALTER TABLE chat_history "
                     "ADD COLUMN IF NOT EXISTS conversation_id TEXT")
+        # Which advisor the conversation happened with. The history token is
+        # derived from the signed-in email, so it is identical across every
+        # advisor — without this column a client conversation and an
+        # internal one are indistinguishable, and the internal history list
+        # shows both.
+        cur.execute("ALTER TABLE chat_history "
+                    "ADD COLUMN IF NOT EXISTS advisor_slug TEXT")
         cur.execute("""
             CREATE INDEX IF NOT EXISTS chat_history_conversation_idx
             ON chat_history (token, conversation_id, id)
@@ -7773,9 +7875,11 @@ def append_history(role: str, content: str):
         _history_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_history (token, role, content, conversation_id) "
-                "VALUES (%s, %s, %s, %s)",
-                (token, role, content, _conversation_id()))
+                "INSERT INTO chat_history "
+                "(token, role, content, conversation_id, advisor_slug) "
+                "VALUES (%s, %s, %s, %s, %s)",
+                (token, role, content, _conversation_id(),
+                 session.get("advisor_slug") or ""))
         conn.commit()
     except Exception as e:
         app.logger.error(f"[history] write failed: {e}")
@@ -7798,7 +7902,7 @@ def _conversation_id() -> str:
     return cid
 
 
-def list_conversations(token: str, limit: int = 40) -> list:
+def list_conversations(token: str, advisor_slug: str, limit: int = 40) -> list:
     """Every conversation under this token, newest first.
 
     The title is the first thing the person said, which is what makes a
@@ -7819,10 +7923,11 @@ def list_conversations(token: str, limit: int = 40) -> list:
                        MIN(id) AS first_id
                 FROM chat_history
                 WHERE token = %s AND conversation_id IS NOT NULL
+                      AND advisor_slug = %s
                 GROUP BY conversation_id
                 ORDER BY MAX(created_at) DESC
                 LIMIT %s
-            """, (token, limit))
+            """, (token, advisor_slug, limit))
             rows = cur.fetchall()
             out = []
             for cid, started, last_at, turns, first_id in rows:
@@ -7846,7 +7951,8 @@ def list_conversations(token: str, limit: int = 40) -> list:
         conn.close()
 
 
-def load_conversation(token: str, conversation_id: str) -> list:
+def load_conversation(token: str, conversation_id: str,
+                      advisor_slug: str) -> list:
     conn = _settings_db_conn()
     if not conn:
         return []
@@ -7856,8 +7962,9 @@ def load_conversation(token: str, conversation_id: str) -> list:
             cur.execute("""
                 SELECT role, content, created_at FROM chat_history
                 WHERE token = %s AND conversation_id = %s
+                      AND advisor_slug = %s
                 ORDER BY id
-            """, (token, conversation_id))
+            """, (token, conversation_id, advisor_slug))
             return [{"role": r, "content": c, "at": t} for r, c, t in cur.fetchall()]
     except Exception as e:
         app.logger.error(f"[history] loading a conversation failed: {type(e).__name__}")
@@ -13164,7 +13271,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         allow_materials=_effective("allow_materials_override", "allow_materials"),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
-        release_body=RELEASE_BODY_HTML,
+        release_body=brand(RELEASE_BODY_HTML),
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=TIPI_ITEMS,
         # Both intakes are off for an internal session regardless of the
@@ -13182,6 +13289,8 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         context_specialization_options=CONTEXT_SPECIALIZATION_OPTIONS,
         avatar_version=_avatar_cache_version(),
         page_advisor_slug=(active["slug"] if active else ""),
+        org_name=ORG_NAME,
+        org_short=ORG_SHORT,
         internal_only=bool(active and active.get("internal_only")),
         page_voice_mode=page_voice_mode,
     )
@@ -13350,7 +13459,8 @@ def _advisor_not_found(slug):
 def _participant_link_unavailable(reason):
     if reason == "disabled":
         heading = "This link is no longer active"
-        body = "Access through this link has been turned off. Contact J3P if you believe this is a mistake."
+        body = brand("Access through this link has been turned off. "
+                     "Contact {short} if you believe this is a mistake.")
         code = 403
     else:
         heading = "Link not found"
@@ -13791,7 +13901,9 @@ def chat():
     append_history("user", history_note)
 
     # Build system prompt — base prompt + retrieved context if available
-    base_prompt = CONFIG["system_prompt"]
+    # The prompt carries {product}/{short}/{principal} placeholders so the
+    # persona speaks in this deployment's name rather than J3P's.
+    base_prompt = brand(CONFIG["system_prompt"])
     retrieval_query = build_retrieval_query(user_input, _prior_user_msg, _prior_assistant_msg)
     context, lessons = retrieve_context_and_lessons(retrieval_query)
     _phase_mark("knowledge retrieval")
@@ -13840,10 +13952,10 @@ def chat():
     voice_guard = (
         "\n\n---\n"
         "VOICE & DIFFERENTIATION RULES — apply to every response:\n\n"
-        "1. IDENTITY. You are the J3P Advisor — a voice grounded in Alan Friedman's "
+        "1. IDENTITY. You are the {product} — a voice grounded in {principal}'s "
         "leadership advisory practice. You are NOT ChatGPT, Claude, Gemini, Copilot, "
         "or any generic AI assistant. If asked what you are, what model you are, or "
-        "who built you, say only: 'I'm the J3P Advisor.' Do not name any underlying "
+        "who built you, say only: 'I'm the {product}.' Do not name any underlying "
         "model, foundation model provider, or AI company. Do not discuss your training "
         "data, capabilities as an AI, or technical architecture. Redirect back to the "
         "user's actual question.\n\n"
@@ -13869,7 +13981,7 @@ def chat():
         "professionals for topics where the person clearly IS the professional.\n\n"
         "7. NO SELF-REFERENCE AS AI. Do not begin sentences with 'As an AI...', "
         "'I'm just an AI...', 'While I don't have feelings...', 'I don't have "
-        "personal experiences but...', or similar. Speak from the J3P frameworks "
+        "personal experiences but...', or similar. Speak from the {short} frameworks "
         "and lived-practice perspective the persona is built on.\n\n"
         "8. NO META. Do not describe what you're about to do ('Let me walk you "
         "through...', 'Here's my breakdown...', 'I'll structure this as...'). "
@@ -13952,7 +14064,7 @@ def chat():
     scope_guard = (
         "\n\n---\n"
         "STRICT SCOPE RULES — these override any conflicting guidance above:\n\n"
-        "1. You answer ONLY questions related to J3P's areas of expertise: "
+        "1. You answer ONLY questions related to {short}'s areas of expertise: "
         "leadership development, organizational behavior, behavioral assessment, "
         "physician/healthcare leadership, team dynamics, executive coaching, "
         "communication, self-awareness, negotiation, career navigation, "
@@ -13989,11 +14101,11 @@ def chat():
         "not limited to: general trivia, animals, science, history, cooking, "
         "sports, entertainment, politics, current events, math, coding, weather, "
         "personal recommendations unrelated to professional growth, or any topic "
-        "where J3P would have no specific expertise — you MUST politely decline "
+        "where {short} would have no specific expertise — you MUST politely decline "
         "and redirect.\n\n"
-        "3. Your off-topic decline should be brief and warm, in the J3P voice. "
+        "3. Your off-topic decline should be brief and warm, in the {short} voice. "
         "Use this format (adapt naturally):\n"
-        "   \"That's outside what I'm here to help with as the J3P Advisor. "
+        "   \"That's outside what I'm here to help with as the {product}. "
         "I'm focused on leadership, team dynamics, professional growth, and "
         "navigating challenges in healthcare and high-stakes work. "
         "Is there something along those lines I can help you with?\"\n\n"
@@ -14644,7 +14756,8 @@ def list_my_conversations():
         return jsonify({"error": "Not available."}), 403
     current = session.get("conversation_id") or ""
     items = []
-    for c in list_conversations(_history_token()):
+    for c in list_conversations(_history_token(),
+                                session.get("advisor_slug") or ""):
         items.append({
             "id": c["id"],
             "title": c["title"],
@@ -14667,7 +14780,8 @@ def open_my_conversation(conversation_id):
     if not _internal_session_or_403():
         return jsonify({"error": "Not available."}), 403
     token = _history_token()
-    messages = load_conversation(token, conversation_id)
+    messages = load_conversation(token, conversation_id,
+                                 session.get("advisor_slug") or "")
     if not messages:
         return jsonify({"error": "That conversation is no longer available."}), 404
     session["conversation_id"] = conversation_id
@@ -14697,8 +14811,10 @@ def delete_my_conversation(conversation_id):
         _history_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("DELETE FROM chat_history "
-                        "WHERE token = %s AND conversation_id = %s",
-                        (token, conversation_id))
+                        "WHERE token = %s AND conversation_id = %s "
+                        "AND advisor_slug = %s",
+                        (token, conversation_id,
+                         session.get("advisor_slug") or ""))
             removed = cur.rowcount
         conn.commit()
     except Exception as e:
