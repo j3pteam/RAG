@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-b"
+APP_VERSION = "2026-09-22-c"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -373,7 +373,19 @@ CONFIG = {
 # ---------------------------------------------------------------------------
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("FLASK_SECRET_KEY", os.urandom(24).hex())
+_secret_from_env = os.environ.get("FLASK_SECRET_KEY", "")
+app.secret_key = _secret_from_env or os.urandom(24).hex()
+SESSION_KEY_IS_EPHEMERAL = not _secret_from_env
+if SESSION_KEY_IS_EPHEMERAL:
+    # Each worker generates a different key, so a cookie signed by one is
+    # rejected by the other: sign-ins, the release acknowledgment and the
+    # current conversation are lost at random, and every redeploy
+    # invalidates every live session. It looks like flakiness rather than
+    # a missing variable, which is why this says so plainly at startup.
+    print("[config] WARNING: FLASK_SECRET_KEY is not set. Each worker has "
+          "generated its own session key, so sessions will be dropped "
+          "unpredictably between workers and on every restart. Set "
+          "FLASK_SECRET_KEY to a fixed random value.", flush=True)
 # The whole request has to fit several files plus multipart overhead
 app.config["MAX_CONTENT_LENGTH"] = int(MAX_UPLOAD_BYTES * 3.5)
 client = anthropic.Anthropic()
@@ -15174,6 +15186,7 @@ def debug_env():
         "VOYAGE_API_KEY_starts_with": (os.environ.get("VOYAGE_API_KEY", "")[:7] + "..." if os.environ.get("VOYAGE_API_KEY") else None),
         "ADMIN_PASSWORD_set": bool(os.environ.get("ADMIN_PASSWORD")),
         "FLASK_SECRET_KEY_set": bool(os.environ.get("FLASK_SECRET_KEY")),
+        "session_key_ephemeral": SESSION_KEY_IS_EPHEMERAL,
         "ANTHROPIC_API_KEY_set": bool(os.environ.get("ANTHROPIC_API_KEY")),
         "db_is_enabled": db.is_enabled(),
         "emb_is_enabled": emb.is_enabled(),
@@ -19219,6 +19232,19 @@ details.section[open] > summary {
   </div>
 
   <div class="section">
+    {% if diag.session_key_ephemeral %}
+    <p style="margin: 0 0 1rem; padding: 0.8rem 1rem; border-radius: 6px;
+              background: #fbeaea; border: 1px solid #d9a3a3; color: #7d2f2f;
+              font-size: 0.86rem; line-height: 1.6;">
+      <strong>FLASK_SECRET_KEY is not set.</strong>
+      Each worker has generated its own session key, so a sign-in or an
+      acknowledgment recorded by one worker is not recognized by the other,
+      and every redeploy signs everyone out. It presents as intermittent
+      flakiness rather than as a missing setting. Set
+      <code>FLASK_SECRET_KEY</code> to a fixed random value in the
+      environment.
+    </p>
+    {% endif %}
     <h2>Services</h2>
     <table>
       <tr><th style="width: 30%;">Database</th>
@@ -21744,6 +21770,7 @@ def admin_dashboard():
             "voice": _voice_diag,
             "grounding": _grounding_snapshot(),
             "chat_timings": chat_timings() if active_tab == "diagnostics" else [],
+            "session_key_ephemeral": SESSION_KEY_IS_EPHEMERAL,
             "page_timings": page_timings() if active_tab == "diagnostics" else [],
         },
         cfg=CONFIG, docs=docs, feedback_rows=feedback_rows,
