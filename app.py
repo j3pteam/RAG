@@ -266,7 +266,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-d"
+APP_VERSION = "2026-09-21-e"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18100,11 +18100,15 @@ details.section[open] > summary {
     {# Once the internal cards are done, the default persona's card lands,
        then the heading for everything that follows. #}
     {% if not ns.default_emitted and not adv.internal_only %}
-    {{ default_persona_card() }}
-    {% set ns.default_emitted = true %}
+    {# Heading first, then the default persona's card beneath it. The
+       default persona IS client-facing — it is what the main link serves —
+       so leaving it above the heading made it look like a third category
+       belonging to neither group. #}
     {% if internal_advisors %}
     <div class="advisor-section-group">Client-facing advisors</div>
     {% endif %}
+    {{ default_persona_card() }}
+    {% set ns.default_emitted = true %}
     {% endif %}
     <details class="advisor-block{{ ' is-internal-card' if adv.internal_only else '' }}"
              name="advisor-cards">
@@ -18554,9 +18558,13 @@ details.section[open] > summary {
     </details>
     {% endfor %}
 
-    {# No client-facing advisors, so the boundary above never arrived — the
-       default card still has to appear, after whatever did render. #}
+    {# No named client-facing advisors, so the boundary above never arrived.
+       The default persona is still client-facing and still needs its
+       heading, otherwise it would sit under "Internal — J3P staff only". #}
     {% if not ns.default_emitted %}
+    {% if internal_advisors %}
+    <div class="advisor-section-group">Client-facing advisors</div>
+    {% endif %}
     {{ default_persona_card() }}
     {% endif %}
 

@@ -1,56 +1,38 @@
-# J3P Advisor — build 2026-09-21-d
+# J3P Advisor — build 2026-09-21-e
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## Internal is now genuinely first on the page
+## The default persona now sits under "Client-facing advisors"
 
-Last build put it above the other advisors but still below the Default
-persona's card. It now comes before that too — first thing under the tab,
-which is where someone looks.
-
-That needed the default persona's card to become a Jinja macro so it could
-be emitted at the right point in the ordering rather than being fixed where
-it happened to sit in the file. No markup was duplicated.
-
-Verified in three configurations:
-
-| Advisors present | Order rendered |
-|---|---|
-| internal + 2 client | internal → default → client → client |
-| internal only | internal → default |
-| no internal | default → client |
-
-The default card appears exactly once in each — including the case with no
-client-facing advisors, where the boundary that triggers it never arrives.
-
-## One link, and nothing else
-
-The internal card's Links section is now a single row:
+It was landing between the internal group and the client-facing heading, so
+it read as a third category belonging to neither. It is client-facing — it
+is what the main link serves — so the heading now comes first and the card
+sits beneath it:
 
 ```
-Link to the advisor
-  https://…/a/j3p-internal   [Copy]
+Internal — J3P staff only
+  J3P Internal
+
+Client-facing advisors
+  J3P              (default — used on the main link)
+  Alan Friedman
+  Bruce Gewertz, MD
 ```
 
-with a line explaining that it opens the ordinary session interface, only
-signed-in admin accounts can load it, and it is safe to bookmark but not to
-paste anywhere a client could see.
+The same applies when there are no named advisors at all: the heading still
+appears, so the default card is never left sitting under "Internal — J3P
+staff only".
 
-Gone from that card: **Booking button** and **Participant Links**.
+With no internal advisor, neither heading appears and the page looks exactly
+as it always did.
 
-The participant-links form was worse than redundant — creation is refused
-server-side for internal advisors, so the form could only ever fail. That is
-what produced the bare "Please fill out this field" in your screenshot: a
-form that cannot succeed, giving no reason.
-
-Client-facing cards are unchanged — booking button, participant links and
-knowledge portal all still there. Confirmed card by card in the render test.
+Verified in all three configurations.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-d`.
+report `2026-09-21-e`.
