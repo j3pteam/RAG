@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-a"
+APP_VERSION = "2026-09-22-b"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -590,6 +590,18 @@ def _persistent_conn(key: str, url: str):
     _note_connection_opened(time.perf_counter() - _t0)
     conns[key] = conn
     return conn
+
+
+@app.before_request
+def _fresh_advisor_cache():
+    """A per-request memo for advisor lookups.
+
+    Created here rather than lazily so it exists before the first lookup,
+    and discarded with the request so nothing is ever served stale: an
+    advisor edited on one request is re-read on the next.
+    """
+    g._advisor_cache = {}
+    g._doc_advisor_map = None
 
 
 @app.before_request
@@ -8689,8 +8701,27 @@ def list_advisors():
 
 
 def get_advisor(slug: str):
+    """One advisor, memoized for the duration of the request.
+
+    There are 30 call sites and a single reply reaches several of them —
+    the scheduling decision, the contact guard, the voice guard, the
+    internal-access check, the log write. Each was its own SELECT plus its
+    own round trip to the database, all returning the same row: an advisor
+    cannot change in the middle of a request.
+
+    Kept on flask.g rather than a module cache, so an edit on the Advisors
+    tab is visible on the very next request instead of being served stale.
+    """
     if not slug:
         return None
+    try:
+        cache = g._advisor_cache
+    except (AttributeError, RuntimeError):
+        cache = None
+    else:
+        if slug in cache:
+            return cache[slug]
+
     conn = _settings_db_conn()
     if not conn:
         return None
@@ -8706,7 +8737,8 @@ def get_advisor(slug: str):
                                   COALESCE(internal_only, FALSE)
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
-        return {"slug": row[0], "name": row[1], "no_photo": bool(row[2]),
+        result = None if row is None else {
+                "slug": row[0], "name": row[1], "no_photo": bool(row[2]),
                 "scheduling_url": row[3] or "",
                 "show_scheduling_override": row[4],
                 "show_avatar_override": row[5],
@@ -8715,7 +8747,10 @@ def get_advisor(slug: str):
                 "portal_token": row[8] or "",
                 "client_bio": row[9] or "",
                 "expertise": row[10] or "",
-                "internal_only": bool(row[11])} if row else None
+                "internal_only": bool(row[11])}
+        if cache is not None:
+            cache[slug] = result
+        return result
     except Exception as e:
         app.logger.error(f"[advisors] get failed: {e}")
         return None
@@ -9826,12 +9861,26 @@ def save_advisor(slug: str, name: str, photo=None, mime=None, no_photo=None,
                 cur.execute(f"UPDATE advisors SET {col} = %s WHERE slug = %s",
                             (val, slug))
         conn.commit()
+        _forget_cached_advisor(slug)
         return True
     except Exception as e:
         app.logger.error(f"[advisors] save failed: {e}")
         return False
     finally:
         conn.close()
+
+
+def _forget_cached_advisor(slug: str = None):
+    """Drops memoized rows after a write, so a redirect that re-reads in
+    the same request sees the change rather than the row as it was."""
+    try:
+        cache = g._advisor_cache
+    except (AttributeError, RuntimeError):
+        return
+    if slug is None:
+        cache.clear()
+    else:
+        cache.pop(slug, None)
 
 
 def set_advisor_internal(slug: str, internal: bool) -> bool:
@@ -9847,6 +9896,7 @@ def set_advisor_internal(slug: str, internal: bool) -> bool:
             cur.execute("UPDATE advisors SET internal_only = %s WHERE slug = %s",
                         (bool(internal), slug))
         conn.commit()
+        _forget_cached_advisor(slug)
         return True
     except Exception as e:
         app.logger.error(f"[advisors] internal flag failed: {type(e).__name__}")
@@ -9862,6 +9912,7 @@ def delete_advisor(slug: str) -> bool:
         with conn.cursor() as cur:
             cur.execute("DELETE FROM advisors WHERE slug = %s", (slug,))
         conn.commit()
+        _forget_cached_advisor(slug)
         return True
     except Exception as e:
         app.logger.error(f"[advisors] delete failed: {e}")
@@ -12479,6 +12530,12 @@ def set_document_advisors(title: str, advisor_slugs) -> bool:
             # a fallback in document_advisor_map() after an explicit edit.
             cur.execute("DELETE FROM document_owner WHERE title = %s", (title[:200],))
         conn.commit()
+        # A reassignment in this request must not be filtered against
+        # the mapping as it was before the write.
+        try:
+            g._doc_advisor_map = None
+        except RuntimeError:
+            pass
         return True
     except Exception as e:
         app.logger.error(f"[kb] advisor assignment write failed: {e}")
@@ -12494,7 +12551,19 @@ def document_advisor_map() -> dict:
     Merges the current many-to-many table with any legacy single-owner rows
     that predate it and haven't been touched since (a title present in the
     new table always wins over its legacy row).
+
+    Memoized per request. Every chat turn calls this to filter retrieval
+    results, and the admin panel calls it repeatedly while building the
+    Advisors and Knowledge tabs — all reading a mapping that only changes
+    when a document is reassigned, which cannot happen mid-request.
     """
+    try:
+        cached = g._doc_advisor_map
+    except (AttributeError, RuntimeError):
+        cached = None
+    if cached is not None:
+        return cached
+
     conn = _settings_db_conn()
     if not conn:
         return {}
@@ -12511,6 +12580,10 @@ def document_advisor_map() -> dict:
             for title, slug in cur.fetchall():
                 if title not in out and slug:
                     out[title] = [slug]
+        try:
+            g._doc_advisor_map = out
+        except RuntimeError:
+            pass          # outside a request context; nothing to cache on
         return out
     except Exception as e:
         app.logger.error(f"[kb] advisor map read failed: {e}")

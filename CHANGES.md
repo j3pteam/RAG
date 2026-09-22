@@ -1,54 +1,66 @@
-# J3P Advisor — build 2026-09-22-a
+# J3P Advisor — build 2026-09-22-b
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## Deleting a conversation
+## What I found in the review
 
-A × appears on each row in the rail. **First click arms it and it changes to
-"Delete?"; second click removes the conversation.** It disarms itself after
-four seconds if you do not follow through.
+I looked for repeated work rather than tidiness. Two things were doing the
+same query several times per request.
 
-Two clicks rather than one because this cannot be undone, and rather than a
-browser `confirm()` because a modal for removing one row is heavier than the
-action deserves. The second state says what it will do instead of just being
-a second click.
+**`get_advisor` had 30 call sites and no cache.** A single reply reaches
+about six of them — the scheduling decision, the contact guard, the voice
+guard, the internal-access check, the log write — each its own SELECT and
+its own round trip, all returning the same row. An advisor cannot change in
+the middle of a request.
 
-Deleting the conversation currently on screen starts a fresh one rather than
-leaving the page pointing at messages that no longer exist.
+**`document_advisor_map` ran on every chat turn**, to filter retrieval
+results, and repeatedly while the admin panel builds the Advisors and
+Knowledge tabs. It only changes when a document is reassigned.
 
-The delete is scoped in the SQL itself:
+Both are now memoized on `flask.g` — per request, not per process — so an
+edit is visible on the very next request rather than served stale. Both
+memos are dropped explicitly after any write that would invalidate them,
+so a redirect that re-reads within the same request sees the change.
 
-```sql
-DELETE FROM chat_history WHERE token = %s AND conversation_id = %s
-```
+## What that is worth
 
-The token comes from the session, never the request. A conversation id from
-someone else's history matches nothing rather than deleting their
-transcript — the check cannot be forgotten because it is part of the
-statement.
+Round trips per reply: **13 → 8**.
 
-## The rail was covering the page
+| Latency per round trip | Before | After | Saved |
+|---|---|---|---|
+| 15 ms (private network) | 0.20s | 0.12s | 0.07s |
+| 120 ms | 1.56s | 0.96s | 0.60s |
+| 250 ms (public proxy) | 3.25s | 2.00s | 1.25s |
 
-Your screenshot shows the banner reading "ON." and the greeting reading
-"ello" — the rail was sitting on top of the content instead of moving it
-across.
+**Which row you are on is the whole question**, and it is the one thing I
+still cannot see from here. If you are on the bottom row this saves over a
+second per reply; if you are on the top it saves almost nothing, because
+the time is elsewhere.
 
-My fault: the rule shifted `.chat-shell`, an element that **does not exist**
-on this page. The header, transcript and composer are ordinary flow children
-of `body`, so the selector matched nothing and the margin was never applied.
+## What I checked and left alone
 
-The page now shifts as a whole (`body.hist-on { padding-left: 264px }`), and
-explicitly does not shift on narrow screens, where the rail is an overlay
-and moving the page under it would be wrong.
+- **Settings** are already cached process-wide.
+- **Retrieval** already computes one embedding and uses it for both the
+  knowledge search and the lessons lookup.
+- The apparent duplicate `log_interaction` and `append_history` calls are on
+  the safety-response branch, which returns early — not double work.
+- The five per-advisor admin lookups are already one query each for all
+  advisors; no N+1.
 
-I should have caught that — I wrote a selector for a structure I had not
-checked.
+So the chat path is not doing obviously wasteful work beyond what I fixed.
+That points the remaining time at the model call and the network path to the
+database — neither of which is code cleanliness.
+
+**Diagnostics → Reply times still has the answer**, and it was empty when
+you last looked because no reply had been handled by that worker since the
+deploy. Send one message, reload Diagnostics, and the row will say whether
+the model call dominates.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-22-a`.
+report `2026-09-22-b`.
