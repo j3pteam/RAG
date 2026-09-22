@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-21-i"
+APP_VERSION = "2026-09-21-j"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -2578,6 +2578,50 @@ INDEX_HTML = r"""<!DOCTYPE html>
       border-bottom: 1px dashed var(--line);
     }
     .pq-row:last-child { border-bottom: none; margin-bottom: 0; padding-bottom: 0; }
+    /* Conversation history rail — internal sessions only. Sits off-canvas
+       on narrow screens so it never competes with the composer, which is
+       what the page is actually for. */
+    .hist-rail {
+      position: fixed; top: 0; left: 0; bottom: 0; width: 264px;
+      background: #1d2536; color: #cfd6e4; z-index: 60;
+      display: flex; flex-direction: column;
+      transform: translateX(-100%); transition: transform 0.18s ease;
+      border-right: 1px solid rgba(255,255,255,0.08);
+    }
+    .hist-rail.open { transform: translateX(0); }
+    .hist-head {
+      padding: 1rem 1rem 0.7rem; font-size: 0.68rem; letter-spacing: 0.14em;
+      text-transform: uppercase; color: #8d99b0;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    .hist-list { overflow-y: auto; flex: 1 1 auto; padding: 0 0.5rem 1rem; }
+    .hist-item {
+      display: block; width: 100%; text-align: left; background: none;
+      border: none; color: #cfd6e4; font-family: inherit; font-size: 0.82rem;
+      line-height: 1.45; padding: 0.55rem 0.6rem; border-radius: 6px;
+      cursor: pointer;
+    }
+    .hist-item:hover { background: rgba(255,255,255,0.07); }
+    .hist-item.current { background: rgba(210,188,141,0.16); color: #f0e5cf; }
+    .hist-when { display: block; font-size: 0.68rem; color: #8d99b0; margin-top: 0.15rem; }
+    .hist-empty { padding: 0.6rem; font-size: 0.8rem; color: #8d99b0; line-height: 1.5; }
+    .hist-toggle {
+      position: fixed; top: 0.6rem; left: 0.6rem; z-index: 61;
+      background: rgba(29,37,54,0.92); color: #cfd6e4;
+      border: 1px solid rgba(255,255,255,0.14); border-radius: 6px;
+      padding: 0.38rem 0.6rem; font-family: inherit; font-size: 0.75rem;
+      cursor: pointer;
+    }
+    .hist-close {
+      background: none; border: none; color: #8d99b0; cursor: pointer;
+      font-size: 1rem; line-height: 1; padding: 0 0.2rem;
+    }
+    @media (min-width: 1100px) {
+      body.hist-on .hist-rail { transform: translateX(0); }
+      body.hist-on .chat-shell { margin-left: 264px; }
+      body.hist-on .hist-toggle { display: none; }
+    }
+
     .cq-row { margin: 0 0 1.15rem; text-align: left; }
     .cq-label {
       display: block; font-size: 0.9rem; font-weight: 600;
@@ -3435,6 +3479,24 @@ INDEX_HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </div>
+  {% endif %}
+
+  {% if internal_only %}
+  {# Conversation history, internal advisor only. Deliberately absent
+     everywhere else: on a client-facing advisor a participant's earlier
+     conversations are not something to resurface in the interface. #}
+  <button type="button" class="hist-toggle" id="hist-toggle"
+          aria-controls="hist-rail" aria-expanded="false">Conversations</button>
+  <aside class="hist-rail" id="hist-rail" aria-label="Past conversations">
+    <div class="hist-head">
+      <span>Conversations</span>
+      <button type="button" class="hist-close" id="hist-close"
+              aria-label="Hide conversations">&times;</button>
+    </div>
+    <div class="hist-list" id="hist-list">
+      <p class="hist-empty">Loading&hellip;</p>
+    </div>
+  </aside>
   {% endif %}
 
   {% if context_intake_enabled %}
@@ -7227,6 +7289,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       div.textContent = OPENING;
       chat.appendChild(div);
       input.focus();
+      // On an internal session the conversation just ended is kept, so the
+      // list needs to pick it up rather than waiting for a page load.
+      if (window.__refreshConversations) window.__refreshConversations();
     });
 
     // -------------------------------------------------------------
@@ -7386,6 +7451,98 @@ INDEX_HTML = r"""<!DOCTYPE html>
         }
       });
     }
+
+    // ---- Conversation history rail (internal advisor only) -------------
+    const histRail = document.getElementById("hist-rail");
+    if (histRail) {
+      const histList = document.getElementById("hist-list");
+      const histToggle = document.getElementById("hist-toggle");
+      const histClose = document.getElementById("hist-close");
+
+      function setRail(open) {
+        histRail.classList.toggle("open", open);
+        document.body.classList.toggle("hist-on", open);
+        if (histToggle) histToggle.setAttribute("aria-expanded", open ? "true" : "false");
+        try { localStorage.setItem("j3p_hist_open", open ? "1" : "0"); } catch (e) {}
+      }
+      if (histToggle) histToggle.addEventListener("click", () => setRail(true));
+      if (histClose) histClose.addEventListener("click", () => setRail(false));
+      try {
+        // Wide screens default to open, because there is room for it there
+        // and the list is the reason someone is on this page.
+        const saved = localStorage.getItem("j3p_hist_open");
+        setRail(saved === null ? window.innerWidth >= 1100 : saved === "1");
+      } catch (e) { setRail(window.innerWidth >= 1100); }
+
+      function whenLabel(iso) {
+        if (!iso) return "";
+        const d = new Date(iso);
+        if (isNaN(d)) return "";
+        const now = new Date();
+        const sameDay = d.toDateString() === now.toDateString();
+        if (sameDay) {
+          return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+        }
+        const days = Math.round((now - d) / 86400000);
+        if (days < 7) return d.toLocaleDateString([], { weekday: "long" });
+        return d.toLocaleDateString([], { month: "short", day: "numeric" });
+      }
+
+      async function refreshConversations() {
+        try {
+          const r = await fetch("/conversations");
+          if (!r.ok) { histList.innerHTML = ""; return; }
+          const data = await r.json();
+          const items = data.conversations || [];
+          if (!items.length) {
+            histList.innerHTML =
+              '<p class="hist-empty">No earlier conversations yet. ' +
+              'Starting a new one keeps this one here.</p>';
+            return;
+          }
+          histList.innerHTML = "";
+          for (const c of items) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "hist-item" + (c.current ? " current" : "");
+            const title = document.createElement("span");
+            title.textContent = c.title;
+            const when = document.createElement("span");
+            when.className = "hist-when";
+            when.textContent = whenLabel(c.when)
+              + (c.turns ? " \u00b7 " + c.turns + " message" + (c.turns === 1 ? "" : "s") : "");
+            btn.appendChild(title);
+            btn.appendChild(when);
+            btn.addEventListener("click", () => openConversation(c.id, btn));
+            histList.appendChild(btn);
+          }
+        } catch (e) {
+          histList.innerHTML = "";
+        }
+      }
+
+      async function openConversation(id, btn) {
+        if (btn && btn.classList.contains("current")) return;
+        try {
+          // Anything speaking belongs to the conversation being replaced.
+          if (window.__stopAllSpeech) window.__stopAllSpeech();
+          const r = await fetch("/conversations/" + encodeURIComponent(id),
+                                { method: "POST" });
+          if (!r.ok) return;
+          const data = await r.json();
+          chat.innerHTML = "";
+          for (const m of (data.messages || [])) {
+            addMessage(m.content, m.role === "user" ? "user" : "assistant");
+          }
+          chat.scrollTop = chat.scrollHeight;
+          refreshConversations();
+          if (window.innerWidth < 1100) setRail(false);
+        } catch (e) { /* leave the page as it was */ }
+      }
+
+      window.__refreshConversations = refreshConversations;
+      refreshConversations();
+    }
   </script>
 </body>
 </html>
@@ -7428,6 +7585,15 @@ def _history_ensure_table(conn):
         cur.execute("""
             CREATE INDEX IF NOT EXISTS chat_history_token_idx
             ON chat_history (token, id)
+        """)
+        # Groups rows into conversations. Without it, "New conversation"
+        # could only delete — there was nothing to distinguish one
+        # conversation from the next, so the transcript had to go.
+        cur.execute("ALTER TABLE chat_history "
+                    "ADD COLUMN IF NOT EXISTS conversation_id TEXT")
+        cur.execute("""
+            CREATE INDEX IF NOT EXISTS chat_history_conversation_idx
+            ON chat_history (token, conversation_id, id)
         """)
     conn.commit()
 
@@ -7472,8 +7638,9 @@ def load_history() -> list:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT role, content FROM chat_history
-                WHERE token = %s ORDER BY id DESC LIMIT 200
-            """, (token,))
+                WHERE token = %s AND conversation_id IS NOT DISTINCT FROM %s
+                ORDER BY id DESC LIMIT 200
+            """, (token, _conversation_id(),))
             used = 0
             for role, content in cur.fetchall():
                 used += len(content or "")
@@ -7504,11 +7671,95 @@ def append_history(role: str, content: str):
         _history_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO chat_history (token, role, content) VALUES (%s, %s, %s)",
-                (token, role, content))
+                "INSERT INTO chat_history (token, role, content, conversation_id) "
+                "VALUES (%s, %s, %s, %s)",
+                (token, role, content, _conversation_id()))
         conn.commit()
     except Exception as e:
         app.logger.error(f"[history] write failed: {e}")
+    finally:
+        conn.close()
+
+
+def _conversation_id() -> str:
+    """The conversation being added to right now.
+
+    Held in the session so it survives page loads, and rotated rather than
+    cleared when a new conversation starts — which is what makes the old
+    one still readable afterwards.
+    """
+    cid = session.get("conversation_id")
+    if not cid:
+        cid = secrets.token_urlsafe(12)
+        session["conversation_id"] = cid
+        session.permanent = True
+    return cid
+
+
+def list_conversations(token: str, limit: int = 40) -> list:
+    """Every conversation under this token, newest first.
+
+    The title is the first thing the person said, which is what makes a
+    list like this scannable — a timestamp alone tells you nothing about
+    which conversation you are looking for.
+    """
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    try:
+        _history_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT conversation_id,
+                       MIN(created_at) AS started,
+                       MAX(created_at) AS last_at,
+                       COUNT(*) AS turns,
+                       MIN(id) AS first_id
+                FROM chat_history
+                WHERE token = %s AND conversation_id IS NOT NULL
+                GROUP BY conversation_id
+                ORDER BY MAX(created_at) DESC
+                LIMIT %s
+            """, (token, limit))
+            rows = cur.fetchall()
+            out = []
+            for cid, started, last_at, turns, first_id in rows:
+                cur.execute("""
+                    SELECT content FROM chat_history
+                    WHERE token = %s AND conversation_id = %s AND role = 'user'
+                    ORDER BY id LIMIT 1
+                """, (token, cid))
+                first = cur.fetchone()
+                title = (first[0] if first else "").strip().replace("\n", " ")
+                out.append({"id": cid,
+                            "title": (title[:70] + "\u2026") if len(title) > 70 else (title or "Untitled"),
+                            "started": started,
+                            "last_at": last_at,
+                            "turns": turns})
+        return out
+    except Exception as e:
+        app.logger.error(f"[history] listing conversations failed: {type(e).__name__}")
+        return []
+    finally:
+        conn.close()
+
+
+def load_conversation(token: str, conversation_id: str) -> list:
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    try:
+        _history_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT role, content, created_at FROM chat_history
+                WHERE token = %s AND conversation_id = %s
+                ORDER BY id
+            """, (token, conversation_id))
+            return [{"role": r, "content": c, "at": t} for r, c, t in cur.fetchall()]
+    except Exception as e:
+        app.logger.error(f"[history] loading a conversation failed: {type(e).__name__}")
+        return []
     finally:
         conn.close()
 
@@ -7522,6 +7773,20 @@ def clear_history():
     # transcript, not who the participant is.
     # advisor_slug and force_scheduling deliberately survive a reset: the
     # visitor is still on that advisor's link.
+    # On an internal advisor the transcript is kept and a new conversation
+    # simply starts alongside it — that is what the history list reads. On
+    # every other advisor the previous behavior stands: a participant
+    # pressing New Conversation is entitled to expect their transcript gone,
+    # and quietly retaining it because a feature elsewhere finds it useful
+    # would be a change to what that button means.
+    advisor = get_advisor(session.get("advisor_slug"))
+    keep = bool(advisor and advisor.get("internal_only"))
+
+    if keep:
+        session.pop("conversation_id", None)   # the next message starts a new one
+        app.logger.info("[history] internal session: previous conversation kept")
+        return
+
     conn = _settings_db_conn()
     token = session.get("chat_token")
     if conn and token:
@@ -7535,6 +7800,7 @@ def clear_history():
         finally:
             conn.close()
     session.pop("chat_token", None)
+    session.pop("conversation_id", None)
 
 
 SESSION_HISTORY_BUDGET = 2600   # characters of message content
@@ -14191,6 +14457,62 @@ def save_personality():
         app.logger.info("[personality] self-report saved")
         return jsonify({"ok": True})
     return jsonify({"ok": False}), 400
+
+
+def _internal_session_or_403():
+    """The conversation list exists only on an internal advisor.
+
+    Checked on the server for the same reason the page itself is: hiding a
+    sidebar does not stop anyone calling the endpoint behind it, and these
+    endpoints return whole transcripts.
+    """
+    advisor = get_advisor(session.get("advisor_slug"))
+    if not (advisor and advisor.get("internal_only")):
+        return None
+    if not internal_advisor_visible(advisor):
+        return None
+    return advisor
+
+
+@app.route("/conversations")
+@paywall.paywall_required
+def list_my_conversations():
+    if not _internal_session_or_403():
+        return jsonify({"error": "Not available."}), 403
+    current = session.get("conversation_id") or ""
+    items = []
+    for c in list_conversations(_history_token()):
+        items.append({
+            "id": c["id"],
+            "title": c["title"],
+            "turns": c["turns"],
+            "when": c["last_at"].isoformat() if c["last_at"] else "",
+            "current": c["id"] == current,
+        })
+    return jsonify({"conversations": items})
+
+
+@app.route("/conversations/<conversation_id>", methods=["POST"])
+@paywall.paywall_required
+def open_my_conversation(conversation_id):
+    """Switches the session to an earlier conversation.
+
+    Opening one makes it current rather than showing a frozen copy — the
+    point of going back to a conversation is usually to carry on with it,
+    and a read-only view would mean copying text out to continue.
+    """
+    if not _internal_session_or_403():
+        return jsonify({"error": "Not available."}), 403
+    token = _history_token()
+    messages = load_conversation(token, conversation_id)
+    if not messages:
+        return jsonify({"error": "That conversation is no longer available."}), 404
+    session["conversation_id"] = conversation_id
+    session.permanent = True
+    return jsonify({
+        "ok": True,
+        "messages": [{"role": m["role"], "content": m["content"]} for m in messages],
+    })
 
 
 @app.route("/context", methods=["POST"])

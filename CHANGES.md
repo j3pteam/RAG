@@ -1,66 +1,62 @@
-# J3P Advisor — build 2026-09-21-i
+# J3P Advisor — build 2026-09-21-j
 
 `app.py`, plus the pre-deploy checks (including `urlfor_check.py`).
 
 ---
 
-## What your numbers say so far
+## Conversation history, internal advisor only
 
-```
-2847 ms total
-  list_documents          504 ms
-  list_advisors          1309 ms   ← dominant
-  feedback stats + log     66 ms
-  settings                248 ms
-  page-specific lookups   622 ms
-  template render          98 ms
-```
+A rail down the left of `/a/j3p-internal`, listing past conversations
+newest first. Each is titled with the first thing you said — a timestamp
+alone tells you nothing about which one you are looking for.
 
-I checked `list_advisors` first, because 1309 ms for five advisors looks
-like a query problem. **It is not.** That query already selects
-`(photo IS NOT NULL)` rather than the photo bytes, returns five rows, and
-has no join. There is nothing in it that takes a second.
+Clicking one **loads it and continues it**, rather than showing a frozen
+copy. Going back to a conversation usually means carrying on with it, and a
+read-only view would mean copying text out to continue.
 
-Nor is it an N+1 loop: every per-advisor lookup on that page is already one
-query covering all advisors at once. I confirmed that before writing any of
-this.
+Open by default on wide screens, off-canvas behind a "Conversations" button
+on narrow ones, and the choice is remembered.
 
-That leaves one explanation consistent with the shape of these numbers —
-several phases each in the hundreds of milliseconds, on trivial queries.
-**The time is in reaching the database, not in the work it does.**
+## What had to change underneath
 
-## So this build separates the two
+**"New conversation" was deleting the transcript.** There was no history to
+list because the rows were being removed — nothing distinguished one
+conversation from the next, so clearing was the only option.
 
-The timing panel now reports connection opens as their own line:
+`chat_history` now carries a `conversation_id`, added automatically on the
+existing table. New conversation **rotates** that id instead of deleting, so
+the previous conversation stays readable.
 
-```
-list_advisors                                1309 ms
-settings                                      248 ms
-[of which: opening 2 database connections]    990 ms
-```
+**Only on an internal advisor.** Everywhere else New Conversation still
+deletes, exactly as before. A participant pressing that button is entitled
+to expect their transcript gone, and quietly retaining it because a feature
+elsewhere finds it useful would change what the button means. That is a
+promise worth keeping even when no one would notice.
 
-Every physical `psycopg.connect` is counted and timed, on both the
-persistent path and the fallback. It appears in the panel and in the
-`[timing]` log line beside the phases it was hiding inside.
+Existing rows have no conversation id and are treated as one earlier
+conversation; nothing is lost.
 
-**Load the Advisors tab and read that line.** It decides between two very
-different fixes:
+## Access
 
-- **Large (most of the page)** — the database is being reached over the
-  public proxy, and connections are not surviving between requests. The fix
-  is the `DATABASE_PRIVATE_URL` environment variable, which costs nothing
-  and needs no code. Check what Diagnostics → Database connections reports
-  for the address; if it is not a `.railway.internal` host, that is the
-  whole answer.
-- **Small or absent** — connections are being reused properly and the time
-  really is in the queries, which means I have something specific to
-  optimize and will need the row to say which.
+Both endpoints check the server side, not just the sidebar:
 
-I would rather send you one line to read than another build that guesses.
+| Caller | Result |
+|---|---|
+| Client-facing advisor | 403 |
+| Internal advisor, not signed in as admin | 403 |
+| Internal advisor, signed-in admin | allowed |
+| No advisor (default persona) | 403 |
+
+Hiding a sidebar does not stop anyone calling the endpoint behind it, and
+these endpoints return whole transcripts. On client pages the script is
+inert — the rail element does not exist, so no request is ever made.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-21-i`.
+report `2026-09-21-j`.
+
+The first conversation you have after deploying starts the history; earlier
+ones were already deleted by the old behavior and cannot be recovered.
