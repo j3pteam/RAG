@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-f"
+APP_VERSION = "2026-09-22-i"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -2199,7 +2199,7 @@ RELEASE_HEADING = "Release &amp; Acknowledgment"
 RELEASE_BODY_HTML = """
   <p>
     By checking the box below, I acknowledge that I am voluntarily using
-    the J3P Advisor and understand that the content, coaching and guidance
+    the {product} and understand that the content, coaching and guidance
     provided are for personal and professional development purposes only.
     I understand that these activities are not medical, psychological,
     legal, or other professional advice, and I am responsible for my own
@@ -2265,6 +2265,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
       font-size: 0.82rem; line-height: 1.5; text-align: center;
     }
     .internal-banner strong { letter-spacing: 0.04em; text-transform: uppercase; }
+    .cobrand-note {
+      background: rgba(0, 0, 0, 0.055); color: var(--navy);
+      font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase;
+      text-align: center; padding: 0.4rem 1rem; opacity: 0.85;
+    }
     .brand-internal {
       margin-left: 0.6rem; padding: 0.12rem 0.5rem; border-radius: 4px;
       background: #7A2E2E; color: #fff; font-size: 0.62rem;
@@ -3520,7 +3525,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
        each header icon. Icons alone were ambiguous — the voice button in
        particular read as an unlabelled box. */
     @media (max-width: 480px) {
-      /* Keep the J3P ADVISOR wordmark beside the logo, as on desktop.
+      /* Keep the product wordmark beside the logo, as on desktop.
          It shrinks rather than disappearing. */
       .brand-divider { display: block; height: 22px; }
       .brand-tag { display: inline; font-size: 0.56rem; letter-spacing: 0.1em; }
@@ -3738,11 +3743,23 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   {% if internal_only %}
   <div class="internal-banner" role="status">
-    <strong>Internal J3P session.</strong>
+    <strong>Internal {{ org_short }} session.</strong>
     This advisor names colleagues, clients and internal detail that every
-    other advisor is built to withhold. Do not share this link outside J3P.
+    other advisor is built to withhold. Do not share this link outside
+    {{ org_short }}.
   </div>
   {% endif %}
+
+  {% if client_branded %}
+  {# A client-branded page still has to say who is answering. The look is
+     theirs; the advice, the release and the contact address are not, and a
+     participant reading their own employer's colors could reasonably
+     assume otherwise. Quiet, permanent, above the fold. #}
+  <div class="cobrand-note" role="note">
+    Delivered by {{ org_name }}
+  </div>
+  {% endif %}
+
   <header>
     <div class="brand">
       <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
@@ -5075,7 +5092,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
         throw new Error(msg);
       }
       // Prefer the server-generated filename from Content-Disposition
-      let filename = `j3p_response.${fmt}`;
+      // The file lands in a participant's downloads folder, so it carries
+      // this deployment's name rather than the house brand's.
+      let filename = `${(PERSONA_NAME || "advisor").toLowerCase()
+                         .replace(/[^a-z0-9]+/g, "_")}_response.${fmt}`;
       const cd = resp.headers.get("Content-Disposition") || "";
       const match = cd.match(/filename="?([^"]+)"?/);
       if (match) filename = match[1];
@@ -8537,6 +8557,27 @@ def _advisors_ensure_table(conn):
                         "internal_only BOOLEAN NOT NULL DEFAULT FALSE")
         except Exception:
             pass
+        # Added later: per-advisor brand overrides. Branding is otherwise
+        # set once per deployment, which is right for a white-label client
+        # running their own service. An engagement hosted inside this
+        # deployment needs the client's look on their own advisor's pages
+        # without altering anyone else's — these columns are that, and
+        # empty means "use this deployment's branding".
+        # A persona of someone who is not one of this firm's own people.
+        # persona_principal replaces the firm's principal in the identity
+        # line; referral_email replaces the firm's contact address for this
+        # advisor's participants; principal_consent records who confirmed
+        # the named person agreed, and when — a persona of a real person
+        # should not exist on anyone's say-so alone, including mine.
+        for _brand_col in ("brand_logo_url", "brand_label", "brand_navy",
+                           "brand_gold", "brand_paper",
+                           "persona_principal", "referral_email",
+                           "principal_consent"):
+            try:
+                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                            f"{_brand_col} TEXT")
+            except Exception:
+                pass
         # Added later: an advisor's own external booking link (Calendly,
         # Acuity, etc). Empty means "use the shared J3P scheduling link."
         try:
@@ -8865,7 +8906,15 @@ def get_advisor(slug: str):
                                   allow_materials_override, personality_override,
                                   portal_token, COALESCE(client_bio, ''),
                                   COALESCE(expertise, ''),
-                                  COALESCE(internal_only, FALSE)
+                                  COALESCE(internal_only, FALSE),
+                                  COALESCE(brand_logo_url, ''),
+                                  COALESCE(brand_label, ''),
+                                  COALESCE(brand_navy, ''),
+                                  COALESCE(brand_gold, ''),
+                                  COALESCE(brand_paper, ''),
+                                  COALESCE(persona_principal, ''),
+                                  COALESCE(referral_email, ''),
+                                  COALESCE(principal_consent, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         result = None if row is None else {
@@ -8878,7 +8927,15 @@ def get_advisor(slug: str):
                 "portal_token": row[8] or "",
                 "client_bio": row[9] or "",
                 "expertise": row[10] or "",
-                "internal_only": bool(row[11])}
+                "internal_only": bool(row[11]),
+                "brand_logo_url": row[12] or "",
+                "brand_label": row[13] or "",
+                "brand_navy": row[14] or "",
+                "brand_gold": row[15] or "",
+                "brand_paper": row[16] or "",
+                "persona_principal": row[17] or "",
+                "referral_email": row[18] or "",
+                "principal_consent": row[19] or ""}
         if cache is not None:
             cache[slug] = result
         return result
@@ -13204,6 +13261,24 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     is_internal = bool(advisor and advisor.get("internal_only"))
 
     page_cfg = dict(CONFIG)
+
+    # An advisor may carry a client's branding. Applied per field, so a
+    # client who supplies a logo and one color keeps this deployment's
+    # values for everything else rather than falling back to defaults that
+    # match neither brand.
+    #
+    # Deliberately limited to the look. The advisor's replies, the release
+    # text and the contact address stay this deployment's, because the
+    # engagement is still run by this firm — a page that looked entirely
+    # like the client's would misrepresent who is answering.
+    if advisor:
+        for _field, _key in (("brand_logo_url", "logo_url"),
+                             ("brand_navy", "navy"),
+                             ("brand_gold", "gold"),
+                             ("brand_paper", "paper")):
+            _value = (advisor.get(_field) or "").strip()
+            if _value:
+                page_cfg[_key] = _value
     # A name for the default photo, so the general link can read "Alan
     # Friedman" rather than the app's own name.
     def name_the_advisor(cfg_out, person_name):
@@ -13303,6 +13378,8 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         page_advisor_slug=(active["slug"] if active else ""),
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
+        client_branded=bool(advisor and (advisor.get("brand_logo_url")
+                                         or advisor.get("brand_navy"))),
         internal_only=bool(active and active.get("internal_only")),
         page_voice_mode=page_voice_mode,
     )
@@ -13915,7 +13992,18 @@ def chat():
     # Build system prompt — base prompt + retrieved context if available
     # The prompt carries {product}/{short}/{principal} placeholders so the
     # persona speaks in this deployment's name rather than J3P's.
+    #
+    # An advisor built as a persona of someone outside this firm replaces
+    # the principal for its own sessions: their team should meet a voice
+    # grounded in their leader's thinking, not in this firm's founder's.
     base_prompt = brand(CONFIG["system_prompt"])
+    # Resolved here rather than reusing the later binding, which does not
+    # exist yet at this point. The lookup is memoized per request, so this
+    # costs nothing beyond the one query already being made.
+    _prompt_advisor = get_advisor(session.get("advisor_slug")) or {}
+    _persona_principal = (_prompt_advisor.get("persona_principal") or "").strip()
+    if _persona_principal:
+        base_prompt = base_prompt.replace(ORG_PRINCIPAL, _persona_principal)
     retrieval_query = build_retrieval_query(user_input, _prior_user_msg, _prior_assistant_msg)
     context, lessons = retrieve_context_and_lessons(retrieval_query)
     _phase_mark("knowledge retrieval")
@@ -14256,15 +14344,20 @@ def chat():
             "you in confidence about a third party.\n"
         )
     else:
+        # A persona built for someone else's team sends them to their own
+        # office, not to this firm's client services. Falls back to this
+        # deployment's address when no referral address is set.
+        _contact = ((active_advisor or {}).get("referral_email", "").strip()
+                    or CONFIG["contact_email"])
         contact_guard = (
         "\n\n---\n"
         "CONTACT & REFERRALS — this overrides anything in the knowledge base:\n\n"
-        f"1. THE ONLY CONTACT IS {CONFIG['contact_email']}. Whenever the user "
+        f"1. THE ONLY CONTACT IS {_contact}. Whenever the user "
         "asks how to reach someone, who to talk to, how to get help, how to "
         "follow up, who to send something to, how to book or change time, who "
         "handles billing or administration, or asks for a phone number, email "
         "address, or 'a real person', give them "
-        f"{CONFIG['contact_email']} and nothing else.\n\n"
+        f"{_contact} and nothing else.\n\n"
         "2. NEVER NAME INDIVIDUALS AS CONTACTS. Do not offer the name, email "
         "address, direct line, or calendar of any J3P person — including "
         "advisors, coaches, operations, or administrative staff — even if that "
@@ -14272,10 +14365,10 @@ def chat():
         "documents. Do not say 'reach out to' followed by a person's name.\n\n"
         "3. NO OTHER ADDRESSES. Never invent or repeat any other email address "
         "or phone number for the organization. If asked for a specific "
-        f"person's details, reply that {CONFIG['contact_email']} is the way in "
+        f"person's details, reply that {_contact} is the way in "
         "and that the team will route the request.\n\n"
         "4. SCHEDULING. For booking time, point to the scheduling button in the "
-        f"app or to {CONFIG['contact_email']} — not to an individual's calendar.\n"
+        f"app or to {_contact} — not to an individual's calendar.\n"
         )
 
     if context:
@@ -19072,6 +19165,114 @@ details.section[open] > summary {
                                    admin_perms.edit_participant_links) }}
       {% endif %}
 
+      {% if not adv.internal_only %}
+      <details class="advisor-section">
+        <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
+          <span class="section-note">set</span>{% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          For an engagement run inside this deployment where the client
+          should see their own look. Only {{ adv.name }}'s pages change;
+          every other advisor keeps this site's branding. Leave a field
+          empty to use this site's value for it.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          The look changes, not the substance. Replies, the release text and
+          the contact address stay yours, because you are still the firm
+          answering — a page that looked entirely like the client's would
+          misrepresent that. A line naming {{ org_name }} as the provider is
+          shown under the header whenever client branding is in use.
+        </p>
+        <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}">
+          <div style="display: grid; gap: 0.7rem;
+                      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+            <label style="font-size: 0.8rem;">Logo URL
+              <input type="text" name="brand_logo_url" value="{{ adv.brand_logo_url }}"
+                     placeholder="https://…/client-logo.png"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Wordmark beside the logo
+              <input type="text" name="brand_label" value="{{ adv.brand_label }}"
+                     placeholder="{{ adv.name }}"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Header color
+              <input type="text" name="brand_navy" value="{{ adv.brand_navy }}"
+                     placeholder="#27334A"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Accent color
+              <input type="text" name="brand_gold" value="{{ adv.brand_gold }}"
+                     placeholder="#D2BC8D"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Page background
+              <input type="text" name="brand_paper" value="{{ adv.brand_paper }}"
+                     placeholder="#FAF6F0"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+          </div>
+          <button type="submit" class="btn" style="margin-top: 0.9rem;">Save branding</button>
+        </form>
+
+        <div style="margin-top: 1.4rem; padding-top: 1.2rem;
+                    border-top: 1px dashed var(--line);">
+          <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
+          <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+            By default every advisor speaks as a voice grounded in
+            {{ org_principal }}'s thinking and sends people to
+            {{ cfg.contact_email }}. For an advisor built for a client's own
+            team — their leader's voice, used inside their organization —
+            both of those are wrong.
+          </p>
+          <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+            <strong>This builds a persona of a real, named person.</strong>
+            Their agreement is not a formality: their name, their thinking
+            and potentially their voice will answer questions from people
+            who report to them. Record who confirmed it and when — the
+            field is required, and nothing is saved without it.
+          </p>
+          <form method="POST" action="/admin/advisors/persona/{{ adv.slug }}">
+            <div style="display: grid; gap: 0.7rem;
+                        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
+              <label style="font-size: 0.8rem;">Grounded in whose thinking
+                <input type="text" name="persona_principal"
+                       value="{{ adv.persona_principal }}"
+                       placeholder="{{ org_principal }}"
+                       style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                              border: 1px solid var(--line); border-radius: 5px;" />
+              </label>
+              <label style="font-size: 0.8rem;">Send participants to
+                <input type="text" name="referral_email"
+                       value="{{ adv.referral_email }}"
+                       placeholder="{{ cfg.contact_email }}"
+                       style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                              border: 1px solid var(--line); border-radius: 5px;" />
+              </label>
+            </div>
+            <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
+              Who confirmed their agreement, and when
+              <input type="text" name="principal_consent"
+                     value="{{ adv.principal_consent }}"
+                     placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            {% if adv.principal_consent %}
+            <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.78rem;">
+              On record: {{ adv.principal_consent }}
+            </p>
+            {% endif %}
+            <button type="submit" class="btn" style="margin-top: 0.9rem;">Save persona</button>
+          </form>
+        </div>
+      </details>
+      {% endif %}
+
       <div class="advisor-section-group is-setup">Setup</div>
 
       {# A voice sample clones a real person's voice; onboarding records a
@@ -21919,6 +22120,7 @@ def admin_dashboard():
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
+        org_principal=ORG_PRINCIPAL,
         has_internal_advisor=any(r.get("internal_only")
                                   for r in (_advisor_rows or [])),
         initials_for=initials_for,
@@ -22112,6 +22314,116 @@ def admin_create_internal_advisor():
     flash("\u2713 Created the internal J3P advisor. It is reachable at "
           "/a/j3p-internal by signed-in admin accounts only, and participant "
           "links to it are refused. Add its knowledge base on the Knowledge tab.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/advisors/persona/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_advisor_persona(slug):
+    """Makes an advisor a persona of someone outside this firm."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    principal = (request.form.get("persona_principal") or "").strip()[:120]
+    referral = (request.form.get("referral_email") or "").strip()[:200]
+    consent = (request.form.get("principal_consent") or "").strip()[:300]
+
+    # Naming a real person as the voice of an advisor requires a record of
+    # their agreement. Refused rather than warned about: a warning is
+    # dismissible and this is the one control standing between a consented
+    # persona and an impersonation.
+    if principal and not consent:
+        flash("Record who confirmed " + principal + "'s agreement and when. "
+              "A persona of a named person is not created without it.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    if referral and "@" not in referral:
+        flash("That referral address does not look like an email address. "
+              "Nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE advisors SET persona_principal = %s,
+                                  referral_email = %s, principal_consent = %s
+                           WHERE slug = %s""",
+                        (principal, referral, consent, slug))
+        conn.commit()
+        _forget_cached_advisor(slug)
+    except Exception as e:
+        app.logger.error(f"[advisors] persona save failed: {type(e).__name__}")
+        flash("Could not save that — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    if principal:
+        app.logger.info(f"[advisors] {slug} set as a persona of a named person")
+        flash(f"\u2713 {advisor['name']} now speaks as a voice grounded in "
+              f"{principal}'s thinking"
+              + (f", and sends participants to {referral}." if referral else "."))
+    else:
+        flash(f"\u2713 {advisor['name']} is back to this firm's default voice.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/advisors/branding/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_advisor_branding(slug):
+    """Per-advisor brand overrides for a client engagement."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    if advisor.get("internal_only"):
+        flash("Internal advisors do not carry client branding.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    values = {}
+    for field in ("brand_logo_url", "brand_label", "brand_navy",
+                  "brand_gold", "brand_paper"):
+        values[field] = (request.form.get(field) or "").strip()[:300]
+
+    # A mistyped color silently produces an unreadable page rather than an
+    # error, so it is rejected here instead.
+    for field in ("brand_navy", "brand_gold", "brand_paper"):
+        v = values[field]
+        if v and not re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
+            flash(f"{v!r} is not a six-digit hex color like #27334A. "
+                  "Nothing was saved.")
+            return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE advisors SET brand_logo_url = %s,
+                                  brand_label = %s, brand_navy = %s,
+                                  brand_gold = %s, brand_paper = %s
+                           WHERE slug = %s""",
+                        (values["brand_logo_url"], values["brand_label"],
+                         values["brand_navy"], values["brand_gold"],
+                         values["brand_paper"], slug))
+        conn.commit()
+        _forget_cached_advisor(slug)
+    except Exception as e:
+        app.logger.error(f"[advisors] branding save failed: {type(e).__name__}")
+        flash("Could not save that — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    if any(values.values()):
+        flash(f"\u2713 {advisor['name']}'s pages now use the client branding. "
+              "Every other advisor is unchanged.")
+    else:
+        flash(f"\u2713 {advisor['name']} is back to this site's branding.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
 
 

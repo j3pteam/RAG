@@ -1,50 +1,80 @@
-# J3P Advisor — build 2026-09-22-f
+# J3P Advisor — build 2026-09-22-i
 
-`app.py`, the pre-deploy checks, and `DEPLOYING_A_CLIENT.md`.
+`app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
+deployment guides.
 
 ---
 
-## A conversation was following you between advisors
+## An advisor can be a persona of someone outside the firm
 
-My bug, and it explains both of the last two reports.
+Two things were wrong for this case, and neither was visible on the page.
 
-`conversation_id` was stored per **session**, and a session spans every
-advisor you visit. `load_history()` filtered by that id but not by advisor.
-So moving from one advisor to another carried the conversation across: the
-next advisor loaded the previous one's messages as its own context and
-answered against them.
+**Every advisor's identity line said "grounded in Alan Friedman's
+thinking."** Named advisors add their expertise on top of the core voice,
+but the identity underneath stayed yours. Dr. Herbst's team would have met a
+J3P advisor wearing his name.
 
-That is why the internal advisor appeared to hold on to the last
-conversation — it genuinely had it in context. It is also why a client email
-thread you had pasted elsewhere was sitting in an internal session.
+**Every advisor sent people to `clientservices@j3p.health`.** His own
+leadership team, asking who to follow up with, would have been routed to
+your client services.
 
-Two changes:
+Both now follow the advisor:
 
-- **The conversation id rotates when the advisor changes.** A conversation
-  belongs to one advisor, and the id is now paired with the advisor it was
-  started under.
-- **History loading is filtered by advisor** as well as by conversation, so
-  even a stale id cannot reach across.
+| | Ordinary advisor | Persona for his team |
+|---|---|---|
+| Identity | grounded in Alan Friedman's thinking | grounded in Roy S. Herbst, MD, PhD's thinking |
+| Referrals | clientservices@j3p.health | their own address |
 
-Verified: two messages to two advisors in one session now sit in separate
-conversations, and the internal advisor's context contains only what was
-said to it.
+Set under **Advisors → the advisor → Client branding → Persona of someone
+outside J3P**.
 
-## Why this kept surfacing as something else
+## Consent is required, not recommended
 
-Each time, the visible symptom pointed somewhere other than the cause — a
-history list showing the wrong rows, then an advisor answering the wrong
-question. The shared root was that a conversation had no owner. It has one
-now.
+The form will not save a persona of a named person without a record of who
+confirmed their agreement and when. Refused, not warned about — a warning is
+dismissible, and this is the one control standing between a consented
+persona and an impersonation.
 
-Worth knowing: the pasted email was in that session's context, so it was
-sent to the model as part of the conversation. That is a reason to run
-**New Conversation** after pasting anything personal or client-confidential,
-until deletion-on-request exists.
+```
+principal set, no consent recorded   -> REFUSED
+principal set, consent recorded      -> saved
+no principal                         -> saved (ordinary advisor)
+```
+
+The record is free text — "Confirmed by email with Dr. Herbst, 22 Sep 2026"
+— and is shown on the card afterward. It is a note, not proof, and it is
+worth keeping the actual email.
+
+## Setting his up
+
+1. **Advisors → Add or update an advisor** — "Roy S. Herbst, MD, PhD", with
+   his photo
+2. **Client branding** — Dartmouth's logo and colors
+3. **Persona of someone outside J3P** — grounded in his name, referrals to
+   his office, consent recorded
+4. **Knowledge tab** — his material, assigned to him only
+5. **Participant Links** — one per member of his leadership team
+6. **Voice Sample** — only with his recorded consent; the voice section
+   captures that separately
+
+Their pages will carry Dartmouth's look with a quiet "Delivered by J3P
+Health" line, because you are still the firm answering.
+
+## Two things I would settle before it reaches them
+
+**Whose data it is.** His team's transcripts would sit in the same database
+as every other client's. For a cancer center's leadership group that is
+likely to be asked about, and a separate deployment is the stronger answer —
+`NEW_BRAND.md` covers it.
+
+**What it says about him.** The persona answers his team in his name. If it
+is grounded in a knowledge base he has not reviewed, it will still speak
+confidently as him. Worth him seeing the material before the first
+participant link goes out.
 
 ---
 
 ## Installing
 
-Replace `app.py`, keep the check scripts alongside. Diagnostics should
-report `2026-09-22-f`.
+Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
+should report `2026-09-22-i`.
