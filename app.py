@@ -3343,6 +3343,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
     .folder-btn:hover { color: var(--navy); background: var(--paper); }
     .folder-btn svg { width: 18px; height: 18px; }
     #file-input, #folder-input-chat { display: none; }
+    .drop-overlay {
+      position: fixed; inset: 0; z-index: 9999; display: none;
+      align-items: center; justify-content: center; pointer-events: none;
+      background: rgba(0,0,0,0.35);
+    }
+    .drop-overlay.show { display: flex; }
+    .drop-overlay div {
+      padding: 1.4rem 2.2rem; border: 2px dashed var(--gold, #D2BC8D);
+      border-radius: 10px; background: var(--paper, #fff); color: var(--navy, #27334A);
+      font-size: 1.05rem; letter-spacing: 0.04em;
+    }
     .attached-file {
       display: none; align-items: center; gap: 0.5rem;
       background: var(--paper); border: 1px solid var(--line);
@@ -7065,8 +7076,11 @@ INDEX_HTML = r"""<!DOCTYPE html>
     });
     removeFileBtn.addEventListener("click", clearAttachment);
 
-    fileInput.addEventListener("change", () => {
-      const picked = Array.from(fileInput.files || []);
+    fileInput.addEventListener("change", () =>
+      acceptPickedFiles(Array.from(fileInput.files || [])));
+    // Shared by the paperclip and by drag-and-drop onto the page, so a
+    // dropped file goes through exactly the same checks as a picked one.
+    function acceptPickedFiles(picked) {
       if (picked.length === 0) return;
       // Merge with anything already attached, ignoring exact duplicates
       const seen = new Set(attachedFiles.map(f => f.name + ":" + f.size));
@@ -7133,7 +7147,37 @@ INDEX_HTML = r"""<!DOCTYPE html>
       // Reset the input so re-picking the same file later still fires a change
       fileInput.value = "";
       refreshAttachmentChip();
-    });
+    }
+
+    // Drag and drop: drop files anywhere on the chat page to attach them.
+    (function() {
+      let depth = 0;
+      const hasFiles = e => Array.from((e.dataTransfer && e.dataTransfer.types) || [])
+                               .indexOf("Files") !== -1;
+      const overlay = document.createElement("div");
+      overlay.className = "drop-overlay";
+      overlay.innerHTML = "<div>Drop files to attach</div>";
+      document.body.appendChild(overlay);
+      window.addEventListener("dragenter", e => {
+        if (!hasFiles(e)) return;
+        e.preventDefault(); depth++; overlay.classList.add("show");
+      });
+      window.addEventListener("dragover", e => { if (hasFiles(e)) e.preventDefault(); });
+      window.addEventListener("dragleave", e => {
+        if (!hasFiles(e)) return;
+        depth = Math.max(0, depth - 1);
+        if (!depth) overlay.classList.remove("show");
+      });
+      window.addEventListener("drop", e => {
+        if (!hasFiles(e)) return;
+        e.preventDefault(); depth = 0; overlay.classList.remove("show");
+        // Dropped onto one of the page's own file fields (e.g. My materials)?
+        // Let that field have it instead.
+        const field = e.target.closest && e.target.closest("input[type=file]");
+        if (field && field !== fileInput) return;
+        acceptPickedFiles(Array.from(e.dataTransfer.files || []));
+      });
+    })();
 
     // -------------------------------------------------------------
     // Camera capture — feeds directly into the same attachedFiles state
@@ -16861,6 +16905,68 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
       {% endif %}
     </div>
   </div>
+
+<style>
+  .dz { position: relative; display: block; border: 2px dashed var(--line, #ccc);
+        border-radius: 8px; padding: 0.9rem 1rem; margin: 0.3rem 0;
+        text-align: center; cursor: pointer; transition: background .15s, border-color .15s; }
+  .dz:hover, .dz.over { border-color: var(--gold, #D2BC8D); background: rgba(210,188,141,0.12); }
+  .dz input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .dz .dz-text { font-size: 0.82rem; color: var(--muted, #6B7280); pointer-events: none; }
+  .dz .dz-text strong { color: var(--ink, inherit); }
+</style>
+<script>
+/* Drag and drop for every file field: drop a file on the box, or click it
+   to browse as before. The field itself is unchanged, so each form submits
+   exactly as it did. */
+(function () {
+  function label(input) {
+    const n = input.files ? input.files.length : 0;
+    if (!n) return "<strong>Drop file" + (input.multiple ? "s" : "") +
+                   " here</strong> or click to browse";
+    const names = Array.from(input.files).slice(0, 3).map(f => f.name).join(", ");
+    return "<strong>" + names + (n > 3 ? " and " + (n - 3) + " more" : "") + "</strong>";
+  }
+  function enhance(input) {
+    if (input.dataset.dz || input.hasAttribute("webkitdirectory")) return;
+    if (getComputedStyle(input).display === "none") return;
+    input.dataset.dz = "1";
+    const box = document.createElement("div");
+    box.className = "dz";
+    const text = document.createElement("div");
+    text.className = "dz-text";
+    input.parentNode.insertBefore(box, input);
+    box.appendChild(input); box.appendChild(text);
+    const refresh = () => { text.innerHTML = label(input); };
+    refresh();
+    input.addEventListener("change", refresh);
+    ["dragenter", "dragover"].forEach(t => box.addEventListener(t, e => {
+      e.preventDefault(); box.classList.add("over");
+    }));
+    ["dragleave", "drop"].forEach(t => box.addEventListener(t, () => box.classList.remove("over")));
+    box.addEventListener("drop", e => {
+      e.preventDefault();
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      try {
+        const dt = new DataTransfer();
+        Array.from(files).slice(0, input.multiple ? files.length : 1).forEach(f => dt.items.add(f));
+        input.files = dt.files;
+      } catch (err) {
+        alert("This browser can't take dropped files here — click the box to choose the file instead.");
+        return;
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  function run() { document.querySelectorAll("input[type=file]").forEach(enhance); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+  else run();
+  // A file dropped beside a box rather than on it should not open in the tab.
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => { if (!e.target.closest || !e.target.closest(".dz")) e.preventDefault(); });
+})();
+</script>
 </body></html>"""
 
 ADVISOR_PORTAL_PERSONALITY_HTML = """<!DOCTYPE html>
@@ -18285,7 +18391,7 @@ details.section[open] > summary {
     </a>
     <a class="tab-btn {{ 'active' if active_tab == 'advisors' else '' }}" href="{{ url_for('admin_dashboard', tab='advisors') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
-      Advisors
+      J3P Advisors
     </a>
     {% if admin_perms.edit_advisors %}
     <a class="tab-btn {{ 'active' if active_tab == 'clients' else '' }}" href="{{ url_for('admin_dashboard', tab='clients') }}">
@@ -19695,7 +19801,7 @@ details.section[open] > summary {
 
   {% if active_tab == "advisors" %}
   <div class="tab-pane" data-tab="advisors">
-  <h2 class="group-heading">Advisors</h2>
+  <h2 class="group-heading">J3P Advisors</h2>
 
   <div class="section">
     <h2>Advisor Profiles</h2>
@@ -22541,6 +22647,68 @@ details.section[open] > summary {
       // the DOM — which is exactly the 553KB-per-load problem it existed to
       // hide. Nothing replaces it; a link does the work.
     </script>
+
+<style>
+  .dz { position: relative; display: block; border: 2px dashed var(--line, #ccc);
+        border-radius: 8px; padding: 0.9rem 1rem; margin: 0.3rem 0;
+        text-align: center; cursor: pointer; transition: background .15s, border-color .15s; }
+  .dz:hover, .dz.over { border-color: var(--gold, #D2BC8D); background: rgba(210,188,141,0.12); }
+  .dz input[type=file] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; }
+  .dz .dz-text { font-size: 0.82rem; color: var(--muted, #6B7280); pointer-events: none; }
+  .dz .dz-text strong { color: var(--ink, inherit); }
+</style>
+<script>
+/* Drag and drop for every file field: drop a file on the box, or click it
+   to browse as before. The field itself is unchanged, so each form submits
+   exactly as it did. */
+(function () {
+  function label(input) {
+    const n = input.files ? input.files.length : 0;
+    if (!n) return "<strong>Drop file" + (input.multiple ? "s" : "") +
+                   " here</strong> or click to browse";
+    const names = Array.from(input.files).slice(0, 3).map(f => f.name).join(", ");
+    return "<strong>" + names + (n > 3 ? " and " + (n - 3) + " more" : "") + "</strong>";
+  }
+  function enhance(input) {
+    if (input.dataset.dz || input.hasAttribute("webkitdirectory")) return;
+    if (getComputedStyle(input).display === "none") return;
+    input.dataset.dz = "1";
+    const box = document.createElement("div");
+    box.className = "dz";
+    const text = document.createElement("div");
+    text.className = "dz-text";
+    input.parentNode.insertBefore(box, input);
+    box.appendChild(input); box.appendChild(text);
+    const refresh = () => { text.innerHTML = label(input); };
+    refresh();
+    input.addEventListener("change", refresh);
+    ["dragenter", "dragover"].forEach(t => box.addEventListener(t, e => {
+      e.preventDefault(); box.classList.add("over");
+    }));
+    ["dragleave", "drop"].forEach(t => box.addEventListener(t, () => box.classList.remove("over")));
+    box.addEventListener("drop", e => {
+      e.preventDefault();
+      const files = e.dataTransfer && e.dataTransfer.files;
+      if (!files || !files.length) return;
+      try {
+        const dt = new DataTransfer();
+        Array.from(files).slice(0, input.multiple ? files.length : 1).forEach(f => dt.items.add(f));
+        input.files = dt.files;
+      } catch (err) {
+        alert("This browser can't take dropped files here — click the box to choose the file instead.");
+        return;
+      }
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+  }
+  function run() { document.querySelectorAll("input[type=file]").forEach(enhance); }
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", run);
+  else run();
+  // A file dropped beside a box rather than on it should not open in the tab.
+  window.addEventListener("dragover", e => e.preventDefault());
+  window.addEventListener("drop", e => { if (!e.target.closest || !e.target.closest(".dz")) e.preventDefault(); });
+})();
+</script>
 </body></html>"""
 
 
