@@ -13707,7 +13707,10 @@ def advisor_photo(slug):
 
     advisor = get_advisor(slug)
     if advisor and advisor.get("no_photo"):
-        resp = app.response_class(placeholder_avatar_svg(advisor["name"]),
+        _colors = ((advisor.get("brand_navy") or "#27334A",
+                    advisor.get("brand_gold") or "#FFFFFF")
+                   if _is_client_engagement(advisor) else ())
+        resp = app.response_class(placeholder_avatar_svg(advisor["name"], *_colors),
                                   mimetype="image/svg+xml")
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -18653,7 +18656,13 @@ details.section[open] > summary {
     {% set client_advisors = advisors | rejectattr("internal_only")
                              | selectattr("is_client_engagement") | list %}
     {% if client_advisors %}
-    {% for adv in client_advisors %}
+    {% for org_group in client_advisors | groupby("brand_label") %}
+    <h3 style="margin: 1.4rem 0 0.6rem; font-size: 0.95rem; letter-spacing: 0.04em;">
+      {{ org_group.grouper or "No organization set" }}
+      <span class="muted" style="font-weight: 400; font-size: 0.8rem;">
+        · {{ org_group.list|length }} advisor{{ '' if org_group.list|length == 1 else 's' }}</span>
+    </h3>
+    {% for adv in org_group.list %}
     <details class="section">
       <summary>
         <h2>{{ adv.name }}</h2>
@@ -18788,6 +18797,20 @@ details.section[open] > summary {
           <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
           <button type="submit" class="btn" style="margin-left: 0.4rem;">Save photo</button>
         </form>
+        <div style="display: flex; align-items: center; gap: 0.8rem;
+                    flex-wrap: wrap; margin-top: 0.9rem;">
+          <img src="/a/{{ adv.slug }}/photo.jpg?v={{ avatar_version }}" alt=""
+               style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;" />
+          <span class="muted" style="font-size: 0.8rem;">
+            Currently: {% if adv.has_photo %}an uploaded photo{% else %}initials in the client's colors{% endif %}
+          </span>
+          {% if adv.has_photo %}
+          <form method="POST" action="/admin/clients/{{ adv.slug }}/use-initials" style="margin: 0;">
+            <button type="submit" class="btn-quiet" style="font-size: 0.78rem;">
+              Remove photo and use client-branded initials</button>
+          </form>
+          {% endif %}
+        </div>
       </details>
     <details class="advisor-section">
       <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
@@ -18949,6 +18972,19 @@ details.section[open] > summary {
         </form>
       </div>
     </details>
+      {% if admin_perms.edit_advisors and adv.brand_label %}
+      <form method="POST" action="/admin/clients/{{ adv.slug }}/add-advisor"
+            style="margin-top: 1.2rem; padding: 0.8rem 0.9rem;
+                   border: 1px solid var(--line); border-radius: 6px;
+                   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <span class="muted" style="font-size: 0.8rem;">
+          Add another advisor at {{ adv.brand_label }}</span>
+        <input type="text" name="name" required placeholder="e.g. Jane Sample, MD"
+               style="flex: 1; min-width: 200px; padding: 0.42rem;
+                      border: 1px solid var(--line); border-radius: 5px;" />
+        <button type="submit" class="btn">Add advisor</button>
+      </form>
+      {% endif %}
       {% if admin_perms.edit_advisors %}
       <div style="margin-top: 1.2rem; padding-top: 0.9rem;
                   border-top: 1px solid var(--line); display: flex;
@@ -18965,6 +19001,7 @@ details.section[open] > summary {
       </div>
       {% endif %}
     </details>
+    {% endfor %}
     {% endfor %}
     {% else %}
     <p class="muted">
@@ -23897,6 +23934,87 @@ def admin_delete_advisor(slug):
     else:
         flash("Could not remove that advisor.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/clients/<slug>/use-initials", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_client_use_initials(slug):
+    """Client engagement only: drop the uploaded photo so participants see
+    the advisor's initials in the client's colors."""
+    adv = get_advisor(slug)
+    if not _is_client_engagement(adv):
+        flash("That is not a client engagement, so nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET photo = NULL, photo_mime = NULL, "
+                        "no_photo = TRUE WHERE slug = %s", (slug,))
+        conn.commit()
+        _forget_cached_advisor(slug)
+        flash(f"\u2713 {adv['name']} now shows client-branded initials.")
+    except Exception as e:
+        app.logger.error(f"[clients] use-initials failed: {type(e).__name__}")
+        flash("Could not change the photo.")
+    finally:
+        conn.close()
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/clients/<slug>/add-advisor", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_client_add_advisor(slug):
+    """Add another advisor under the same organization as an existing
+    client engagement. The new advisor gets the organization's branding
+    (name, logo, colors, contact address) and its own session link,
+    participant links, documents and photo."""
+    src = get_advisor(slug)
+    if not _is_client_engagement(src) or not src.get("brand_label"):
+        flash("Only a client engagement with an organization can take more advisors.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    name = (request.form.get("name") or "").strip()[:80]
+    if not name:
+        flash("Give the new advisor a name.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    new_slug = slugify_advisor(name)
+    if get_advisor(new_slug):
+        flash(f"An advisor already exists at {new_slug}. Use a different name.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    if not save_advisor(new_slug, name):
+        flash("Could not create the advisor — the database was unavailable.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    conn = _settings_db_conn()
+    ok = False
+    if conn:
+        try:
+            _advisors_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE advisors AS n SET
+                        brand_label = s.brand_label, brand_logo_url = s.brand_logo_url,
+                        brand_navy = s.brand_navy, brand_gold = s.brand_gold,
+                        brand_paper = s.brand_paper, brand_logo = s.brand_logo,
+                        brand_logo_mime = s.brand_logo_mime,
+                        referral_email = s.referral_email
+                    FROM advisors AS s
+                    WHERE n.slug = %s AND s.slug = %s""", (new_slug, slug))
+            conn.commit()
+            _forget_cached_advisor(new_slug)
+            ok = True
+        except Exception as e:
+            app.logger.error(f"[clients] add-advisor failed: {type(e).__name__}")
+        finally:
+            conn.close()
+    if not ok:
+        delete_advisor(new_slug)          # never leave an unbranded half-copy
+        flash("Could not copy the organization's branding, so nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    flash(f"\u2713 {name} added to {src['brand_label']} with its branding. "
+          "Their session link and participant links are in their card.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/clients/delete/<slug>", methods=["POST"])
