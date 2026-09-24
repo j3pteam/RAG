@@ -8712,6 +8712,10 @@ def _advisors_ensure_table(conn):
         # columns whenever the organization changes, so every page that
         # already reads those columns keeps working unchanged.
         "client_org": "TEXT",
+        # Per-advisor switch for the position/specialization questions,
+        # read by _effective() on the chat page. Set from the organization
+        # on the Add Client tab; None follows the site setting.
+        "context_intake_override": "BOOLEAN",
     })
     conn.commit()
 
@@ -9033,7 +9037,9 @@ def get_advisor(slug: str):
                                   COALESCE(persona_principal, ''),
                                   COALESCE(referral_email, ''),
                                   COALESCE(principal_consent, ''),
-                                  (brand_logo IS NOT NULL)
+                                  (brand_logo IS NOT NULL),
+                                  context_intake_override,
+                                  COALESCE(client_org, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         result = None if row is None else {
@@ -9055,7 +9061,9 @@ def get_advisor(slug: str):
                 "persona_principal": row[17] or "",
                 "referral_email": row[18] or "",
                 "principal_consent": row[19] or "",
-                "has_brand_logo": bool(row[20])}
+                "has_brand_logo": bool(row[20]),
+                "context_intake_override": row[21],
+                "client_org": row[22] or ""}
         if cache is not None:
             cache[slug] = result
         return result
@@ -18654,6 +18662,28 @@ details.section[open] > summary {
         </div>
         <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
       </form>
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/intake"
+            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;
+                   display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+        <div style="font-size: 0.85rem; font-weight: 600; width: 100%;">
+          Participant intake for {{ org.name }}</div>
+        {% for key, lbl, site_on in [("context_intake", "Position &amp; specialization questions", settings.context_intake_enabled),
+                                     ("personality", "Personality survey", settings.personality_assessment_enabled)] %}
+        {% set cur = org[key] %}
+        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">{{ lbl|safe }}
+          <select name="{{ key }}" onchange="this.form.submit()"
+                  style="width: 100%; padding: 0.42rem; border: 1px solid var(--line);
+                         border-radius: 5px; background: var(--paper); font-family: inherit;">
+            <option value="1" {% if cur is sameas true %}selected{% endif %}>On</option>
+            <option value="0" {% if cur is sameas false %}selected{% endif %}>Off</option>
+            <option value="" {% if cur is none %}selected{% endif %}>Site default ({{ "on" if site_on else "off" }})</option>
+          </select>
+        </label>
+        {% endfor %}
+        <p class="muted" style="margin: 0; font-size: 0.76rem; width: 100%;">
+          Applies to every advisor in this organization. One person's link can still
+          be set differently in its Participant Links row.</p>
+      </form>
       {% endif %}
 
       <details class="advisor-section">
@@ -23890,6 +23920,10 @@ def _orgs_ensure_table(conn):
                 created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
+        # Participant intake for every advisor in the organization.
+        # NULL = follow the site setting.
+        cur.execute("ALTER TABLE client_orgs ADD COLUMN IF NOT EXISTS context_intake BOOLEAN")
+        cur.execute("ALTER TABLE client_orgs ADD COLUMN IF NOT EXISTS personality BOOLEAN")
     conn.commit()
 
 
@@ -23901,9 +23935,11 @@ def list_client_orgs() -> list:
         _orgs_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("SELECT slug, name, site_url, navy, gold, referral_email, "
-                        "(logo IS NOT NULL) FROM client_orgs ORDER BY name")
+                        "(logo IS NOT NULL), context_intake, personality "
+                        "FROM client_orgs ORDER BY name")
             return [{"slug": r[0], "name": r[1], "site_url": r[2], "navy": r[3],
-                     "gold": r[4], "referral_email": r[5], "has_logo": bool(r[6])}
+                     "gold": r[4], "referral_email": r[5], "has_logo": bool(r[6]),
+                     "context_intake": r[7], "personality": r[8]}
                     for r in cur.fetchall()]
     except Exception as e:
         app.logger.error(f"[orgs] list failed: {type(e).__name__}")
@@ -23940,7 +23976,9 @@ def sync_org_to_advisors(org_slug: str, conn=None) -> bool:
                     brand_gold = NULLIF(o.gold, ''),
                     brand_logo = o.logo, brand_logo_mime = o.logo_mime,
                     brand_logo_url = '',
-                    referral_email = COALESCE(NULLIF(o.referral_email, ''), a.referral_email)
+                    referral_email = COALESCE(NULLIF(o.referral_email, ''), a.referral_email),
+                    context_intake_override = o.context_intake,
+                    personality_override = o.personality
                 FROM client_orgs AS o
                 WHERE o.slug = %s AND a.client_org = o.slug""", (org_slug,))
             cur.execute("SELECT slug FROM advisors WHERE client_org = %s", (org_slug,))
@@ -24124,6 +24162,35 @@ def admin_org_branding(slug):
         conn.close()
     flash(f"\u2713 {name} saved and applied to all of its advisors"
           + (" — from their site: " + "; ".join(found) if found else "") + ".")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/<slug>/intake", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_intake(slug):
+    """Turn the position/specialization questions and the personality
+    survey on or off for every advisor in this organization. A single
+    participant link can still override it in its own row."""
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    ctx = _tristate_form_value("context_intake")
+    per = _tristate_form_value("personality")
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE client_orgs SET context_intake = %s, personality = %s "
+                        "WHERE slug = %s", (ctx, per, slug))
+        conn.commit()
+        sync_org_to_advisors(slug, conn)
+    finally:
+        conn.close()
+    word = lambda v: "site default" if v is None else ("on" if v else "off")
+    flash(f"\u2713 {org['name']}: questions {word(ctx)}, personality survey {word(per)}.")
     return redirect(url_for("admin_dashboard", tab="clients"))
 
 
