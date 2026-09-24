@@ -18772,6 +18772,9 @@ details.section[open] > summary {
                    display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
         <span class="muted" style="font-size: 0.8rem;">Pull logo and colors from their website</span>
         <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" required
+               value="{{ adv.brand_logo_url if adv.brand_logo_url and not
+                        (adv.brand_logo_url|lower).endswith(('.png','.jpg','.jpeg','.gif','.webp','.svg'))
+                        else '' }}"
                style="flex: 1; min-width: 200px; padding: 0.42rem;
                       border: 1px solid var(--line); border-radius: 5px;" />
         <button type="submit" class="btn">Read their site</button>
@@ -23734,6 +23737,25 @@ def admin_advisor_branding(slug):
                   "brand_gold", "brand_paper"):
         values[field] = (request.form.get(field) or "").strip()[:300]
 
+    # A website address (rather than an image file) in the Logo URL field is
+    # read like the "Read their site" button: header and accent come from the
+    # site wherever the admin left them empty, and a logo it finds is stored
+    # as an upload, since a page address can never display as an image.
+    lookup_found, lookup_logo = [], None
+    _logo_url = values["brand_logo_url"]
+    _is_image = re.search(r"\.(png|jpe?g|gif|webp|svg)(\?.*)?$", _logo_url, re.I)
+    if _logo_url and (not _is_image or not (values["brand_navy"] and values["brand_gold"])):
+        result = lookup_organization_brand(_logo_url)
+        if not values["brand_navy"] and result.get("brand_navy"):
+            values["brand_navy"] = result["brand_navy"]
+        if not values["brand_gold"] and result.get("brand_gold"):
+            values["brand_gold"] = result["brand_gold"]
+        if not _is_image:
+            if result.get("logo_data") and len(result["logo_data"]) <= LOGO_MAX_BYTES:
+                lookup_logo = (result["logo_data"], result["logo_mime"])
+            values["brand_logo_url"] = ""      # a page address is not a logo
+        lookup_found = result.get("found", []) or result.get("notes", [])
+
     # A mistyped color silently produces an unreadable page rather than an
     # error, so it is rejected here instead.
     for field in ("brand_navy", "brand_gold", "brand_paper"):
@@ -23757,6 +23779,10 @@ def admin_advisor_branding(slug):
                         (values["brand_logo_url"], values["brand_label"],
                          values["brand_navy"], values["brand_gold"],
                          values["brand_paper"], slug))
+            if lookup_logo:
+                cur.execute("UPDATE advisors SET brand_logo = %s, "
+                            "brand_logo_mime = %s WHERE slug = %s",
+                            (lookup_logo[0], lookup_logo[1], slug))
         conn.commit()
         _forget_cached_advisor(slug)
     except Exception as e:
@@ -23764,7 +23790,10 @@ def admin_advisor_branding(slug):
         flash("Could not save that — nothing was changed.")
         return redirect(url_for("admin_dashboard", tab="clients"))
 
-    if any(values.values()):
+    if lookup_found:
+        flash(f"\u2713 Read {_logo_url} for {advisor['name']}: "
+              + "; ".join(lookup_found) + ". Correct anything that looks wrong.")
+    elif any(values.values()):
         flash(f"\u2713 {advisor['name']}'s pages now use the client branding. "
               "Every other advisor is unchanged.")
     else:
