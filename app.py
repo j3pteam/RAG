@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-b"
+APP_VERSION = "2026-09-24-c"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -569,6 +569,35 @@ _SETTINGS_FILE = os.path.join(tempfile.gettempdir(), "j3p_settings.json")
 # call — the actual queries after it still run every time, only the
 # redundant "does this table exist" statement is skipped.
 _TABLES_ENSURED = set()
+
+
+def _ensure_columns(conn, table: str, columns: dict):
+    """Adds only the columns that are actually missing.
+
+    Each ALTER TABLE ... ADD COLUMN IF NOT EXISTS is a round trip whether or
+    not it does anything, and the advisors table had accumulated 24 of them
+    as features were added. A worker's first request paid all of it — which
+    is why list_advisors was measured at 1870ms on one page load and 121ms
+    on another, and why the panel feels slow again after every redeploy.
+
+    One query to information_schema replaces the lot on the common path,
+    where nothing is missing.
+    """
+    with conn.cursor() as cur:
+        cur.execute("SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = %s", (table,))
+        present = {r[0] for r in cur.fetchall()}
+        missing = {c: t for c, t in columns.items() if c not in present}
+        for col, coltype in missing.items():
+            try:
+                cur.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS "
+                            f"{col} {coltype}")
+            except Exception as e:
+                app.logger.error(
+                    f"[schema] {table}.{col} could not be added: {type(e).__name__}")
+    if missing:
+        app.logger.info(f"[schema] {table}: added {', '.join(missing)}")
+    return len(missing)
 
 
 def _already_ensured(name: str) -> bool:
@@ -7803,18 +7832,16 @@ def _history_ensure_table(conn):
             CREATE INDEX IF NOT EXISTS chat_history_token_idx
             ON chat_history (token, id)
         """)
-        # Groups rows into conversations. Without it, "New conversation"
-        # could only delete — there was nothing to distinguish one
-        # conversation from the next, so the transcript had to go.
-        cur.execute("ALTER TABLE chat_history "
-                    "ADD COLUMN IF NOT EXISTS conversation_id TEXT")
-        # Which advisor the conversation happened with. The history token is
-        # derived from the signed-in email, so it is identical across every
-        # advisor — without this column a client conversation and an
-        # internal one are indistinguishable, and the internal history list
-        # shows both.
-        cur.execute("ALTER TABLE chat_history "
-                    "ADD COLUMN IF NOT EXISTS advisor_slug TEXT")
+        # conversation_id groups rows into conversations; without it "New
+        # conversation" could only delete. advisor_slug records which
+        # advisor a conversation happened with — the history token is
+        # derived from the signed-in email and is the same across every
+        # advisor, so without it one advisor's conversations appear in
+        # another's history.
+        _ensure_columns(conn, "chat_history", {
+            "conversation_id": "TEXT",
+            "advisor_slug": "TEXT",
+        })
         cur.execute("""
             CREATE INDEX IF NOT EXISTS chat_history_conversation_idx
             ON chat_history (token, conversation_id, id)
@@ -8534,107 +8561,43 @@ def _advisors_ensure_table(conn):
                 created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
         """)
-        # Added later: distinguishes "no photo chosen" from "not set up yet",
-        # so the first shows a monogram rather than falling back to the
-        # default advisor's face.
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "no_photo BOOLEAN NOT NULL DEFAULT FALSE")
-        except Exception:
-            pass
-        # Added later: an internal-only advisor. Every other profile is
-        # written for people outside J3P, so the prompt forbids naming the
-        # firm's people and brands and a scrubber deletes any passage that
-        # slips through. An internal advisor is for J3P staff, where those
-        # names are the subject rather than a leak.
-        #
-        # This is the only flag in the app that REMOVES a protection, so it
-        # is deliberately awkward: it defaults to false, it cannot be set
-        # from the same form as ordinary display options, and the pages and
-        # links it produces are marked everywhere they appear.
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "internal_only BOOLEAN NOT NULL DEFAULT FALSE")
-        except Exception:
-            pass
-        # Added later: per-advisor brand overrides. Branding is otherwise
-        # set once per deployment, which is right for a white-label client
-        # running their own service. An engagement hosted inside this
-        # deployment needs the client's look on their own advisor's pages
-        # without altering anyone else's — these columns are that, and
-        # empty means "use this deployment's branding".
-        # A persona of someone who is not one of this firm's own people.
-        # persona_principal replaces the firm's principal in the identity
-        # line; referral_email replaces the firm's contact address for this
-        # advisor's participants; principal_consent records who confirmed
-        # the named person agreed, and when — a persona of a real person
-        # should not exist on anyone's say-so alone, including mine.
-        # An uploaded logo, stored like the advisor photo rather than
-        # referenced by URL. A client's mark is rarely on a public URL
-        # anyone can hotlink, and a URL that moves later silently breaks
-        # the page — the bytes do not.
-        for _blob_col, _type in (("brand_logo", "BYTEA"),
-                                 ("brand_logo_mime", "TEXT")):
-            try:
-                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                            f"{_blob_col} {_type}")
-            except Exception:
-                pass
-        for _brand_col in ("brand_logo_url", "brand_label", "brand_navy",
-                           "brand_gold", "brand_paper",
-                           "persona_principal", "referral_email",
-                           "principal_consent"):
-            try:
-                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                            f"{_brand_col} TEXT")
-            except Exception:
-                pass
-        # Added later: an advisor's own external booking link (Calendly,
-        # Acuity, etc). Empty means "use the shared J3P scheduling link."
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "scheduling_url TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
-        # Added later: per-advisor overrides for the four Display Settings
-        # toggles. NULL means "inherit the global setting" — these only take
-        # over when explicitly set to true or false for this advisor.
-        for col in ("show_scheduling_override", "show_avatar_override",
-                    "allow_materials_override", "personality_override"):
-            try:
-                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                            f"{col} BOOLEAN")
-            except Exception:
-                pass
-        # Added later: a long random secret that gates this advisor's own
-        # knowledge-base portal — the "dedicated link" they log in with.
-        # NULL means portal access has never been generated (or was
-        # revoked) for this advisor.
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "portal_token TEXT")
-        except Exception:
-            pass
-        # Added later: an admin-curated, client-facing "about this advisor"
-        # style blurb — participants may see this; it's never generated or
-        # edited automatically from the advisor's personality/360 data,
-        # only ever suggested as a starting point for an admin to review.
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "client_bio TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
-        # Added later: this advisor's own subject-matter expertise — distinct
-        # from client_bio (which is about coaching STYLE). Both are fed to
-        # the model itself, not just displayed, so the AI's actual behavior
-        # is accountable to what's promised about this advisor.
-        try:
-            cur.execute("ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
-                        "expertise TEXT NOT NULL DEFAULT ''")
-        except Exception:
-            pass
+    # Columns added after the table was first created. Listed rather than
+    # issued one ALTER at a time: the helper asks the database once which
+    # already exist and touches only what is missing, which on the common
+    # path — nothing missing — is a single round trip instead of 24.
+    #
+    # Anything added here must also be read by list_advisors and
+    # get_advisor, or it will exist and never be seen.
+    _ensure_columns(conn, "advisors", {
+        "no_photo": "BOOLEAN NOT NULL DEFAULT FALSE",
+        # The only flag that REMOVES a protection: an internal advisor may
+        # name this firm's people and brands, which every other profile is
+        # built to withhold. Defaults false and is set from its own form.
+        "internal_only": "BOOLEAN NOT NULL DEFAULT FALSE",
+        "scheduling_url": "TEXT NOT NULL DEFAULT ''",
+        "portal_token": "TEXT",
+        "client_bio": "TEXT NOT NULL DEFAULT ''",
+        # Fed to the model as well as shown in the UI, so what is promised
+        # about an advisor and what the AI does cannot drift apart.
+        "expertise": "TEXT NOT NULL DEFAULT ''",
+        "show_scheduling_override": "BOOLEAN",
+        "show_avatar_override": "BOOLEAN",
+        "allow_materials_override": "BOOLEAN",
+        "personality_override": "BOOLEAN",
+        # A client engagement: their look, and optionally their own
+        # leader's voice in place of this firm's principal.
+        "brand_logo_url": "TEXT",
+        "brand_label": "TEXT",
+        "brand_navy": "TEXT",
+        "brand_gold": "TEXT",
+        "brand_paper": "TEXT",
+        "brand_logo": "BYTEA",
+        "brand_logo_mime": "TEXT",
+        "persona_principal": "TEXT",
+        "referral_email": "TEXT",
+        "principal_consent": "TEXT",
+    })
     conn.commit()
-
 
 def slugify_advisor(name: str) -> str:
     base = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")

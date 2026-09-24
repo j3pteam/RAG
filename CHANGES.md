@@ -1,54 +1,75 @@
-# J3P Advisor — build 2026-09-24-b
+# J3P Advisor — build 2026-09-24-c
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## Example names are fictional now
+## Found it, and your two screenshots are what found it
 
-```
-Advisor name     e.g. John Sample, MD
-Organization     e.g. Sample Health System
-Consent record   e.g. Confirmed by email with Dr. Sample, 22 Sep 2026
-```
+Two things in them settled a question I have been guessing at for days.
 
-I changed the organization example as well as the name. A form reading
-"John Sample" next to "Dartmouth Cancer Center" is incoherent, and a real
-prospect's name sitting in placeholder text is the sort of thing that ends
-up in a screenshot shared with someone else.
+**No "opening N database connections" line appeared.** That line only shows
+when a physical connection is opened, so connections are being reused and
+the network handshake is *not* the cost. Every earlier theory of mine that
+blamed the public proxy was wrong.
 
-## The blank word in your screenshot
+**`list_advisors` was 1870 ms on Overview and 121 ms on Diagnostics.** The
+same query, 15× apart, moments apart. A query does not vary like that. What
+varies is whether something else happened alongside it.
 
-The sentence read:
+## What was happening
 
-> an advisor named for a client but still wearing **'s** branding
+Every table has an "ensure" function that creates it and adds any columns
+introduced since. Each `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` is a round
+trip **whether or not it does anything**, and the advisors table had
+accumulated 24 of them as features were added — several of them mine, this
+week.
 
-`{{ org_short }}` was rendering empty. The admin template was given
-`org_principal` but never `org_name` or `org_short`, so three strings across
-the panel came out blank — that one, the line explaining that
-"Delivered by *(blank)*" appears on client-branded pages, and the heading
-"Persona of someone outside *(blank)*".
+They run once per worker, on its first request. So:
 
-All three now read correctly:
+- the first page load a worker handles pays all 24
+- it happens again on every redeploy, and every time Railway cycles a worker
+- the *second* load looks fine, which is why it never reproduced when I
+  looked for it
 
-> an advisor named for a client but still wearing **J3P's** branding and
-> speaking as **Alan Friedman**
+1870 ms was the first request on that worker. 121 ms was what the query
+actually costs.
 
-## A note on how that one got through
+## The fix
 
-The render test exercises every tab, which is how the tab itself was
-verified — but it supplies its own context, so it filled in values the real
-route does not. A missing variable renders as empty in Jinja rather than
-failing, so nothing broke; the sentence just quietly lost a word.
+One query to `information_schema` asking which columns exist, then only the
+ALTERs genuinely missing:
 
-Your screenshot caught it. I have not found a way to check for it
-automatically that does not amount to reimplementing the route inside the
-test, so for now it stays a thing to notice.
+| Situation | Round trips |
+|---|---|
+| Everything already there — the normal case | **1** |
+| Two columns missing, after a new feature | 3 |
+| Fresh database | 22 |
+| **Before this change, every time** | **24** |
+
+Applied to the advisors and chat_history tables, which are the two that had
+grown.
+
+The columns are now a single list in one place, which also means adding one
+is a one-line change rather than another ALTER appended to a pile.
+
+## What is left
+
+`list_documents` is steady at 456–492 ms across both loads. That is
+`database.py`, the one file in this project I have never had. If you send
+it, that is the next 450 ms.
+
+`page-specific lookups` at 605 ms on Diagnostics is the diagnostics queries
+themselves, which only that tab pays.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-b`.
+should report `2026-09-24-c`.
+
+The very first load after deploying still pays the old cost once per worker
+— it is the load that runs the new migration. From the second onward it
+should be steady.
