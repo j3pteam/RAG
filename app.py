@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-f"
+APP_VERSION = "2026-09-24-g"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -7761,7 +7761,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       }
 
       async function openConversation(id, btn) {
-        if (btn && btn.classList.contains("current")) return;
+        // No early return for the current conversation. "Current" means the
+        // session is pointing at it, not that it is on screen — the page
+        // renders only the greeting on load, so refusing to open the one
+        // conversation someone has is exactly the case that looks broken.
         try {
           // Anything speaking belongs to the conversation being replaced.
           if (window.__stopAllSpeech) window.__stopAllSpeech();
@@ -7787,7 +7790,34 @@ INDEX_HTML = r"""<!DOCTYPE html>
       }
 
       window.__refreshConversations = refreshConversations;
-      refreshConversations();
+
+      // Reopening the page should show the conversation you were in. The
+      // transcript is not rendered server-side, so without this a returning
+      // session looks empty while the model still has the history — the
+      // page and the advisor disagree about what was said.
+      async function restoreCurrentConversation() {
+        const alreadyShown = chat.querySelectorAll(".msg").length > 1;
+        if (alreadyShown) return;
+        try {
+          const r = await fetch("/conversations");
+          if (!r.ok) return;
+          const data = await r.json();
+          const current = (data.conversations || []).find(c => c.current);
+          if (!current || !current.turns) return;
+          const open = await fetch("/conversations/" + encodeURIComponent(current.id),
+                                   { method: "POST" });
+          if (!open.ok) return;
+          const payload = await open.json();
+          if (!(payload.messages || []).length) return;
+          chat.innerHTML = "";
+          for (const m of payload.messages) {
+            addMessage(m.content, m.role === "user" ? "user" : "assistant");
+          }
+          chat.scrollTop = chat.scrollHeight;
+        } catch (e) { /* leave the greeting in place */ }
+      }
+
+      refreshConversations().then(restoreCurrentConversation);
     }
   </script>
 </body>
@@ -7849,6 +7879,44 @@ def _history_ensure_table(conn):
     conn.commit()
 
 
+_HISTORY_SALT_CACHE = {}
+
+
+def _history_salt() -> str:
+    """A stable value for deriving a person's history token.
+
+    This used to be app.secret_key, which was wrong twice over. With
+    FLASK_SECRET_KEY unset, each worker generates its own key, so the same
+    person got a different token on every worker and after every restart —
+    their transcripts were written and then unfindable. And even with the
+    key set, a session key is meant to be rotatable; tying identity to it
+    means rotating it silently destroys every conversation ever recorded.
+
+    FLASK_SECRET_KEY is still used when it is set, so deployments that
+    configured it keep the tokens they already have. Otherwise a salt is
+    generated once and persisted, which is stable from then on.
+    """
+    configured = os.environ.get("FLASK_SECRET_KEY", "")
+    if configured:
+        return configured
+    if "salt" in _HISTORY_SALT_CACHE:
+        return _HISTORY_SALT_CACHE["salt"]
+    salt = (load_settings().get("history_salt") or "").strip()
+    if not salt:
+        salt = secrets.token_hex(32)
+        if save_setting("history_salt", salt):
+            app.logger.info("[history] generated a persistent history salt; "
+                            "transcripts will now survive restarts")
+        else:
+            # Without somewhere to keep it this is no better than before,
+            # so say so rather than appearing to have fixed it.
+            app.logger.error("[history] could not persist a history salt — "
+                             "transcripts will not survive a restart. Set "
+                             "FLASK_SECRET_KEY.")
+    _HISTORY_SALT_CACHE["salt"] = salt
+    return salt
+
+
 def _history_token() -> str:
     """Identifies whose transcript this is.
 
@@ -7862,7 +7930,7 @@ def _history_token() -> str:
     if email:
         import hashlib
         digest = hashlib.sha256(
-            (app.secret_key + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
+            (_history_salt() + "|" + email.lower()).encode("utf-8")).hexdigest()[:32]
         return "u_" + digest
     link_token = session.get("participant_link_token", "")
     if link_token:
