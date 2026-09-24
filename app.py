@@ -18910,10 +18910,8 @@ details.section[open] > summary {
           Removing this engagement stops its session link and disables its
           participant links. Documents and conversation logs are kept.
         </span>
-        <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
-              style="margin: 0;" data-doc-title="{{ adv.name }}"
-              data-kind="client">
-          <input type="hidden" name="return_to" value="clients" />
+        <form method="POST" action="/admin/clients/delete/{{ adv.slug }}"
+              style="margin: 0;" data-doc-title="{{ adv.name }}">
           <button type="submit" class="btn-danger">Delete engagement</button>
         </form>
       </div>
@@ -18925,43 +18923,6 @@ details.section[open] > summary {
       No client engagements yet. The form above creates one; it will appear
       here afterward.
     </p>
-    {% endif %}
-
-    {% set other_advisors = advisors | rejectattr("is_client_engagement") | list %}
-    {% if admin_perms.edit_advisors and other_advisors %}
-    <h2 class="group-heading">Advisors</h2>
-    <details class="section">
-      <summary>
-        <h2>Remove an advisor</h2>
-        <span class="section-note">{{ other_advisors|length }} on this site</span>
-      </summary>
-      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
-        Everything else about an advisor is edited on the Advisors tab.
-      </p>
-      <table style="width: 100%; border-collapse: collapse;">
-        {% for adv in other_advisors %}
-        <tr style="border-top: 1px solid var(--line);">
-          <td style="padding: 0.55rem 0;">
-            <strong>{{ adv.name }}</strong>
-            {% if adv.internal_only %}
-            <span style="margin-left: 0.4rem; padding: 0.1rem 0.4rem;
-                         border-radius: 3px; background: #7A2E2E; color: #fff;
-                         font-size: 0.6rem; letter-spacing: 0.1em;
-                         text-transform: uppercase;">Internal</span>
-            {% endif %}
-            <br /><span class="muted" style="font-size: 0.76rem;">{{ adv.slug }}</span>
-          </td>
-          <td style="text-align: right; padding: 0.55rem 0;">
-            <form method="POST" action="/admin/advisors/delete/{{ adv.slug }}"
-                  style="margin: 0;" data-doc-title="{{ adv.name }}">
-              <input type="hidden" name="return_to" value="clients" />
-              <button type="submit" class="btn-danger">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-    </details>
     {% endif %}
   </div>
   {% endif %}
@@ -21737,8 +21698,7 @@ details.section[open] > summary {
             return;
           }
 
-          if (action.indexOf("/admin/advisors/delete/") !== -1
-              && form.dataset.kind === "client") {
+          if (action.indexOf("/admin/clients/delete/") !== -1) {
             open(form, {
               message: "Delete this client engagement? Its session link stops "
                      + "working immediately, its branding is removed, and its "
@@ -23853,24 +23813,39 @@ def admin_advisor_internal(slug):
 @app.route("/admin/advisors/delete/<slug>", methods=["POST"])
 @require_permission("edit_advisors")
 def admin_delete_advisor(slug):
-    """Remove an advisor profile (or client engagement) and its photo.
+    """Remove an advisor profile and its photo."""
+    if delete_advisor(slug):
+        flash(f"Advisor “{slug}” removed. Their links no longer work.")
+    else:
+        flash("Could not remove that advisor.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
 
-    Called from the Advisors tab and the Add Client tab; return_to sends the
-    admin back to whichever one they were on. The advisor's participant links
-    are disabled rather than deleted, so a participant's documents and history
-    stay on record and the links can be re-enabled if this was a mistake.
+
+@app.route("/admin/clients/delete/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_delete_client(slug):
+    """Delete a client engagement from the Add Client tab.
+
+    Separate from the Advisors-tab delete so neither changes the other.
+    Refuses anything that is not a client engagement, so this route can
+    never remove an ordinary advisor. The engagement's participant links
+    are disabled, not deleted, so participant documents and history stay
+    on record.
     """
-    adv = get_advisor(slug)
-    label = (adv or {}).get("name") or slug
+    adv = next((a for a in advisors_with_detail()
+                if a.get("slug") == slug), None)
+    if not adv or not adv.get("is_client_engagement") or adv.get("internal_only"):
+        flash("That is not a client engagement, so nothing was removed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
     if delete_advisor(slug):
         disabled = _disable_participant_links_for(slug)
-        flash(f"\u2713 {label} removed. Their session link no longer works"
+        flash(f"\u2713 {adv['name']} removed. Their session link no longer works"
               + (f", and {disabled} participant link"
                  f"{'' if disabled == 1 else 's'} {'was' if disabled == 1 else 'were'} disabled."
                  if disabled else "."))
     else:
-        flash(f"Could not remove {label}.")
-    return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
+        flash(f"Could not remove {adv['name']}.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 def _disable_participant_links_for(slug: str) -> int:
