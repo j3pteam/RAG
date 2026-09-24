@@ -19107,9 +19107,16 @@ details.section[open] > summary {
           <div class="stat-value is-info">{{ docs|length if rag_ready else '—' }}</div>
           <div class="stat-label">Documents</div>
         </div>
+        {% set _client_advs = advisors | selectattr("is_client_engagement") | list %}
         <div class="stat">
-          <div class="stat-value is-info">{{ advisors|length + 1 }}</div>
-          <div class="stat-label">Advisors</div>
+          <div class="stat-value is-info">{{ advisors|length - _client_advs|length + 1 }}</div>
+          <div class="stat-label">J3P Advisors</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value is-info">{{ client_orgs|length }}</div>
+          <div class="stat-label">External Clients</div>
+          <div class="muted" style="font-size: 0.72rem; margin-top: 0.2rem;">
+            {{ _client_advs|length }} client advisor{{ '' if _client_advs|length == 1 else 's' }}</div>
         </div>
         <div class="stat">
           <div class="stat-value {{ 'is-good' if settings.require_login else 'is-warn' }}"
@@ -22832,7 +22839,7 @@ def admin_dashboard():
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
         lookup=session.get("brand_lookup") if active_tab == "clients" else None,
-        client_orgs=list_client_orgs() if active_tab == "clients" else [],
+        client_orgs=list_client_orgs() if active_tab in ("clients", "overview") else [],
         has_lookup_logo=(bool(session.get("brand_lookup_logo"))
                          and active_tab == "clients"),
         has_internal_advisor=any(r.get("internal_only")
