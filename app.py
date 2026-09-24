@@ -673,12 +673,18 @@ _PERSISTENT_CONNS_ENABLED = os.environ.get(
 # and a shared one broke the admin panel outright. Off by default. Turn it
 # on with DB_REUSE_SHARED_CONN=on only once database.py is known to tolerate
 # it — the win is roughly a second per page, so it is worth confirming.
+#
+# Why it broke before: the connection handed over was opened with psycopg's
+# default tuple rows, while every function in database.py reads rows as
+# dicts (row["title"], row.get(...)). The connection for database.py is now
+# opened with dict_row, exactly as database.py opens its own, so it is on
+# by default. DB_REUSE_SHARED_CONN=off restores the old behaviour.
 _REUSE_DB_SHARED_CONN = os.environ.get(
-    "DB_REUSE_SHARED_CONN", "off").lower() in ("on", "1", "true")
+    "DB_REUSE_SHARED_CONN", "on").lower() in ("on", "1", "true")
 _conn_store = threading.local()
 
 
-def _persistent_conn(key: str, url: str):
+def _persistent_conn(key: str, url: str, dict_rows: bool = False):
     """A live connection for this thread, reconnecting if it has died.
 
     rollback() on handover does double duty: it clears any transaction the
@@ -704,7 +710,11 @@ def _persistent_conn(key: str, url: str):
             conns.pop(key, None)
     import psycopg
     _t0 = time.perf_counter()
-    conn = psycopg.connect(url)
+    if dict_rows:
+        from psycopg.rows import dict_row
+        conn = psycopg.connect(url, row_factory=dict_row)
+    else:
+        conn = psycopg.connect(url)
     _note_connection_opened(time.perf_counter() - _t0)
     conns[key] = conn
     return conn
@@ -737,7 +747,8 @@ def _reuse_database_connection():
     if not url or "db_shared_conn" in g:
         return
     try:
-        g.db_shared_conn = _persistent_conn("database", url)
+        # dict rows: database.py reads every row as a dict.
+        g.db_shared_conn = _persistent_conn("database-dict", url, dict_rows=True)
     except Exception as e:
         # Fall through to database.py opening its own, as before.
         app.logger.warning(f"[db] could not reuse a connection: {e}")
