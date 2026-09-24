@@ -1,62 +1,54 @@
-# J3P Advisor — build 2026-09-24-a
+# J3P Advisor — build 2026-09-24-b
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## Add Client is its own tab
+## Example names are fictional now
 
-Managing your own coaches and standing up a client engagement are different
-jobs, and the client tooling was cluttering every advisor card — including
-the four it will never apply to.
+```
+Advisor name     e.g. John Sample, MD
+Organization     e.g. Sample Health System
+Consent record   e.g. Confirmed by email with Dr. Sample, 22 Sep 2026
+```
 
-**Admin → Add Client** now holds all of it. The Advisors tab is back to what
-it was: profiles, photos, links, knowledge, voice.
+I changed the organization example as well as the name. A form reading
+"John Sample" next to "Dartmouth Cancer Center" is incoherent, and a real
+prospect's name sitting in placeholder text is the sort of thing that ends
+up in a screenshot shared with someone else.
 
-## Set up a client in one step
+## The blank word in your screenshot
 
-Name, organization, whose thinking it is grounded in, where participants are
-sent, and the two colors — one form, one save.
+The sentence read:
 
-Done as separate forms this is four saves, and stopping after the first
-leaves an advisor named for a client **still wearing J3P's branding and
-speaking as Alan Friedman**. That is worse than not having started, and it
-is exactly what happens when someone is interrupted halfway. Either the
-whole engagement exists or none of it does: if any part of the setup fails,
-the advisor is removed again rather than left in that state.
+> an advisor named for a client but still wearing **'s** branding
 
-Validated before anything is created — a colour that is not six-digit hex, a
-referral address with no `@`, or a named person with no consent record all
-stop the whole thing with nothing written.
+`{{ org_short }}` was rendering empty. The admin template was given
+`org_principal` but never `org_name` or `org_short`, so three strings across
+the panel came out blank — that one, the line explaining that
+"Delivered by *(blank)*" appears on client-branded pages, and the heading
+"Persona of someone outside *(blank)*".
 
-## Current engagements
+All three now read correctly:
 
-Below the form, each client engagement with its session link, whose voice it
-speaks in, where participants are sent, the logo upload, the branding fields
-and the persona fields.
+> an advisor named for a client but still wearing **J3P's** branding and
+> speaking as **Alan Friedman**
 
-Roy Herbst appears here as soon as his branding or persona is set — the list
-is derived from the advisor actually carrying a client's branding or a
-persona, not from a separate flag. An advisor cannot be listed as an
-engagement while carrying none of the things that make it one.
+## A note on how that one got through
 
-Your own coaches — Alan, Bruce, David — stay out of this tab entirely.
+The render test exercises every tab, which is how the tab itself was
+verified — but it supplies its own context, so it filled in values the real
+route does not. A missing variable renders as empty in Jinja rather than
+failing, so nothing broke; the sentence just quietly lost a word.
 
-## One thing I had to fix to make it work
-
-`list_advisors()` did not return any of the branding or persona fields, so
-the "is this a client engagement?" test would have been false for everyone
-and the tab would have looked permanently empty. Caught by rendering it, not
-by reading it.
+Your screenshot caught it. I have not found a way to check for it
+automatically that does not amount to reimplementing the route inside the
+test, so for now it stays a thing to notice.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-a`.
-
-Roy Herbst's existing profile will appear under Add Client once you set his
-organization, colors or persona — until then he is an ordinary advisor,
-which is what he currently is.
+should report `2026-09-24-b`.

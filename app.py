@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-a"
+APP_VERSION = "2026-09-24-b"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18260,12 +18260,12 @@ details.section[open] > summary {
         <div style="display: grid; gap: 0.8rem;
                     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
           <label style="font-size: 0.82rem;">Advisor name <span class="muted">(required)</span>
-            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD"
+            <input type="text" name="name" required placeholder="e.g. John Sample, MD"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.82rem;">Organization
-            <input type="text" name="brand_label" placeholder="e.g. Dartmouth Cancer Center"
+            <input type="text" name="brand_label" placeholder="e.g. Sample Health System"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -18293,7 +18293,7 @@ details.section[open] > summary {
         <label style="display: block; margin-top: 0.8rem; font-size: 0.82rem;">
           If you named someone above, record who confirmed their agreement and when
           <input type="text" name="principal_consent"
-                 placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
+                 placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
                  style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                         border: 1px solid var(--line); border-radius: 5px;" />
         </label>
@@ -18460,7 +18460,7 @@ details.section[open] > summary {
             Who confirmed their agreement, and when
             <input type="text" name="principal_consent"
                    value="{{ adv.principal_consent }}"
-                   placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
+                   placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
                    style="width: 100%; box-sizing: border-box; padding: 0.42rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -22395,6 +22395,11 @@ def admin_dashboard():
         advisor_names=_advisor_names,
         advisor_docs=_advisor_docs,
         org_principal=ORG_PRINCIPAL,
+        # Passed alongside org_principal, which was already here. Three
+        # admin strings used these and rendered blank without them — the
+        # visible one read "still wearing 's branding".
+        org_name=ORG_NAME,
+        org_short=ORG_SHORT,
         has_internal_advisor=any(r.get("internal_only")
                                   for r in (_advisor_rows or [])),
         initials_for=initials_for,
