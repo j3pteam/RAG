@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-d"
+APP_VERSION = "2026-09-24-e"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -16096,13 +16096,13 @@ DEFAULT_PERSONA_EXPORT_SLUG = "__default__"
 def _participant_link_redirect():
     """Where to land after a participant-link change.
 
-    Participant links are managed from inside each advisor card now, so
-    every one of these routes returns to the Advisors tab. The forms still
-    post return_to=advisors; it is read here so that adding a second entry
-    point later is a one-line change rather than a hunt through the routes.
+    Client engagements are managed on their own tab and their participant
+    links are issued there, so a form can ask to come back to it. Whitelisted
+    rather than trusted: the value reaches url_for, and an unknown tab would
+    either 404 or hand a stranger a redirect target.
     """
     target = (request.form.get("return_to") or "advisors").strip()
-    if target not in ("advisors",):
+    if target not in ("advisors", "clients"):
         target = "advisors"
     return redirect(url_for("admin_dashboard", tab=target))
 
@@ -18202,6 +18202,160 @@ details.section[open] > summary {
   {% endmacro %}
 
   {% if admin_perms.edit_biometric %}
+  {# Defined before the first tab that uses it: Jinja resolves macros
+     in source order, and the Clients tab renders before the Advisors
+     tab where this used to live. #}
+    {% macro participant_links_section(t_slug, t_name, t_links, can_edit) %}
+      <details class="advisor-section">
+        <summary>Participant Links{% if t_links %} ({{ t_links|length }}){% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.78rem;">
+          Dedicated links for specific people, landing on {{ t_name }}. Each one
+          keeps that person's conversation across visits and devices, and can be
+          switched off at any time without deleting their history.
+        </p>
+
+        {% if can_edit %}
+        <div style="background: var(--paper); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.7rem;">
+          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
+                      text-transform: uppercase; margin-bottom: 0.5rem;">Add one link</div>
+          <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
+                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+            <input type="hidden" name="return_to" value="advisors" />
+            <input type="text" name="label" required
+                   placeholder="Label for your own reference (e.g. Jane Smith)"
+                   style="flex: 2 1 220px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <input type="text" name="first_name" placeholder="First name (greeting)"
+                   style="flex: 1 1 140px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <input type="email" name="email" placeholder="Email (optional)"
+                   style="flex: 1 1 160px; padding: 0.45rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
+          </form>
+        </div>
+
+        <div style="background: var(--paper); border: 1px solid var(--line);
+                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.9rem;">
+          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
+                      text-transform: uppercase; margin-bottom: 0.5rem;">Bulk upload</div>
+          <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.76rem; line-height: 1.5;">
+            A .csv or .xlsx with a <strong>Name</strong> column, and optionally
+            <strong>First Name</strong> and <strong>Email</strong>. Every row is
+            pinned to {{ t_name }} — an Advisor column in the file is ignored here.
+            The same file comes back with a Link column added.
+          </p>
+          <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
+                enctype="multipart/form-data"
+                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
+            <input type="hidden" name="lock_advisor" value="1" />
+            <input type="hidden" name="return_to" value="advisors" />
+            <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
+                   style="flex: 2 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                          border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Upload &amp; create</button>
+          </form>
+        </div>
+        {% endif %}
+
+        {% if t_links %}
+        <div style="display: flex; justify-content: flex-end; gap: 0.4rem; margin-bottom: 0.5rem;">
+          <a class="btn" style="font-size: 0.6rem;"
+             href="{{ url_for('admin_export_participant_links_csv') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; CSV</a>
+          <a class="btn" style="font-size: 0.6rem;"
+             href="{{ url_for('admin_export_participant_links_xlsx') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; Excel</a>
+        </div>
+        <table style="font-size: 0.8rem;">
+          <tr>
+            <th style="width: 20%;">Label</th><th>Link</th>
+            <th style="width: 10%;">Status</th>
+            <th style="width: 13%;">Booking</th>
+            <th style="width: 12%;">Last used</th>
+            {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
+          </tr>
+          {% for l in t_links %}
+          <tr>
+            <td>
+              {{ l.label }}
+              {% if l.first_name or l.email %}
+              <br /><span class="muted" style="font-size: 0.72rem;">
+                {{ l.first_name }}{% if l.first_name and l.email %} &middot; {% endif %}{{ l.email }}
+              </span>
+              {% endif %}
+            </td>
+            <td>
+              <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+                <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
+                   class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
+                <button type="button" class="copy-link"
+                        data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
+                <button type="button" class="share-link"
+                        data-url="{{ base_url }}/p/{{ l.token }}"
+                        data-advisor="{{ t_name }}">Share</button>
+              </div>
+            </td>
+            <td>
+              {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
+              {% else %}<span class="muted">Disabled</span>{% endif %}
+            </td>
+            <td>
+              {# Per-person control of the booking button. "Follow advisor"
+                 is the default and the common case; the override exists for
+                 the participant who should not be sold a session — someone
+                 mid-engagement, or a courtesy link. #}
+              {% if can_edit %}
+              <form method="POST" action="/admin/participant-links/scheduling/{{ l.id }}"
+                    style="margin: 0;">
+                <input type="hidden" name="return_to" value="advisors" />
+                <select name="show_scheduling" onchange="this.form.submit()"
+                        style="width: 100%; padding: 0.3rem; font-family: inherit;
+                               font-size: 0.78rem; border: 1px solid var(--line);
+                               border-radius: 2px; background: var(--paper);">
+                  <option value="" {% if l.show_scheduling is none %}selected{% endif %}>Follow advisor</option>
+                  <option value="1" {% if l.show_scheduling is sameas true %}selected{% endif %}>Show</option>
+                  <option value="0" {% if l.show_scheduling is sameas false %}selected{% endif %}>Hide</option>
+                </select>
+              </form>
+              {% else %}
+              <span class="muted">
+                {% if l.show_scheduling is none %}Follow advisor
+                {% elif l.show_scheduling %}Shown{% else %}Hidden{% endif %}
+              </span>
+              {% endif %}
+            </td>
+            <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
+            {% if can_edit %}
+            <td>
+              <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
+                <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
+                  <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
+                  <input type="hidden" name="return_to" value="advisors" />
+                  <button type="submit" class="btn" style="font-size: 0.6rem;">
+                    {{ "Disable" if l.enabled else "Enable" }}
+                  </button>
+                </form>
+                <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
+                      onsubmit="return confirm('Delete this participant link? It cannot be undone.');">
+                  <input type="hidden" name="return_to" value="advisors" />
+                  <button type="submit" class="btn-danger" style="font-size: 0.6rem;">Delete</button>
+                </form>
+              </div>
+            </td>
+            {% endif %}
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          No participant links for {{ t_name }} yet.
+        </p>
+        {% endif %}
+      </details>
+    {% endmacro %}
+
   {% if active_tab == "clients" %}
   <div class="tab-pane" data-tab="clients">
 
@@ -18307,6 +18461,28 @@ details.section[open] > summary {
         <br />Participants are sent to {{ adv.referral_email }}.
         {% endif %}
       </p>
+
+      {# Issued here rather than on the Advisors tab, because the engagement
+         no longer appears there. Without this there would be no way to give
+         anyone on their team a link. #}
+      {{ participant_links_section(adv.slug, adv.name,
+                                   participant_links_by_advisor.get(adv.slug, []),
+                                   admin_perms.edit_participant_links) }}
+
+      <details class="advisor-section">
+        <summary>Photo</summary>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
+          Shown beside the conversation. Without one, participants see a
+          monogram built from the advisor's initials.
+        </p>
+        <form method="POST" action="/admin/advisors" enctype="multipart/form-data">
+          <input type="hidden" name="slug" value="{{ adv.slug }}" />
+          <input type="hidden" name="name" value="{{ adv.name }}" />
+          <input type="hidden" name="return_to" value="clients" />
+          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+          <button type="submit" class="btn" style="margin-left: 0.4rem;">Save photo</button>
+        </form>
+      </details>
     <details class="advisor-section">
       <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
         <span class="section-note">set</span>{% endif %}</summary>
@@ -18886,156 +19062,6 @@ details.section[open] > summary {
       {% endif %}
     {% endmacro %}
 
-    {% macro participant_links_section(t_slug, t_name, t_links, can_edit) %}
-      <details class="advisor-section">
-        <summary>Participant Links{% if t_links %} ({{ t_links|length }}){% endif %}</summary>
-        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.78rem;">
-          Dedicated links for specific people, landing on {{ t_name }}. Each one
-          keeps that person's conversation across visits and devices, and can be
-          switched off at any time without deleting their history.
-        </p>
-
-        {% if can_edit %}
-        <div style="background: var(--paper); border: 1px solid var(--line);
-                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.7rem;">
-          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
-                      text-transform: uppercase; margin-bottom: 0.5rem;">Add one link</div>
-          <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
-                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
-            <input type="hidden" name="return_to" value="advisors" />
-            <input type="text" name="label" required
-                   placeholder="Label for your own reference (e.g. Jane Smith)"
-                   style="flex: 2 1 220px; padding: 0.45rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
-            <input type="text" name="first_name" placeholder="First name (greeting)"
-                   style="flex: 1 1 140px; padding: 0.45rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
-            <input type="email" name="email" placeholder="Email (optional)"
-                   style="flex: 1 1 160px; padding: 0.45rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.82rem;" />
-            <button type="submit" class="btn" style="font-size: 0.64rem;">Create link</button>
-          </form>
-        </div>
-
-        <div style="background: var(--paper); border: 1px solid var(--line);
-                    border-radius: 4px; padding: 0.7rem 0.8rem; margin-bottom: 0.9rem;">
-          <div class="muted" style="font-size: 0.64rem; letter-spacing: 0.1em;
-                      text-transform: uppercase; margin-bottom: 0.5rem;">Bulk upload</div>
-          <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.76rem; line-height: 1.5;">
-            A .csv or .xlsx with a <strong>Name</strong> column, and optionally
-            <strong>First Name</strong> and <strong>Email</strong>. Every row is
-            pinned to {{ t_name }} — an Advisor column in the file is ignored here.
-            The same file comes back with a Link column added.
-          </p>
-          <form method="POST" action="{{ url_for('admin_bulk_create_participant_links') }}"
-                enctype="multipart/form-data"
-                style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
-            <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
-            <input type="hidden" name="lock_advisor" value="1" />
-            <input type="hidden" name="return_to" value="advisors" />
-            <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
-                   style="flex: 2 1 220px; padding: 0.4rem; border: 1px solid var(--line);
-                          border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
-            <button type="submit" class="btn" style="font-size: 0.64rem;">Upload &amp; create</button>
-          </form>
-        </div>
-        {% endif %}
-
-        {% if t_links %}
-        <div style="display: flex; justify-content: flex-end; gap: 0.4rem; margin-bottom: 0.5rem;">
-          <a class="btn" style="font-size: 0.6rem;"
-             href="{{ url_for('admin_export_participant_links_csv') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; CSV</a>
-          <a class="btn" style="font-size: 0.6rem;"
-             href="{{ url_for('admin_export_participant_links_xlsx') }}?advisor={{ t_slug or default_persona_export_slug }}">&darr; Excel</a>
-        </div>
-        <table style="font-size: 0.8rem;">
-          <tr>
-            <th style="width: 20%;">Label</th><th>Link</th>
-            <th style="width: 10%;">Status</th>
-            <th style="width: 13%;">Booking</th>
-            <th style="width: 12%;">Last used</th>
-            {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
-          </tr>
-          {% for l in t_links %}
-          <tr>
-            <td>
-              {{ l.label }}
-              {% if l.first_name or l.email %}
-              <br /><span class="muted" style="font-size: 0.72rem;">
-                {{ l.first_name }}{% if l.first_name and l.email %} &middot; {% endif %}{{ l.email }}
-              </span>
-              {% endif %}
-            </td>
-            <td>
-              <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
-                <a href="{{ base_url }}/p/{{ l.token }}" target="_blank"
-                   class="adv-link">{{ base_url }}/p/{{ l.token }}</a>
-                <button type="button" class="copy-link"
-                        data-url="{{ base_url }}/p/{{ l.token }}">Copy</button>
-                <button type="button" class="share-link"
-                        data-url="{{ base_url }}/p/{{ l.token }}"
-                        data-advisor="{{ t_name }}">Share</button>
-              </div>
-            </td>
-            <td>
-              {% if l.enabled %}<span style="color: #2D7D5F;">Enabled</span>
-              {% else %}<span class="muted">Disabled</span>{% endif %}
-            </td>
-            <td>
-              {# Per-person control of the booking button. "Follow advisor"
-                 is the default and the common case; the override exists for
-                 the participant who should not be sold a session — someone
-                 mid-engagement, or a courtesy link. #}
-              {% if can_edit %}
-              <form method="POST" action="/admin/participant-links/scheduling/{{ l.id }}"
-                    style="margin: 0;">
-                <input type="hidden" name="return_to" value="advisors" />
-                <select name="show_scheduling" onchange="this.form.submit()"
-                        style="width: 100%; padding: 0.3rem; font-family: inherit;
-                               font-size: 0.78rem; border: 1px solid var(--line);
-                               border-radius: 2px; background: var(--paper);">
-                  <option value="" {% if l.show_scheduling is none %}selected{% endif %}>Follow advisor</option>
-                  <option value="1" {% if l.show_scheduling is sameas true %}selected{% endif %}>Show</option>
-                  <option value="0" {% if l.show_scheduling is sameas false %}selected{% endif %}>Hide</option>
-                </select>
-              </form>
-              {% else %}
-              <span class="muted">
-                {% if l.show_scheduling is none %}Follow advisor
-                {% elif l.show_scheduling %}Shown{% else %}Hidden{% endif %}
-              </span>
-              {% endif %}
-            </td>
-            <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
-            {% if can_edit %}
-            <td>
-              <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
-                <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
-                  <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
-                  <input type="hidden" name="return_to" value="advisors" />
-                  <button type="submit" class="btn" style="font-size: 0.6rem;">
-                    {{ "Disable" if l.enabled else "Enable" }}
-                  </button>
-                </form>
-                <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
-                      onsubmit="return confirm('Delete this participant link? It cannot be undone.');">
-                  <input type="hidden" name="return_to" value="advisors" />
-                  <button type="submit" class="btn-danger" style="font-size: 0.6rem;">Delete</button>
-                </form>
-              </div>
-            </td>
-            {% endif %}
-          </tr>
-          {% endfor %}
-        </table>
-        {% else %}
-        <p class="muted" style="margin: 0; font-size: 0.8rem;">
-          No participant links for {{ t_name }} yet.
-        </p>
-        {% endif %}
-      </details>
-    {% endmacro %}
   {% endif %}
 
   {% if active_tab == "advisors" %}
@@ -19258,7 +19284,11 @@ details.section[open] > summary {
        someone looks. The default card is emitted from its macro at the
        boundary, so it keeps its position relative to everything else. #}
     {% set internal_advisors = advisors | selectattr("internal_only") | list %}
-    {% set client_advisors = advisors | rejectattr("internal_only") | list %}
+    {# Client engagements live on their own tab. They are set up, branded and
+       linked there, and listing them here as well would mean two places to
+       look and two places to forget. #}
+    {% set client_advisors = advisors | rejectattr("internal_only")
+                             | rejectattr("is_client_engagement") | list %}
     {% set ns = namespace(default_emitted=false) %}
 
     {% if internal_advisors %}
@@ -22467,6 +22497,17 @@ def admin_view_learning_archive():
     return _cached_render(LEARNING_ARCHIVE_HTML, cfg=CONFIG, runs=runs)
 
 
+def _advisor_return_tab() -> str:
+    """Which tab a form on an advisor wants to return to.
+
+    A client engagement is edited on its own tab, so saving a photo there
+    should land back there rather than on Advisors, where the engagement no
+    longer appears. Whitelisted because the value reaches url_for.
+    """
+    target = (request.form.get("return_to") or "advisors").strip()
+    return target if target in ("advisors", "clients") else "advisors"
+
+
 @app.route("/admin/advisors", methods=["POST"])
 @require_permission("edit_advisors")
 def admin_save_advisor():
@@ -22474,7 +22515,7 @@ def admin_save_advisor():
     name = (request.form.get("name") or "").strip()[:80]
     if not name:
         flash("Give the advisor a name.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
 
     slug = (request.form.get("slug") or "").strip().lower()
     slug = slugify_advisor(slug or name)
@@ -22486,11 +22527,11 @@ def admin_save_advisor():
         if len(raw) > AVATAR_MAX_BYTES:
             flash(f"That photo is {len(raw)/1048576:.1f} MB — the limit is "
                   f"{AVATAR_MAX_BYTES // 1048576} MB.")
-            return redirect(url_for("admin_dashboard", tab="advisors"))
+            return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
         ext = (file.filename.rsplit(".", 1)[-1] or "").lower()
         if ext not in ("jpg", "jpeg", "png", "webp", "gif"):
             flash("Use a JPG, PNG, WEBP or GIF photo.")
-            return redirect(url_for("admin_dashboard", tab="advisors"))
+            return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
         photo, mime = prepare_avatar(raw)
 
     # Three states: a new photo, deliberately none, or keep the current one.
@@ -22507,7 +22548,7 @@ def admin_save_advisor():
     scheduling_url = (request.form.get("scheduling_url") or "").strip()
     if scheduling_url and not re.match(r"^https?://", scheduling_url, re.I):
         flash("The scheduling link needs to start with http:// or https://.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
 
     def _tristate(field):
         """'' -> inherit the global setting (None); '1'/'0' -> an explicit
@@ -22532,7 +22573,7 @@ def admin_save_advisor():
             flash(f"✓ {name} saved — links are listed below.")
     else:
         flash("Could not save the advisor — check the database connection.")
-    return redirect(url_for("admin_dashboard", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab=_advisor_return_tab()))
 
 
 @app.route("/admin/advisors/create-internal", methods=["POST"])
