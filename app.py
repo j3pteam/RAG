@@ -809,6 +809,23 @@ def _settings_db_conn():
     return g.settings_db_conn
 
 
+@app.after_request
+def _return_to_clients(resp):
+    """Forms on a client advisor's card (Add Client tab) reuse the Advisors
+    tab's routes, which redirect to the Advisors tab — where client
+    advisors are not listed. Send those redirects back to Add Client."""
+    try:
+        if (request.method == "POST" and resp.status_code in (301, 302, 303)
+                and "tab=advisors" in (resp.headers.get("Location") or "")
+                and ((request.form.get("return_to") == "clients")
+                     or "tab=clients" in (request.referrer or ""))):
+            resp.headers["Location"] = resp.headers["Location"].replace(
+                "tab=advisors", "tab=clients")
+    except Exception:
+        pass
+    return resp
+
+
 @app.teardown_appcontext
 def _close_settings_db_conn(exception=None):
     """End of request: release the connections without discarding them.
@@ -18612,527 +18629,6 @@ details.section[open] > summary {
       </details>
     {% endmacro %}
 
-  {% if active_tab == "clients" %}
-  <div class="tab-pane" data-tab="clients">
-
-    <h2 class="group-heading">New client organization</h2>
-    <details class="section" open>
-      <summary>
-        <h2>Add an organization</h2>
-        <span class="section-note">then add its advisors</span>
-      </summary>
-      <p class="muted" style="margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6;">
-        The organization — for example Dartmouth Cancer Center — owns the logo,
-        colors and name on the release. The advisors participants talk to —
-        for example John Sample, MD — are added under it once it exists.
-        Enter their website and the logo and colors are read from it; anything
-        you type yourself wins. Separate from { org_short }'s own advisors.
-      </p>
-      <form method="POST" action="/admin/orgs/create" enctype="multipart/form-data">
-        <div style="display: grid; gap: 0.8rem;
-                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-          <label style="font-size: 0.82rem;">Organization <span class="muted">(required)</span>
-            <input type="text" name="name" required placeholder="e.g. Dartmouth Cancer Center" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.82rem;">Their website
-            <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.82rem;">Header color <span class="muted">(optional)</span>
-            <input type="text" name="navy" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.82rem;">Accent color <span class="muted">(optional)</span>
-            <input type="text" name="gold" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.82rem;">Send participants to <span class="muted">(optional)</span>
-            <input type="text" name="referral_email" placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.82rem;">Logo <span class="muted">(optional)</span>
-            <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
-                   style="display: block; margin-top: 0.35rem;" />
-          </label>
-        </div>
-        <button type="submit" class="btn" style="margin-top: 1rem;">Create organization</button>
-      </form>
-    </details>
-
-    <h2 class="group-heading">Client organizations</h2>
-    {% set client_advisors = advisors | rejectattr("internal_only")
-                             | selectattr("is_client_engagement") | list %}
-    {% if client_orgs %}
-    {% for org in client_orgs %}
-    {% set org_advisors = client_advisors | selectattr("client_org", "equalto", org.slug) | list %}
-    <details class="section" open style="margin-top: 1.6rem; border-left: 4px solid {{ org.navy or cfg.navy }};">
-      <summary>
-        <h2>{{ org.name }}</h2>
-        <span class="section-note">{{ org_advisors|length }} advisor{{ '' if org_advisors|length == 1 else 's' }}</span>
-      </summary>
-      <div style="display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 0.9rem;">
-        {% if org.has_logo %}
-        <img src="/admin/orgs/{{ org.slug }}/logo" alt=""
-             style="max-height: 42px; max-width: 220px; background: {{ org.navy or cfg.navy }};
-                    padding: 0.4rem 0.6rem; border-radius: 4px;" />
-        {% endif %}
-        <span class="muted" style="font-size: 0.82rem;">
-          Header: <strong>{{ org.navy or "not set" }}</strong> &middot;
-          Accent: <strong>{{ org.gold or "not set" }}</strong>
-        </span>
-      </div>
-      {% if admin_perms.edit_advisors %}
-      <form method="POST" action="/admin/orgs/{{ org.slug }}/website"
-            style="margin: 0 0 1rem; display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
-        <label style="font-size: 0.8rem; flex: 1; min-width: 260px;">Website
-          <input type="text" name="site_url" value="{{ org.site_url }}"
-                 placeholder="e.g. cedars-sinai.org"
-                 style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                        border: 1px solid var(--line); border-radius: 5px;" />
-        </label>
-        <button type="submit" class="btn">Save &amp; re-read logo and colors</button>
-      </form>
-      {% endif %}
-
-      {% if admin_perms.edit_advisors %}
-      <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
-            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;">
-        <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">
-          Add an advisor to {{ org.name }}</div>
-        <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-          <label style="font-size: 0.8rem;">Advisor participants talk to
-            <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
-            <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-        </div>
-        <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
-      </form>
-      <form method="POST" action="/admin/orgs/{{ org.slug }}/intake"
-            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;
-                   display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
-        <div style="font-size: 0.85rem; font-weight: 600; width: 100%;">
-          Participant intake for {{ org.name }}</div>
-        {% for key, lbl, site_on in [("context_intake", "Position &amp; specialization questions", settings.context_intake_enabled),
-                                     ("personality", "Personality survey", settings.personality_assessment_enabled)] %}
-        {% set cur = org[key] %}
-        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">{{ lbl|safe }}
-          <select name="{{ key }}" onchange="this.form.submit()"
-                  style="width: 100%; padding: 0.42rem; border: 1px solid var(--line);
-                         border-radius: 5px; background: var(--paper); font-family: inherit;">
-            <option value="1" {% if cur is sameas true %}selected{% endif %}>On</option>
-            <option value="0" {% if cur is sameas false %}selected{% endif %}>Off</option>
-            <option value="" {% if cur is none %}selected{% endif %}>Site default ({{ "on" if site_on else "off" }})</option>
-          </select>
-        </label>
-        {% endfor %}
-        <p class="muted" style="margin: 0; font-size: 0.76rem; width: 100%;">
-          Applies to every advisor in this organization. One person's link can still
-          be set differently in its Participant Links row.</p>
-      </form>
-      {% endif %}
-
-      <details class="advisor-section">
-        <summary>Organization branding</summary>
-        <form method="POST" action="/admin/orgs/{{ org.slug }}/branding" enctype="multipart/form-data">
-          <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
-            <label style="font-size: 0.8rem;">Organization name
-              <input type="text" name="name" value="{{ org.name }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-            <label style="font-size: 0.8rem;">Website
-              <input type="text" name="site_url" value="{{ org.site_url }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-            <label style="font-size: 0.8rem;">Header color
-              <input type="text" name="navy" value="{{ org.navy }}" placeholder="#27334A" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-            <label style="font-size: 0.8rem;">Accent color
-              <input type="text" name="gold" value="{{ org.gold }}" placeholder="#D2BC8D" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-            <label style="font-size: 0.8rem;">Send participants to
-              <input type="text" name="referral_email" value="{{ org.referral_email }}"
-                     placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-            <label style="font-size: 0.8rem;">Replace logo
-              <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
-                     style="display: block; margin-top: 0.35rem;" /></label>
-          </div>
-          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
-            <input type="checkbox" name="reread" value="1" /> Re-read logo and colors from the website</label>
-          {% if org.has_logo %}
-          <label style="display: block; margin-top: 0.3rem; font-size: 0.8rem;">
-            <input type="checkbox" name="remove_logo" value="1" /> Remove the logo</label>
-          {% endif %}
-          <button type="submit" class="btn" style="margin-top: 0.8rem;">Save and apply to all advisors</button>
-        </form>
-        {% if not org_advisors %}
-        <form method="POST" action="/admin/orgs/{{ org.slug }}/delete" style="margin-top: 0.8rem;"
-              data-doc-title="{{ org.name }}">
-          <button type="submit" class="btn-danger">Delete organization</button>
-        </form>
-        {% endif %}
-      </details>
-    </details>
-    {% for adv in org_advisors %}
-    <details class="section" style="margin-left: 1.6rem;">
-      <summary>
-        <h2>{{ adv.name }}</h2>
-        <span class="section-note">
-          {{ adv.brand_label or "no organization set" }}
-        </span>
-      </summary>
-      <div style="display: flex; align-items: center; gap: 0.45rem;
-                  flex-wrap: wrap; margin: 0 0 0.6rem;">
-        <span class="muted" style="font-size: 0.82rem;">Their session link:</span>
-        <a href="{{ base_url }}/a/{{ adv.slug }}" target="_blank"
-           class="adv-link">{{ base_url }}/a/{{ adv.slug }}</a>
-        {# data-url, not data-copy: that is the attribute the handler at the
-           bottom of this page reads. The internal advisor's Copy button used
-           data-copy and has therefore never copied anything. #}
-        <button type="button" class="copy-link"
-                data-url="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
-        <button type="button" class="share-link"
-                data-url="{{ base_url }}/a/{{ adv.slug }}"
-                data-advisor="{{ adv.name }}">Share</button>
-      </div>
-      {# What is actually stored, rather than what was intended. A colour
-         that never saved and a colour that saved as the site default look
-         identical on the session page, and the only way to tell them apart
-         was to read the database. #}
-      <div style="display: flex; gap: 1.4rem; flex-wrap: wrap; margin: 0 0 0.9rem;
-                  font-size: 0.78rem;" class="muted">
-        <span>
-          Logo:
-          {% if adv.has_brand_logo %}<strong>uploaded</strong>
-          {% elif adv.brand_logo_url %}<strong>from a URL</strong>
-          {% else %}<strong>not set</strong> — using this site's
-          {% endif %}
-        </span>
-        <span>
-          Header:
-          {% if adv.brand_navy %}
-          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
-                       border-radius: 2px; vertical-align: -1px;
-                       background: {{ adv.brand_navy }};
-                       border: 1px solid rgba(0,0,0,0.2);"></span>
-          <strong>{{ adv.brand_navy }}</strong>
-          {% else %}<strong>not set</strong>{% endif %}
-        </span>
-        <span>
-          Accent:
-          {% if adv.brand_gold %}
-          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
-                       border-radius: 2px; vertical-align: -1px;
-                       background: {{ adv.brand_gold }};
-                       border: 1px solid rgba(0,0,0,0.2);"></span>
-          <strong>{{ adv.brand_gold }}</strong>
-          {% else %}<strong>not set</strong>{% endif %}
-        </span>
-      </div>
-      {% if adv.brand_logo_url and not adv.has_brand_logo %}
-      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.78rem; line-height: 1.6;">
-        Their logo is linked from
-        <code>{{ adv.brand_logo_url }}</code>. If it does not appear on their
-        session page, that address is unreachable from a browser — many sites
-        block other sites from loading their images. Upload the file instead;
-        an upload cannot break.
-      </p>
-      {% endif %}
-      <p class="muted" style="margin: 0 0 1rem; font-size: 0.82rem;">
-        {% if adv.persona_principal %}
-        <br />Speaks as a voice grounded in {{ adv.persona_principal }}'s thinking.
-        {% endif %}
-        {% if adv.referral_email %}
-        <br />Participants are sent to {{ adv.referral_email }}.
-        {% endif %}
-      </p>
-
-      {# Their knowledge base, scoped to them. The Knowledge tab can do this
-         too, but only by remembering to pick the right advisor from a
-         dropdown of everyone — which is the step that gets missed, and the
-         consequence is a client's material answering someone else's
-         questions. Here the advisor is not a choice. #}
-      <details class="advisor-section">
-        <summary>Their documents{% if advisor_docs.get(adv.slug) %}
-          ({{ advisor_docs.get(adv.slug)|length }}){% endif %}</summary>
-        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.8rem; line-height: 1.6;">
-          Retrieved only for {{ adv.name }}'s sessions. The shared
-          {{ org_short }} base is still available to them on top of this —
-          these are the documents nobody else can see.
-        </p>
-        {% set their_docs = advisor_docs.get(adv.slug) %}
-        {% if their_docs %}
-        <ul class="muted" style="margin: 0 0 0.9rem; padding-left: 1.1rem;
-                                 font-size: 0.82rem; line-height: 1.7;">
-          {% for d in their_docs %}<li>{{ d.title }}</li>{% endfor %}
-        </ul>
-        {% else %}
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
-          Nothing yet. Their sessions draw on the shared {{ org_short }} base
-          until something is added here.
-        </p>
-        {% endif %}
-        <form method="POST" action="/admin/upload" enctype="multipart/form-data"
-              class="upload">
-          <input type="file" name="file"
-                 accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
-          <input type="text" name="title" placeholder="Document title (optional)" />
-          <input type="hidden" name="owner" value="{{ adv.slug }}" />
-          <input type="hidden" name="return_to" value="clients" />
-          <button type="submit" class="btn">Upload &amp; Embed</button>
-        </form>
-        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
-          PDF, Word, Excel, PowerPoint, CSV, TXT, MD or RTF, up to
-          {{ cfg.max_upload_mb }} MB. Chunked and embedded automatically.
-        </p>
-      </details>
-
-      {# Issued here rather than on the Advisors tab, because the engagement
-         no longer appears there. Without this there would be no way to give
-         anyone on their team a link. #}
-      {{ participant_links_section(adv.slug, adv.name,
-                                   participant_links_by_advisor.get(adv.slug, []),
-                                   admin_perms.edit_participant_links,
-                                   "clients") }}
-
-      <details class="advisor-section">
-        <summary>Photo</summary>
-        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
-          Shown beside the conversation. Without one, participants see a
-          monogram built from the advisor's initials.
-        </p>
-        <form method="POST" action="/admin/advisors" enctype="multipart/form-data">
-          <input type="hidden" name="slug" value="{{ adv.slug }}" />
-          <input type="hidden" name="name" value="{{ adv.name }}" />
-          <input type="hidden" name="return_to" value="clients" />
-          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
-          <button type="submit" class="btn" style="margin-left: 0.4rem;">Save photo</button>
-        </form>
-        <div style="display: flex; align-items: center; gap: 0.8rem;
-                    flex-wrap: wrap; margin-top: 0.9rem;">
-          <img src="/a/{{ adv.slug }}/photo.jpg?v={{ avatar_version }}" alt=""
-               style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;" />
-          <span class="muted" style="font-size: 0.8rem;">
-            Currently: {% if adv.has_photo %}an uploaded photo{% else %}initials in the client's colors{% endif %}
-          </span>
-          {% if adv.has_photo %}
-          <form method="POST" action="/admin/clients/{{ adv.slug }}/use-initials" style="margin: 0;">
-            <button type="submit" class="btn-quiet" style="font-size: 0.78rem;">
-              Remove photo and use client-branded initials</button>
-          </form>
-          {% endif %}
-        </div>
-      </details>
-    <details class="advisor-section">
-      <summary>Name &amp; persona</summary>
-      <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
-        Logo and colors come from {{ adv.brand_label }} — change them in the
-        organization's card above.</p>
-      <form method="POST" action="/admin/clients/{{ adv.slug }}/rename"
-            style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
-        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">Advisor participants talk to
-          <input type="text" name="name" value="{{ adv.name }}" required style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-        <button type="submit" class="btn">Rename</button>
-      </form>
-      <div style="margin-top: 1.4rem; padding-top: 1.2rem;
-                  border-top: 1px dashed var(--line);">
-        <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-          By default every advisor speaks as a voice grounded in
-          {{ org_principal }}'s thinking and sends people to
-          {{ cfg.contact_email }}. For an advisor built for a client's own
-          team — their leader's voice, used inside their organization —
-          both of those are wrong.
-        </p>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-          <strong>This builds a persona of a real, named person.</strong>
-          Their agreement is not a formality: their name, their thinking
-          and potentially their voice will answer questions from people
-          who report to them. Record who confirmed it and when — the
-          field is required, and nothing is saved without it.
-        </p>
-        <form method="POST" action="/admin/advisors/persona/{{ adv.slug }}">
-          <div style="display: grid; gap: 0.7rem;
-                      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
-            <label style="font-size: 0.8rem;">Grounded in whose thinking
-              <input type="text" name="persona_principal"
-                     value="{{ adv.persona_principal }}"
-                     placeholder="{{ org_principal }}"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            <label style="font-size: 0.8rem;">Send participants to
-              <input type="text" name="referral_email"
-                     value="{{ adv.referral_email }}"
-                     placeholder="{{ cfg.contact_email }}"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-          </div>
-          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
-            Who confirmed their agreement, and when
-            <input type="text" name="principal_consent"
-                   value="{{ adv.principal_consent }}"
-                   placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          {% if adv.principal_consent %}
-          <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.78rem;">
-            On record: {{ adv.principal_consent }}
-          </p>
-          {% endif %}
-          <button type="submit" class="btn" style="margin-top: 0.9rem;">Save persona</button>
-        </form>
-      </div>
-    </details>
-      {% if admin_perms.edit_advisors %}
-      <div style="margin-top: 1.2rem; padding-top: 0.9rem;
-                  border-top: 1px solid var(--line); display: flex;
-                  align-items: center; justify-content: space-between;
-                  gap: 0.8rem; flex-wrap: wrap;">
-        <span class="muted" style="font-size: 0.8rem;">
-          Removing this engagement stops its session link and disables its
-          participant links. Documents and conversation logs are kept.
-        </span>
-        <form method="POST" action="/admin/clients/delete/{{ adv.slug }}"
-              style="margin: 0;" data-doc-title="{{ adv.name }}">
-          <button type="submit" class="btn-danger">Delete engagement</button>
-        </form>
-      </div>
-      {% endif %}
-    </details>
-    {% endfor %}
-    {% if not org_advisors %}
-    <p class="muted" style="margin: 0.4rem 0 0 0.4rem; font-size: 0.82rem;">
-      No advisors in {{ org.name }} yet — add one in its card above.</p>
-    {% endif %}
-    {% endfor %}
-    {% else %}
-    <p class="muted">
-      No client organizations yet. The form above creates one.
-    </p>
-    {% endif %}
-  </div>
-  {% endif %}
-
-  {% if active_tab == "biometric" %}
-  <div class="tab-pane" data-tab="biometric">
-    <h2 class="group-heading">Biometric Data</h2>
-
-    <details class="section">
-      <summary>
-        <h2>Upload a file</h2>
-        <span class="section-note">Apple Health, Oura, Whoop exports</span>
-      </summary>
-      <p class="muted" style="margin: 0 0 1rem 0;">
-        Attach a wearable or lab export to a participant's email — CSV, PDF,
-        XLSX, whatever their device or provider produces. Up to 20 MB.
-        Nothing uploaded here is read by the advisor; it's for the J3P team
-        only.
-      </p>
-      <form method="POST" action="/admin/biometric/upload" enctype="multipart/form-data" class="upload">
-        <input type="email" name="participant_email" placeholder="participant@email.com" required
-               style="flex: 1 1 220px; padding: 0.5rem; border: 1px solid var(--line);
-                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-        <input type="text" name="notes" placeholder="Notes (optional) — e.g. Oura sleep export, Aug 2026"
-               style="flex: 2 1 260px; padding: 0.5rem; border: 1px solid var(--line);
-                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
-        <input type="file" name="file" required
-               style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
-                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
-        <button type="submit" class="btn">Upload</button>
-      </form>
-    </details>
-
-    <details class="section" open>
-      <summary>
-        <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
-        <span class="section-note">{{ biometric_files|length }} file{{ 's' if biometric_files|length != 1 }}</span>
-      </summary>
-      {% if biometric_files %}
-      {% for email, files in biometric_files|groupby('participant_email') %}
-      <h3 style="margin: {{ '0' if loop.first else '1.4rem' }} 0 0.6rem;
-                 font-size: 0.8rem; letter-spacing: 0.06em; color: var(--navy);">
-        {{ email }}
-      </h3>
-      <table style="font-size: 0.8rem; margin-bottom: 0.5rem;">
-        <tr>
-          <th style="width: 26%;">Title</th><th>Notes</th>
-          <th style="width: 10%; text-align: right;">Size</th>
-          <th style="width: 16%;">Uploaded</th><th style="width: 10%;"></th>
-        </tr>
-        {% for f in files %}
-        <tr>
-          <td class="kb-title">
-            <a href="/admin/biometric/download/{{ f.id }}">{{ f.title }}</a>
-          </td>
-          <td class="muted">{{ f.notes or '—' }}</td>
-          <td style="text-align: right;">{{ (f.size_bytes / 1024)|round(1) }} KB</td>
-          <td class="muted kb-date">{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
-          <td style="text-align: right;">
-            <form method="POST" action="/admin/biometric/delete/{{ f.id }}" style="display:inline;"
-                  data-doc-title="{{ f.title }} ({{ email }})">
-              <button type="submit" class="btn btn-danger">Delete</button>
-            </form>
-          </td>
-        </tr>
-        {% endfor %}
-      </table>
-      {% endfor %}
-      {% else %}
-      <p class="muted" style="margin: 0;">No files uploaded yet.</p>
-      {% endif %}
-    </details>
-  </div>
-  {% endif %}
-
-  {% if active_tab == "overview" %}
-  <div class="tab-pane" data-tab="overview">
-    <h2 class="group-heading">Overview</h2>
-    <div class="section">
-      <h2>At a Glance</h2>
-      <div class="stats">
-        <div class="stat">
-          <div class="stat-value is-good">{{ stats.up }}</div>
-          <div class="stat-label">Thumbs up</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value {{ 'is-bad' if stats.down else '' }}">{{ stats.down }}</div>
-          <div class="stat-label">Thumbs down</div>
-        </div>
-        {# Color the rate by what it actually says: 80%+ is healthy, under
-           60% wants looking at. A figure that is always green says nothing. #}
-        {% set rate = (100 * stats.up / stats.total)|round(0)|int if stats.total else None %}
-        <div class="stat">
-          <div class="stat-value {{ '' if rate is none
-                                    else ('is-good' if rate >= 80
-                                          else ('is-warn' if rate >= 60 else 'is-bad')) }}">
-            {% if rate is not none %}{{ rate }}%{% else %}—{% endif %}
-          </div>
-          <div class="stat-label">Helpful rate</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value is-info">{{ docs|length if rag_ready else '—' }}</div>
-          <div class="stat-label">Documents</div>
-        </div>
-        {% set _client_advs = advisors | selectattr("is_client_engagement") | list %}
-        <div class="stat">
-          <div class="stat-value is-info">{{ advisors|length - _client_advs|length + 1 }}</div>
-          <div class="stat-label">J3P Advisors</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value is-info">{{ client_orgs|length }}</div>
-          <div class="stat-label">External Clients</div>
-          <div class="muted" style="font-size: 0.72rem; margin-top: 0.2rem;">
-            {{ _client_advs|length }} client advisor{{ '' if _client_advs|length == 1 else 's' }}</div>
-        </div>
-        <div class="stat">
-          <div class="stat-value {{ 'is-good' if settings.require_login else 'is-warn' }}"
-               style="font-size: 1.5rem;">{{ 'Required' if settings.require_login else 'Open' }}</div>
-          <div class="stat-label">Sign-in</div>
-        </div>
-      </div>
-      <p class="muted" style="margin: 1.2rem 0 0; font-size: 0.82rem;">
-        Full detail on ratings, learning runs and briefings is under
-        <strong>Activity</strong>; documents and uploads are under
-        <strong>Knowledge</strong>.
-      </p>
-    </div>
-  </div>
-  {% endif %}
-
     {% macro voice_sample_section(t_slug, t_name, t_voice_sample, can_edit_voice) %}
       {% if can_edit_voice %}
       <details class="advisor-section">
@@ -19444,6 +18940,756 @@ details.section[open] > summary {
       </details>
       {% endif %}
     {% endmacro %}
+
+  {% if active_tab == "clients" %}
+  <div class="tab-pane" data-tab="clients">
+
+    <h2 class="group-heading">New client organization</h2>
+    <details class="section" open>
+      <summary>
+        <h2>Add an organization</h2>
+        <span class="section-note">then add its advisors</span>
+      </summary>
+      <p class="muted" style="margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6;">
+        The organization — for example Dartmouth Cancer Center — owns the logo,
+        colors and name on the release. The advisors participants talk to —
+        for example John Sample, MD — are added under it once it exists.
+        Enter their website and the logo and colors are read from it; anything
+        you type yourself wins. Separate from { org_short }'s own advisors.
+      </p>
+      <form method="POST" action="/admin/orgs/create" enctype="multipart/form-data">
+        <div style="display: grid; gap: 0.8rem;
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label style="font-size: 0.82rem;">Organization <span class="muted">(required)</span>
+            <input type="text" name="name" required placeholder="e.g. Dartmouth Cancer Center" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Their website
+            <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Header color <span class="muted">(optional)</span>
+            <input type="text" name="navy" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Accent color <span class="muted">(optional)</span>
+            <input type="text" name="gold" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Send participants to <span class="muted">(optional)</span>
+            <input type="text" name="referral_email" placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Logo <span class="muted">(optional)</span>
+            <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
+                   style="display: block; margin-top: 0.35rem;" />
+          </label>
+        </div>
+        <button type="submit" class="btn" style="margin-top: 1rem;">Create organization</button>
+      </form>
+    </details>
+
+    <h2 class="group-heading">Client organizations</h2>
+    {% set client_advisors = advisors | rejectattr("internal_only")
+                             | selectattr("is_client_engagement") | list %}
+    {% if client_orgs %}
+    {% for org in client_orgs %}
+    {% set org_advisors = client_advisors | selectattr("client_org", "equalto", org.slug) | list %}
+    <details class="section" open style="margin-top: 1.6rem; border-left: 4px solid {{ org.navy or cfg.navy }};">
+      <summary>
+        <h2>{{ org.name }}</h2>
+        <span class="section-note">{{ org_advisors|length }} advisor{{ '' if org_advisors|length == 1 else 's' }}</span>
+      </summary>
+      <div style="display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 0.9rem;">
+        {% if org.has_logo %}
+        <img src="/admin/orgs/{{ org.slug }}/logo" alt=""
+             style="max-height: 42px; max-width: 220px; background: {{ org.navy or cfg.navy }};
+                    padding: 0.4rem 0.6rem; border-radius: 4px;" />
+        {% endif %}
+        <span class="muted" style="font-size: 0.82rem;">
+          Header: <strong>{{ org.navy or "not set" }}</strong> &middot;
+          Accent: <strong>{{ org.gold or "not set" }}</strong>
+        </span>
+      </div>
+      {% if admin_perms.edit_advisors %}
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/website"
+            style="margin: 0 0 1rem; display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
+        <label style="font-size: 0.8rem; flex: 1; min-width: 260px;">Website
+          <input type="text" name="site_url" value="{{ org.site_url }}"
+                 placeholder="e.g. cedars-sinai.org"
+                 style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                        border: 1px solid var(--line); border-radius: 5px;" />
+        </label>
+        <button type="submit" class="btn">Save &amp; re-read logo and colors</button>
+      </form>
+      {% endif %}
+
+      {% if admin_perms.edit_advisors %}
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
+            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;">
+        <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">
+          Add an advisor to {{ org.name }}</div>
+        <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label style="font-size: 0.8rem;">Advisor participants talk to
+            <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
+            <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+        </div>
+        <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
+      </form>
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/intake"
+            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;
+                   display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
+        <div style="font-size: 0.85rem; font-weight: 600; width: 100%;">
+          Participant intake for {{ org.name }}</div>
+        {% for key, lbl, site_on in [("context_intake", "Position &amp; specialization questions", settings.context_intake_enabled),
+                                     ("personality", "Personality survey", settings.personality_assessment_enabled)] %}
+        {% set cur = org[key] %}
+        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">{{ lbl|safe }}
+          <select name="{{ key }}" onchange="this.form.submit()"
+                  style="width: 100%; padding: 0.42rem; border: 1px solid var(--line);
+                         border-radius: 5px; background: var(--paper); font-family: inherit;">
+            <option value="1" {% if cur is sameas true %}selected{% endif %}>On</option>
+            <option value="0" {% if cur is sameas false %}selected{% endif %}>Off</option>
+            <option value="" {% if cur is none %}selected{% endif %}>Site default ({{ "on" if site_on else "off" }})</option>
+          </select>
+        </label>
+        {% endfor %}
+        <p class="muted" style="margin: 0; font-size: 0.76rem; width: 100%;">
+          Applies to every advisor in this organization. One person's link can still
+          be set differently in its Participant Links row.</p>
+      </form>
+      {% endif %}
+
+      <details class="advisor-section">
+        <summary>Organization branding</summary>
+        <form method="POST" action="/admin/orgs/{{ org.slug }}/branding" enctype="multipart/form-data">
+          <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+            <label style="font-size: 0.8rem;">Organization name
+              <input type="text" name="name" value="{{ org.name }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Website
+              <input type="text" name="site_url" value="{{ org.site_url }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Header color
+              <input type="text" name="navy" value="{{ org.navy }}" placeholder="#27334A" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Accent color
+              <input type="text" name="gold" value="{{ org.gold }}" placeholder="#D2BC8D" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Send participants to
+              <input type="text" name="referral_email" value="{{ org.referral_email }}"
+                     placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Replace logo
+              <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
+                     style="display: block; margin-top: 0.35rem;" /></label>
+          </div>
+          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
+            <input type="checkbox" name="reread" value="1" /> Re-read logo and colors from the website</label>
+          {% if org.has_logo %}
+          <label style="display: block; margin-top: 0.3rem; font-size: 0.8rem;">
+            <input type="checkbox" name="remove_logo" value="1" /> Remove the logo</label>
+          {% endif %}
+          <button type="submit" class="btn" style="margin-top: 0.8rem;">Save and apply to all advisors</button>
+        </form>
+        {% if not org_advisors %}
+        <form method="POST" action="/admin/orgs/{{ org.slug }}/delete" style="margin-top: 0.8rem;"
+              data-doc-title="{{ org.name }}">
+          <button type="submit" class="btn-danger">Delete organization</button>
+        </form>
+        {% endif %}
+      </details>
+    </details>
+    {% for adv in org_advisors %}
+    <details class="section" style="margin-left: 1.6rem;">
+      <summary>
+        <h2>{{ adv.name }}</h2>
+        <span class="section-note">
+          {{ adv.brand_label or "no organization set" }}
+        </span>
+      </summary>
+      <div style="display: flex; align-items: center; gap: 0.45rem;
+                  flex-wrap: wrap; margin: 0 0 0.6rem;">
+        <span class="muted" style="font-size: 0.82rem;">Their session link:</span>
+        <a href="{{ base_url }}/a/{{ adv.slug }}" target="_blank"
+           class="adv-link">{{ base_url }}/a/{{ adv.slug }}</a>
+        {# data-url, not data-copy: that is the attribute the handler at the
+           bottom of this page reads. The internal advisor's Copy button used
+           data-copy and has therefore never copied anything. #}
+        <button type="button" class="copy-link"
+                data-url="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
+        <button type="button" class="share-link"
+                data-url="{{ base_url }}/a/{{ adv.slug }}"
+                data-advisor="{{ adv.name }}">Share</button>
+      </div>
+      {# What is actually stored, rather than what was intended. A colour
+         that never saved and a colour that saved as the site default look
+         identical on the session page, and the only way to tell them apart
+         was to read the database. #}
+      <div style="display: flex; gap: 1.4rem; flex-wrap: wrap; margin: 0 0 0.9rem;
+                  font-size: 0.78rem;" class="muted">
+        <span>
+          Logo:
+          {% if adv.has_brand_logo %}<strong>uploaded</strong>
+          {% elif adv.brand_logo_url %}<strong>from a URL</strong>
+          {% else %}<strong>not set</strong> — using this site's
+          {% endif %}
+        </span>
+        <span>
+          Header:
+          {% if adv.brand_navy %}
+          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
+                       border-radius: 2px; vertical-align: -1px;
+                       background: {{ adv.brand_navy }};
+                       border: 1px solid rgba(0,0,0,0.2);"></span>
+          <strong>{{ adv.brand_navy }}</strong>
+          {% else %}<strong>not set</strong>{% endif %}
+        </span>
+        <span>
+          Accent:
+          {% if adv.brand_gold %}
+          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
+                       border-radius: 2px; vertical-align: -1px;
+                       background: {{ adv.brand_gold }};
+                       border: 1px solid rgba(0,0,0,0.2);"></span>
+          <strong>{{ adv.brand_gold }}</strong>
+          {% else %}<strong>not set</strong>{% endif %}
+        </span>
+      </div>
+      {% if adv.brand_logo_url and not adv.has_brand_logo %}
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.78rem; line-height: 1.6;">
+        Their logo is linked from
+        <code>{{ adv.brand_logo_url }}</code>. If it does not appear on their
+        session page, that address is unreachable from a browser — many sites
+        block other sites from loading their images. Upload the file instead;
+        an upload cannot break.
+      </p>
+      {% endif %}
+      <p class="muted" style="margin: 0 0 1rem; font-size: 0.82rem;">
+        {% if adv.persona_principal %}
+        <br />Speaks as a voice grounded in {{ adv.persona_principal }}'s thinking.
+        {% endif %}
+        {% if adv.referral_email %}
+        <br />Participants are sent to {{ adv.referral_email }}.
+        {% endif %}
+      </p>
+
+      {# Their knowledge base, scoped to them. The Knowledge tab can do this
+         too, but only by remembering to pick the right advisor from a
+         dropdown of everyone — which is the step that gets missed, and the
+         consequence is a client's material answering someone else's
+         questions. Here the advisor is not a choice. #}
+      <details class="advisor-section">
+        <summary>Their documents{% if advisor_docs.get(adv.slug) %}
+          ({{ advisor_docs.get(adv.slug)|length }}){% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.8rem; line-height: 1.6;">
+          Retrieved only for {{ adv.name }}'s sessions. The shared
+          {{ org_short }} base is still available to them on top of this —
+          these are the documents nobody else can see.
+        </p>
+        {% set their_docs = advisor_docs.get(adv.slug) %}
+        {% if their_docs %}
+        <ul class="muted" style="margin: 0 0 0.9rem; padding-left: 1.1rem;
+                                 font-size: 0.82rem; line-height: 1.7;">
+          {% for d in their_docs %}<li>{{ d.title }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
+          Nothing yet. Their sessions draw on the shared {{ org_short }} base
+          until something is added here.
+        </p>
+        {% endif %}
+        <form method="POST" action="/admin/upload" enctype="multipart/form-data"
+              class="upload">
+          <input type="file" name="file"
+                 accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
+          <input type="text" name="title" placeholder="Document title (optional)" />
+          <input type="hidden" name="owner" value="{{ adv.slug }}" />
+          <input type="hidden" name="return_to" value="clients" />
+          <button type="submit" class="btn">Upload &amp; Embed</button>
+        </form>
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
+          PDF, Word, Excel, PowerPoint, CSV, TXT, MD or RTF, up to
+          {{ cfg.max_upload_mb }} MB. Chunked and embedded automatically.
+        </p>
+      </details>
+
+      {# Issued here rather than on the Advisors tab, because the engagement
+         no longer appears there. Without this there would be no way to give
+         anyone on their team a link. #}
+      {{ participant_links_section(adv.slug, adv.name,
+                                   participant_links_by_advisor.get(adv.slug, []),
+                                   admin_perms.edit_participant_links,
+                                   "clients") }}
+
+      <details class="advisor-section">
+        <summary>Photo</summary>
+        <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
+          Shown beside the conversation. Without one, participants see a
+          monogram built from the advisor's initials.
+        </p>
+        <form method="POST" action="/admin/advisors" enctype="multipart/form-data">
+          <input type="hidden" name="slug" value="{{ adv.slug }}" />
+          <input type="hidden" name="name" value="{{ adv.name }}" />
+          <input type="hidden" name="return_to" value="clients" />
+          <input type="file" name="photo" accept=".jpg,.jpeg,.png,.webp,.gif" />
+          <button type="submit" class="btn" style="margin-left: 0.4rem;">Save photo</button>
+        </form>
+        <div style="display: flex; align-items: center; gap: 0.8rem;
+                    flex-wrap: wrap; margin-top: 0.9rem;">
+          <img src="/a/{{ adv.slug }}/photo.jpg?v={{ avatar_version }}" alt=""
+               style="width: 48px; height: 48px; border-radius: 50%; object-fit: cover;" />
+          <span class="muted" style="font-size: 0.8rem;">
+            Currently: {% if adv.has_photo %}an uploaded photo{% else %}initials in the client's colors{% endif %}
+          </span>
+          {% if adv.has_photo %}
+          <form method="POST" action="/admin/clients/{{ adv.slug }}/use-initials" style="margin: 0;">
+            <button type="submit" class="btn-quiet" style="font-size: 0.78rem;">
+              Remove photo and use client-branded initials</button>
+          </form>
+          {% endif %}
+        </div>
+      </details>
+
+      {# Same controls as a J3P advisor's card on the Advisors tab. Forms
+         return here rather than to Advisors (see _return_to_clients). #}
+      <div class="advisor-section-group is-links">Links</div>
+      <details class="advisor-section">
+        <summary>Booking button</summary>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          Whether {{ adv.name }}'s sessions show
+          "Schedule time with {{ adv.name }}" under the composer. Individual
+          participant links can override this below.
+        </p>
+        <form method="POST" action="/admin/advisors/scheduling/{{ adv.slug }}"
+              style="display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap;">
+          <select name="show_scheduling"
+                  style="padding: 0.45rem; border: 1px solid var(--line);
+                         border-radius: 2px; font-family: inherit; font-size: 0.85rem;">
+            <option value="" {% if adv.show_scheduling_override is none %}selected{% endif %}>
+              Follow the site setting ({{ "shown" if settings.show_scheduling_button else "hidden" }})
+            </option>
+            <option value="1" {% if adv.show_scheduling_override is sameas true %}selected{% endif %}>Always show</option>
+            <option value="0" {% if adv.show_scheduling_override is sameas false %}selected{% endif %}>Always hide</option>
+          </select>
+          <button type="submit" class="btn">Save</button>
+        </form>
+        <p class="muted" style="margin: 0.9rem 0 0; font-size: 0.78rem; line-height: 1.6;">
+          Their session link is
+          <a href="/a/{{ adv.slug }}" target="_blank" class="adv-link">{{ base_url }}/a/{{ adv.slug }}</a>,
+          listed with the rest under Participant Links.
+        </p>
+      </details>
+
+      <div class="advisor-section-group is-setup">Setup</div>
+
+      {# A voice sample clones a real person's voice; onboarding records a
+         real person's assessments. An internal advisor is neither — it is a
+         mode of the J3P knowledge base. Leaving these on its card invites
+         someone to upload Alan's voice to it, or to wonder why its
+         onboarding is stuck at 0/2 forever. #}
+      {% if not adv.internal_only %}
+      {{ voice_sample_section(adv.slug, adv.name, adv.voice_sample, admin_perms.edit_voice) }}
+
+      {# A portal is a self-service link for an individual advisor to manage
+         their own documents. An internal advisor is not a person and has no
+         separate base to manage — offering one here invites building a
+         second knowledge base that nothing would read. #}
+      {% if not adv.internal_only %}
+      <details class="advisor-section">
+        <summary>Knowledge-Base Portal</summary>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          A dedicated link {{ adv.name }} can use to log in and manage their
+          own knowledge base — upload and remove their own documents,
+          without seeing the J3P base or other advisors' documents.
+        </p>
+        {% if adv.portal_token %}
+        <div class="advisor-link-row">
+          <div class="muted advisor-link-label">Their portal link</div>
+          <div style="display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap;">
+            <a href="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}" target="_blank"
+               class="adv-link">{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}</a>
+            <button type="button" class="copy-link"
+                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}">Copy</button>
+            <button type="button" class="share-link"
+                    data-url="{{ base_url }}/advisor-portal/{{ adv.slug }}/{{ adv.portal_token }}"
+                    data-advisor="{{ adv.name }}">Share</button>
+          </div>
+        </div>
+        <div style="display: flex; gap: 0.5rem; margin-top: 0.6rem;">
+          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+            <input type="hidden" name="action" value="generate" />
+            <button type="submit" class="btn" style="font-size: 0.64rem;"
+                    onclick="return confirm('Regenerate the link? The old one will stop working immediately.');">
+              Regenerate link
+            </button>
+          </form>
+          <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+            <input type="hidden" name="action" value="revoke" />
+            <button type="submit" class="btn-danger" style="font-size: 0.64rem;"
+                    onclick="return confirm('Revoke portal access for {{ adv.name }}? Their link will stop working.');">
+              Revoke access
+            </button>
+          </form>
+        </div>
+        {% else %}
+        <form method="POST" action="{{ url_for('admin_advisor_portal_token', slug=adv.slug) }}">
+          <input type="hidden" name="action" value="generate" />
+          <button type="submit" class="btn" style="font-size: 0.66rem;">Generate portal link</button>
+        </form>
+        {% endif %}
+      </details>
+      {% endif %}
+
+      <details class="advisor-section">
+        <summary>Onboarding</summary>
+        {% if admin_perms.edit_onboarding_data %}
+        <div style="display: flex; flex-wrap: wrap; gap: 1.5rem; margin-bottom: 1rem;">
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              Personality assessment
+            </div>
+            {% if adv.personality %}
+              <span style="color: #2D7D5F;">✓ Completed</span>
+              {{ adv.personality.completed_at.strftime("%Y-%m-%d") if adv.personality.completed_at else "" }}
+              — {{ personality_summary_tag(adv.personality.scores) }}
+            {% else %}
+              <span class="muted">Not yet completed</span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              Self behavioral assessment
+            </div>
+            {% if adv.behavioral %}
+              <span style="color: #2D7D5F;">✓ Completed</span>
+              {{ adv.behavioral.completed_at.strftime("%Y-%m-%d") if adv.behavioral.completed_at else "" }}
+              — {{ behavioral_summary_tag(adv.behavioral.scores) }}
+            {% else %}
+              <span class="muted">Not yet completed</span>
+            {% endif %}
+          </div>
+          <div style="font-size: 0.82rem;">
+            <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
+              360 feedback
+            </div>
+            {% if adv.feedback_360 %}
+              <a href="{{ url_for('admin_download_advisor_360', slug=adv.slug) }}">{{ adv.feedback_360.filename }}</a>
+              <span class="muted">({{ "%.1f"|format(adv.feedback_360.size_bytes / 1048576) }} MB)</span>
+            {% else %}
+              <span class="muted">Not yet uploaded</span>
+            {% endif %}
+          </div>
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          {{ adv.name }} completes the assessments and 360 upload from their own portal link above
+          — the personality and behavioral assessments are required before the rest of their portal opens up.
+        </p>
+        {% else %}
+        <p class="muted" style="margin: 0 0 1rem; font-size: 0.78rem;">
+          Personality assessment, behavioral assessment, and 360 feedback status
+          are only visible to Admin and Owner roles.
+        </p>
+        {% endif %}
+
+        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.4rem;">
+          Areas of expertise
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          {{ adv.name }}'s own subject-matter background — e.g. "academic
+          surgical leadership; conflict resolution with senior faculty."
+          Shown to participants, and given to the assistant itself so it
+          actually draws on this rather than sounding interchangeable with
+          any other advisor.
+        </p>
+        <form method="POST" action="{{ url_for('admin_save_advisor_expertise', slug=adv.slug) }}">
+          <textarea name="expertise" rows="2" {% if not admin_perms.edit_advisors %}disabled{% endif %}
+                    style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
+                           border-radius: 2px; font-family: inherit; font-size: 0.83rem;
+                           resize: vertical;">{{ adv.expertise }}</textarea>
+          {% if admin_perms.edit_advisors %}
+          <button type="submit" class="btn" style="font-size: 0.64rem; margin-top: 0.5rem;">Save expertise</button>
+          {% endif %}
+        </form>
+
+        <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin: 1rem 0 0.4rem;">
+          Client-facing bio
+        </div>
+        <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.78rem;">
+          A short "about your advisor" style preview. Shown to participants
+          in the chat itself, and — like expertise above — given to the
+          assistant too, so its actual tone is accountable to what this
+          promises rather than only coincidentally matching it. Nothing here
+          is written or shown automatically — review and edit before saving.
+        </p>
+        <form method="POST" action="{{ url_for('admin_save_advisor_bio', slug=adv.slug) }}">
+          <textarea name="client_bio" id="bio-{{ adv.slug }}" rows="3" {% if not admin_perms.edit_advisors %}disabled{% endif %}
+                    style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--line);
+                           border-radius: 2px; font-family: inherit; font-size: 0.83rem;
+                           resize: vertical;">{{ adv.client_bio }}</textarea>
+          {% if admin_perms.edit_advisors %}
+          <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; align-items: center;">
+            <button type="submit" class="btn" style="font-size: 0.64rem;">Save bio</button>
+            {% if adv.suggested_bio %}
+            <button type="button" class="btn" style="font-size: 0.64rem; background: transparent; color: var(--navy); border-color: var(--navy);"
+                    onclick="document.getElementById('bio-{{ adv.slug }}').value = {{ adv.suggested_bio|tojson }};">
+              Use suggested (from personality assessment)
+            </button>
+            {% endif %}
+          </div>
+          {% endif %}
+        </form>
+      </details>
+      {% endif %}
+
+      {% if not adv.internal_only %}
+      <div class="advisor-section-group is-activity">Activity</div>
+
+      <details class="advisor-section">
+        <summary>Pre-Call Briefings{% if adv.briefings %} ({{ adv.briefings|length }}){% endif %}</summary>
+        {% if adv.briefings %}
+        <table style="font-size: 0.8rem;">
+          <tr><th style="width: 22%;">When</th><th>Participant</th>
+              <th style="width: 16%;">Brief</th><th style="width: 12%;">Emailed</th></tr>
+          {% for b in adv.briefings %}
+          <tr>
+            <td class="muted" style="white-space: nowrap;">{{ b.when }}</td>
+            <td class="muted">{{ b.participant }}</td>
+            <td>
+              <details>
+                <summary style="cursor: pointer; color: var(--muted);
+                                font-size: 0.76rem;">Read</summary>
+                <pre style="white-space: pre-wrap; font-size: 0.74rem;
+                            background: var(--paper); padding: 0.6rem;
+                            border-radius: 3px; margin: 0.4rem 0 0;
+                            font-family: inherit;">{{ b.summary }}</pre>
+              </details>
+            </td>
+            <td class="muted">{{ '✓' if b.emailed else '—' }}</td>
+          </tr>
+          {% endfor %}
+        </table>
+        {% else %}
+        <p class="muted" style="margin: 0; font-size: 0.8rem;">
+          None yet. One is prepared whenever someone books time through
+          {{ adv.name }}'s links.
+        </p>
+        {% endif %}
+      </details>
+      {% endif %}
+    <details class="advisor-section">
+      <summary>Name &amp; persona</summary>
+      <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
+        Logo and colors come from {{ adv.brand_label }} — change them in the
+        organization's card above.</p>
+      <form method="POST" action="/admin/clients/{{ adv.slug }}/rename"
+            style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
+        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">Advisor participants talk to
+          <input type="text" name="name" value="{{ adv.name }}" required style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+        <button type="submit" class="btn">Rename</button>
+      </form>
+      <div style="margin-top: 1.4rem; padding-top: 1.2rem;
+                  border-top: 1px dashed var(--line);">
+        <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          By default every advisor speaks as a voice grounded in
+          {{ org_principal }}'s thinking and sends people to
+          {{ cfg.contact_email }}. For an advisor built for a client's own
+          team — their leader's voice, used inside their organization —
+          both of those are wrong.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          <strong>This builds a persona of a real, named person.</strong>
+          Their agreement is not a formality: their name, their thinking
+          and potentially their voice will answer questions from people
+          who report to them. Record who confirmed it and when — the
+          field is required, and nothing is saved without it.
+        </p>
+        <form method="POST" action="/admin/advisors/persona/{{ adv.slug }}">
+          <div style="display: grid; gap: 0.7rem;
+                      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
+            <label style="font-size: 0.8rem;">Grounded in whose thinking
+              <input type="text" name="persona_principal"
+                     value="{{ adv.persona_principal }}"
+                     placeholder="{{ org_principal }}"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Send participants to
+              <input type="text" name="referral_email"
+                     value="{{ adv.referral_email }}"
+                     placeholder="{{ cfg.contact_email }}"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+          </div>
+          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
+            Who confirmed their agreement, and when
+            <input type="text" name="principal_consent"
+                   value="{{ adv.principal_consent }}"
+                   placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          {% if adv.principal_consent %}
+          <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.78rem;">
+            On record: {{ adv.principal_consent }}
+          </p>
+          {% endif %}
+          <button type="submit" class="btn" style="margin-top: 0.9rem;">Save persona</button>
+        </form>
+      </div>
+    </details>
+      {% if admin_perms.edit_advisors %}
+      <div style="margin-top: 1.2rem; padding-top: 0.9rem;
+                  border-top: 1px solid var(--line); display: flex;
+                  align-items: center; justify-content: space-between;
+                  gap: 0.8rem; flex-wrap: wrap;">
+        <span class="muted" style="font-size: 0.8rem;">
+          Removing this engagement stops its session link and disables its
+          participant links. Documents and conversation logs are kept.
+        </span>
+        <form method="POST" action="/admin/clients/delete/{{ adv.slug }}"
+              style="margin: 0;" data-doc-title="{{ adv.name }}">
+          <button type="submit" class="btn-danger">Delete engagement</button>
+        </form>
+      </div>
+      {% endif %}
+    </details>
+    {% endfor %}
+    {% if not org_advisors %}
+    <p class="muted" style="margin: 0.4rem 0 0 0.4rem; font-size: 0.82rem;">
+      No advisors in {{ org.name }} yet — add one in its card above.</p>
+    {% endif %}
+    {% endfor %}
+    {% else %}
+    <p class="muted">
+      No client organizations yet. The form above creates one.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if active_tab == "biometric" %}
+  <div class="tab-pane" data-tab="biometric">
+    <h2 class="group-heading">Biometric Data</h2>
+
+    <details class="section">
+      <summary>
+        <h2>Upload a file</h2>
+        <span class="section-note">Apple Health, Oura, Whoop exports</span>
+      </summary>
+      <p class="muted" style="margin: 0 0 1rem 0;">
+        Attach a wearable or lab export to a participant's email — CSV, PDF,
+        XLSX, whatever their device or provider produces. Up to 20 MB.
+        Nothing uploaded here is read by the advisor; it's for the J3P team
+        only.
+      </p>
+      <form method="POST" action="/admin/biometric/upload" enctype="multipart/form-data" class="upload">
+        <input type="email" name="participant_email" placeholder="participant@email.com" required
+               style="flex: 1 1 220px; padding: 0.5rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="text" name="notes" placeholder="Notes (optional) — e.g. Oura sleep export, Aug 2026"
+               style="flex: 2 1 260px; padding: 0.5rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.85rem;" />
+        <input type="file" name="file" required
+               style="flex: 1 1 220px; padding: 0.4rem; border: 1px solid var(--line);
+                      border-radius: 2px; font-family: inherit; font-size: 0.8rem;" />
+        <button type="submit" class="btn">Upload</button>
+      </form>
+    </details>
+
+    <details class="section" open>
+      <summary>
+        <h2>Files{% if biometric_files %} ({{ biometric_files|length }}){% endif %}</h2>
+        <span class="section-note">{{ biometric_files|length }} file{{ 's' if biometric_files|length != 1 }}</span>
+      </summary>
+      {% if biometric_files %}
+      {% for email, files in biometric_files|groupby('participant_email') %}
+      <h3 style="margin: {{ '0' if loop.first else '1.4rem' }} 0 0.6rem;
+                 font-size: 0.8rem; letter-spacing: 0.06em; color: var(--navy);">
+        {{ email }}
+      </h3>
+      <table style="font-size: 0.8rem; margin-bottom: 0.5rem;">
+        <tr>
+          <th style="width: 26%;">Title</th><th>Notes</th>
+          <th style="width: 10%; text-align: right;">Size</th>
+          <th style="width: 16%;">Uploaded</th><th style="width: 10%;"></th>
+        </tr>
+        {% for f in files %}
+        <tr>
+          <td class="kb-title">
+            <a href="/admin/biometric/download/{{ f.id }}">{{ f.title }}</a>
+          </td>
+          <td class="muted">{{ f.notes or '—' }}</td>
+          <td style="text-align: right;">{{ (f.size_bytes / 1024)|round(1) }} KB</td>
+          <td class="muted kb-date">{{ f.uploaded_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td style="text-align: right;">
+            <form method="POST" action="/admin/biometric/delete/{{ f.id }}" style="display:inline;"
+                  data-doc-title="{{ f.title }} ({{ email }})">
+              <button type="submit" class="btn btn-danger">Delete</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </table>
+      {% endfor %}
+      {% else %}
+      <p class="muted" style="margin: 0;">No files uploaded yet.</p>
+      {% endif %}
+    </details>
+  </div>
+  {% endif %}
+
+  {% if active_tab == "overview" %}
+  <div class="tab-pane" data-tab="overview">
+    <h2 class="group-heading">Overview</h2>
+    <div class="section">
+      <h2>At a Glance</h2>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-value is-good">{{ stats.up }}</div>
+          <div class="stat-label">Thumbs up</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value {{ 'is-bad' if stats.down else '' }}">{{ stats.down }}</div>
+          <div class="stat-label">Thumbs down</div>
+        </div>
+        {# Color the rate by what it actually says: 80%+ is healthy, under
+           60% wants looking at. A figure that is always green says nothing. #}
+        {% set rate = (100 * stats.up / stats.total)|round(0)|int if stats.total else None %}
+        <div class="stat">
+          <div class="stat-value {{ '' if rate is none
+                                    else ('is-good' if rate >= 80
+                                          else ('is-warn' if rate >= 60 else 'is-bad')) }}">
+            {% if rate is not none %}{{ rate }}%{% else %}—{% endif %}
+          </div>
+          <div class="stat-label">Helpful rate</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value is-info">{{ docs|length if rag_ready else '—' }}</div>
+          <div class="stat-label">Documents</div>
+        </div>
+        {% set _client_advs = advisors | selectattr("is_client_engagement") | list %}
+        <div class="stat">
+          <div class="stat-value is-info">{{ advisors|length - _client_advs|length + 1 }}</div>
+          <div class="stat-label">J3P Advisors</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value is-info">{{ client_orgs|length }}</div>
+          <div class="stat-label">External Clients</div>
+          <div class="muted" style="font-size: 0.72rem; margin-top: 0.2rem;">
+            {{ _client_advs|length }} client advisor{{ '' if _client_advs|length == 1 else 's' }}</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value {{ 'is-good' if settings.require_login else 'is-warn' }}"
+               style="font-size: 1.5rem;">{{ 'Required' if settings.require_login else 'Open' }}</div>
+          <div class="stat-label">Sign-in</div>
+        </div>
+      </div>
+      <p class="muted" style="margin: 1.2rem 0 0; font-size: 0.82rem;">
+        Full detail on ratings, learning runs and briefings is under
+        <strong>Activity</strong>; documents and uploads are under
+        <strong>Knowledge</strong>.
+      </p>
+    </div>
+  </div>
+  {% endif %}
+
+
 
   {% endif %}
 
