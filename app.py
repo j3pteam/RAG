@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-e"
+APP_VERSION = "2026-09-24-f"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18373,17 +18373,90 @@ details.section[open] > summary {
         {{ org_principal }} is the worst outcome, and it is what happens when
         setup stops after the first form.
       </p>
+      {# Reading the client's own site fills most of this in. It is a guess,
+         so what it found is shown here for correction rather than applied
+         straight to the form below. #}
+      <form method="POST" action="/admin/clients/lookup"
+            style="margin: 0 0 1.4rem; padding: 0.9rem 1rem;
+                   background: rgba(0,0,0,0.025); border-radius: 6px;">
+        <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem;">
+          Start from their website
+        </div>
+        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end;">
+          <label style="flex: 1 1 200px; font-size: 0.8rem;">Organization
+            <input type="text" name="name" value="{{ lookup.name if lookup else '' }}"
+                   placeholder="e.g. Sample Health System"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="flex: 1 1 240px; font-size: 0.8rem;">Their web address
+            <input type="text" name="site_url" value="{{ lookup.site if lookup else '' }}"
+                   placeholder="samplehealth.org"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <button type="submit" class="btn" style="flex: 0 0 auto;">Read their site</button>
+        </div>
+        <p class="muted" style="margin: 0.55rem 0 0; font-size: 0.78rem; line-height: 1.6;">
+          Reads only the logo and color a site publishes for link previews —
+          the same things it hands to Slack or a search engine. Nothing is
+          created, and a logo found here is theirs: check you are entitled to
+          use it before this goes to their people.
+        </p>
+      </form>
+
+      {% if lookup %}
+      <div style="margin: 0 0 1.4rem; padding: 0.9rem 1rem; border-radius: 6px;
+                  border: 1px solid var(--line);">
+        <div style="display: flex; justify-content: space-between;
+                    align-items: baseline; gap: 1rem; flex-wrap: wrap;">
+          <strong style="font-size: 0.88rem;">What that site published</strong>
+          <form method="POST" action="/admin/clients/lookup/clear" style="margin: 0;">
+            <button type="submit" class="btn-quiet" style="font-size: 0.76rem;">Discard</button>
+          </form>
+        </div>
+        {% if lookup.found %}
+        <ul class="muted" style="margin: 0.6rem 0 0; padding-left: 1.1rem;
+                                 font-size: 0.82rem; line-height: 1.7;">
+          {% for item in lookup.found %}<li>{{ item }}</li>{% endfor %}
+        </ul>
+        {% endif %}
+        {% if has_lookup_logo %}
+        <div style="display: flex; align-items: center; gap: 0.9rem;
+                    margin-top: 0.8rem; flex-wrap: wrap;">
+          <img src="/admin/clients/lookup/logo" alt=""
+               style="max-height: 46px; max-width: 220px; padding: 0.4rem 0.6rem;
+                      border-radius: 4px;
+                      background: {{ lookup.brand_navy or cfg.navy }};" />
+          <span class="muted" style="font-size: 0.78rem;">
+            Their {{ lookup.logo_source }}, on the header color it would sit on.
+            Check it is the mark and not a cropped banner.
+          </span>
+        </div>
+        {% endif %}
+        {% for note in lookup.notes %}
+        <p class="muted" style="margin: 0.55rem 0 0; font-size: 0.8rem;">{{ note }}</p>
+        {% endfor %}
+        <p class="muted" style="margin: 0.7rem 0 0; font-size: 0.8rem; line-height: 1.6;">
+          The form below has been filled in with this. Correct anything that is
+          wrong before creating the engagement — nothing has been saved yet.
+        </p>
+      </div>
+      {% endif %}
+
       <form method="POST" action="/admin/clients/create"
             enctype="multipart/form-data">
         <div style="display: grid; gap: 0.8rem;
                     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
           <label style="font-size: 0.82rem;">Advisor name <span class="muted">(required)</span>
             <input type="text" name="name" required placeholder="e.g. John Sample, MD"
+                   value="{{ lookup.name if lookup else '' }}"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.82rem;">Organization
             <input type="text" name="brand_label" placeholder="e.g. Sample Health System"
+                   value="{{ (lookup.site_name or lookup.name) if lookup else '' }}"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -18399,6 +18472,7 @@ details.section[open] > summary {
           </label>
           <label style="font-size: 0.82rem;">Header color
             <input type="text" name="brand_navy" placeholder="#27334A"
+                   value="{{ lookup.brand_navy if lookup else '' }}"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -18417,6 +18491,10 @@ details.section[open] > summary {
         <p class="muted" style="margin: 0.35rem 0 0; font-size: 0.78rem;">
           PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. Optional — it can be
           uploaded or replaced later under Current engagements.
+          {% if has_lookup_logo %}
+          <br /><strong>The logo read from their site will be used unless you
+          choose a file here.</strong>
+          {% endif %}
         </p>
 
         <label style="display: block; margin-top: 0.9rem; font-size: 0.82rem;">
@@ -22405,6 +22483,9 @@ def admin_dashboard():
         # visible one read "still wearing 's branding".
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
+        lookup=session.get("brand_lookup") if active_tab == "clients" else None,
+        has_lookup_logo=(bool(session.get("brand_lookup_logo"))
+                         and active_tab == "clients"),
         has_internal_advisor=any(r.get("internal_only")
                                   for r in (_advisor_rows or [])),
         initials_for=initials_for,
@@ -22619,6 +22700,236 @@ _LOGO_TYPES["image/svg+xml"] = "svg"
 LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 
+# ---------------------------------------------------------------------------
+# Reading an organization's public site to pre-fill their branding.
+#
+# This is a convenience that produces a *guess*. Everything it finds is shown
+# for the admin to correct before anything is created — a wrong logo applied
+# silently to a client's advisor is worse than no logo at all.
+# ---------------------------------------------------------------------------
+BRAND_LOOKUP_TIMEOUT = 8
+BRAND_LOOKUP_MAX_HTML = 1024 * 1024
+BRAND_LOOKUP_MAX_IMAGE = 2 * 1024 * 1024
+
+
+def _brand_lookup_safe_url(raw: str):
+    """Returns (url, error). Rejects anything that is not a public web address.
+
+    An admin types this URL and the server fetches it, which makes this route
+    a way to reach anything the server can reach — the cloud metadata
+    endpoint, the database, another service on the private network. A typo
+    would do it as easily as malice, so the check is on the resolved address
+    rather than on how the hostname looks.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return None, "Enter the organization's web address."
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+
+    import ipaddress
+    import socket
+    import urllib.parse as _parse
+
+    parts = _parse.urlsplit(raw)
+    if parts.scheme not in ("http", "https"):
+        return None, "Only http and https addresses can be read."
+    host = parts.hostname
+    if not host:
+        return None, f"{raw!r} is not a web address."
+
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:
+        return None, f"Could not find {host}."
+    for info in infos:
+        addr = info[4][0]
+        try:
+            ip = ipaddress.ip_address(addr)
+        except ValueError:
+            continue
+        if (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_reserved or ip.is_multicast):
+            app.logger.warning("[brand-lookup] refused a non-public address")
+            return None, (f"{host} resolves to a private address. Only public "
+                          "websites can be read.")
+    return raw, None
+
+
+def _brand_lookup_read(url: str, limit: int):
+    import urllib.request as _url
+    req = _url.Request(url, headers={
+        "User-Agent": f"{PRODUCT_NAME} brand lookup",
+        "Accept": "*/*",
+    })
+    with _url.urlopen(req, timeout=BRAND_LOOKUP_TIMEOUT) as resp:
+        # Read one byte past the limit so an oversized response is detected
+        # rather than silently truncated into something that half-parses.
+        data = resp.read(limit + 1)
+        if len(data) > limit:
+            raise ValueError("too large")
+        return data, resp.headers.get("Content-Type", ""), resp.geturl()
+
+
+def lookup_organization_brand(raw_url: str) -> dict:
+    """Best effort: an organization's logo and header color from their site.
+
+    Reads only the tags a site publishes for exactly this purpose — the
+    ones it already hands to Slack, iMessage and search engines. No CSS is
+    parsed and no colors are sampled from images: a confident wrong color is
+    worse than an empty field the admin fills in themselves.
+    """
+    import re as _re
+    import urllib.parse as _parse
+
+    out = {"found": [], "notes": [], "logo_data": None, "logo_mime": None,
+           "logo_source": "", "brand_navy": "", "site_name": "", "url": ""}
+
+    url, error = _brand_lookup_safe_url(raw_url)
+    if error:
+        out["notes"].append(error)
+        return out
+    out["url"] = url
+
+    try:
+        html_bytes, ctype, final_url = _brand_lookup_read(url, BRAND_LOOKUP_MAX_HTML)
+    except ValueError:
+        out["notes"].append("That page is unusually large; nothing was read.")
+        return out
+    except Exception as e:
+        out["notes"].append(f"Could not read {url} ({type(e).__name__}).")
+        return out
+
+    html = html_bytes.decode("utf-8", "ignore")
+
+    def meta(attr, name):
+        m = _re.search(rf'<meta[^>]+{attr}=["\']{name}["\'][^>]*>', html, _re.I)
+        if not m:
+            return ""
+        c = _re.search(r'content=["\']([^"\']+)', m.group(0), _re.I)
+        return c.group(1).strip() if c else ""
+
+    site_name = meta("property", "og:site_name") or meta("name", "application-name")
+    if not site_name:
+        t = _re.search(r"<title[^>]*>([^<]{1,120})</title>", html, _re.I)
+        site_name = t.group(1).strip() if t else ""
+    if site_name:
+        out["site_name"] = site_name
+        out["found"].append(f"name: {site_name}")
+
+    theme = meta("name", "theme-color")
+    if _re.fullmatch(r"#[0-9A-Fa-f]{6}", theme or ""):
+        out["brand_navy"] = theme.upper()
+        out["found"].append(f"header color: {out['brand_navy']}")
+    elif theme:
+        out["notes"].append(f"Their theme color is {theme!r}, which is not a "
+                            "six-digit hex value — set the color by hand.")
+    else:
+        out["notes"].append("They do not publish a theme color, so the header "
+                            "color is left as it is.")
+
+    # Ordered by how likely each is to be the real mark rather than a
+    # cropped social-share banner.
+    candidates = []
+    for pattern, label in (
+            (r'<link[^>]+rel=["\'][^"\']*apple-touch-icon[^"\']*["\'][^>]*>', "apple touch icon"),
+            (r'<meta[^>]+property=["\']og:image["\'][^>]*>', "social image"),
+            (r'<link[^>]+rel=["\'][^"\']*icon[^"\']*["\'][^>]*>', "site icon")):
+        for m in _re.finditer(pattern, html, _re.I):
+            href = _re.search(r'(?:href|content)=["\']([^"\']+)', m.group(0), _re.I)
+            if href:
+                candidates.append((_parse.urljoin(final_url, href.group(1)), label))
+
+    for candidate, label in candidates:
+        safe, err = _brand_lookup_safe_url(candidate)
+        if err:
+            continue
+        try:
+            data, ctype, _ = _brand_lookup_read(safe, BRAND_LOOKUP_MAX_IMAGE)
+        except Exception:
+            continue
+        mime = (ctype or "").split(";")[0].strip().lower()
+        if mime not in _LOGO_TYPES or not data:
+            continue
+        out["logo_data"] = data
+        out["logo_mime"] = mime
+        out["logo_source"] = f"{label} ({len(data) // 1024} KB)"
+        out["found"].append(f"logo: their {label}")
+        break
+
+    if not out["logo_data"]:
+        out["notes"].append("No usable logo was published on that page. "
+                            "Upload one instead.")
+    return out
+
+
+@app.route("/admin/clients/lookup", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_client_brand_lookup():
+    """Reads a client's site and offers what it found, for review.
+
+    Nothing is created and nothing is applied. The result is held for the
+    next page load and shown in the form, where the admin corrects it — a
+    guess about someone else's brand should not become a fact because a
+    lookup succeeded.
+    """
+    name = (request.form.get("name") or "").strip()[:120]
+    site = (request.form.get("site_url") or "").strip()[:300]
+    result = lookup_organization_brand(site)
+
+    session["brand_lookup"] = {
+        "name": name,
+        "site": result.get("url") or site,
+        "site_name": result.get("site_name", ""),
+        "brand_navy": result.get("brand_navy", ""),
+        "logo_source": result.get("logo_source", ""),
+        "found": result.get("found", []),
+        "notes": result.get("notes", []),
+    }
+    # The bytes go in the session only long enough to survive the redirect;
+    # storing them anywhere durable before the admin has approved them would
+    # mean holding a copy of someone's logo they never agreed to.
+    if result.get("logo_data"):
+        import base64
+        session["brand_lookup_logo"] = base64.b64encode(result["logo_data"]).decode()
+        session["brand_lookup_logo_mime"] = result["logo_mime"]
+    else:
+        session.pop("brand_lookup_logo", None)
+        session.pop("brand_lookup_logo_mime", None)
+    session.permanent = True
+
+    if result.get("found"):
+        app.logger.info(f"[brand-lookup] read {result.get('url', '')}")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/clients/lookup/logo")
+@require_permission("edit_advisors")
+def admin_client_lookup_preview():
+    """The fetched logo, for the preview. Served from the session, so it
+    exists only for this admin and only until they act on it."""
+    raw = session.get("brand_lookup_logo")
+    if not raw:
+        return ("", 404)
+    import base64
+    try:
+        data = base64.b64decode(raw)
+    except Exception:
+        return ("", 404)
+    resp = app.response_class(
+        data, mimetype=session.get("brand_lookup_logo_mime") or "image/png")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/clients/lookup/clear", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_client_lookup_clear():
+    for key in ("brand_lookup", "brand_lookup_logo", "brand_lookup_logo_mime"):
+        session.pop(key, None)
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
 @app.route("/admin/clients/create", methods=["POST"])
 @require_permission("edit_advisors")
 def admin_create_client():
@@ -22663,6 +22974,16 @@ def admin_create_client():
     # state this route exists to prevent.
     upload = request.files.get("logo")
     logo_data = logo_mime = None
+    # A file the admin chose beats one read from the client's site: choosing
+    # a file is deliberate, and the fetched one is a guess they may simply
+    # not have got around to replacing.
+    if not (upload and upload.filename) and session.get("brand_lookup_logo"):
+        import base64
+        try:
+            logo_data = base64.b64decode(session["brand_lookup_logo"])
+            logo_mime = session.get("brand_lookup_logo_mime") or "image/png"
+        except Exception:
+            logo_data = logo_mime = None
     if upload and upload.filename:
         logo_mime = (upload.mimetype or "").lower()
         if logo_mime not in _LOGO_TYPES:
@@ -22720,6 +23041,10 @@ def admin_create_client():
               "again. Nothing was changed.")
         return redirect(url_for("admin_dashboard", tab="clients"))
 
+    # The lookup has been acted on; holding someone else's logo in a session
+    # any longer than that serves nothing.
+    for _k in ("brand_lookup", "brand_lookup_logo", "brand_lookup_logo_mime"):
+        session.pop(_k, None)
     app.logger.info(f"[clients] engagement created: {slug}")
     flash(f"\u2713 {name} is set up{' with their logo' if logo_data else ''}. "
           "Load their documents on the Knowledge tab, then issue participant "

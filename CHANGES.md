@@ -1,58 +1,75 @@
-# J3P Advisor — build 2026-09-24-e
+# J3P Advisor — build 2026-09-24-f
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## Client engagements live only on Add Client
+## Start from their website
 
-They no longer appear in the Advisors list. One place to look, one place to
-forget.
+**Add Client → Start from their website.** Type the organization and their
+web address, press Read their site, and the form below fills in with what it
+found: their name, their header color, and their logo.
 
-| | Advisors tab | Add Client tab |
-|---|---|---|
-| Alan Friedman | yes | no |
-| A client engagement | **no** | yes |
+It reads only what a site publishes **for exactly this purpose** — the
+`og:image`, `apple-touch-icon`, `icon` and `theme-color` tags it already
+hands to Slack, iMessage and search engines. No CSS is parsed and no colors
+are sampled from images: a confident wrong color is worse than an empty
+field someone fills in themselves.
 
-## What had to move with them
+## Nothing is applied silently
 
-Removing them from Advisors would have removed the only way to issue their
-participant links — the links are what you actually send to a client's team,
-so that would have made the engagement useless rather than tidier.
+What it found is shown for review, with the logo previewed **on the header
+color it would actually sit on** — and a line asking you to check it is the
+mark and not a cropped social banner, which is what `og:image` often is.
 
-Both now sit inside each engagement on the Add Client tab:
+Nothing is saved until you press Create the engagement. If the site
+published nothing usable it says so plainly rather than leaving fields
+mysteriously blank:
 
-- **Participant links** — one per person on their team, as before
-- **Photo** — and saving it returns you to Add Client rather than dropping
-  you on the Advisors tab
+> They do not publish a theme color, so the header color is left as it is.
+> No usable logo was published on that page. Upload one instead.
 
-The existing redirect helper already anticipated a second entry point and
-whitelisted the tabs it would accept; `clients` is now one of them, which
-was the one-line change its comment predicted.
+A file you choose yourself always beats the fetched one.
 
-## Two bugs found while testing this
+## The part that needed care
 
-**The Add Client tab would have thrown a 500.** `participant_links_section`
-is a Jinja macro, and Jinja resolves macros in source order — it was defined
-inside the Advisors tab, which renders *after* Clients. Using it there
-raised `'participant_links_section' is undefined`. Moved above its first
-use.
+This route makes the server fetch a URL an admin types, which is a way to
+reach anything the server can reach — the cloud metadata endpoint, the
+database, another service on the private network. A typo would do it as
+easily as malice.
 
-**A form posted to a route that does not exist.** I wrote
-`/admin/advisor-photo/<slug>` from memory; the real route is
-`/admin/advisors`. It would have 404'd on save. The `url_for` check cannot
-catch this one — the action is a literal string, not a `url_for` call — so
-it took rendering the page and reading the form to find.
+Every address is resolved and checked **before** the request is made, and
+refused if it lands anywhere private:
 
-One thing deliberately left: every advisor still appears in the participant
-link **destination dropdown** on the default persona's card. That is a
-chooser for where a link should point, not the engagement being managed, and
-removing entries would only make links harder to issue.
+| Address | Result |
+|---|---|
+| `dartmouth.edu` | allowed |
+| `http://169.254.169.254/latest/meta-data/` | refused |
+| `http://127.0.0.1/admin` | refused |
+| `http://10.0.0.5` | refused |
+| `http://[::1]/` | refused |
+| `file:///etc/passwd` | refused |
+| `postgres://db.railway.internal:5432` | refused |
+
+The same check runs again on the image URL, because a page can point its
+logo anywhere. Responses are capped at 1 MB of HTML and 2 MB of image, with
+an eight-second timeout.
+
+The fetched logo is held in your session only until you create the
+engagement or discard it. Keeping a copy of someone's logo before anyone has
+agreed to use it serves nothing.
+
+## Worth saying once
+
+A logo being fetchable is not permission to use it. The form says so where
+you will see it, and for a client like a cancer center their communications
+office will have a view. This makes the setup quick; it does not make the
+use authorized.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-e`.
+should report `2026-09-24-f`.
