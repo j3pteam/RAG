@@ -18568,6 +18568,7 @@ details.section[open] > summary {
           </label>
           <label style="font-size: 0.82rem;">Accent color
             <input type="text" name="brand_gold" placeholder="#D2BC8D"
+                   value="{{ lookup.brand_gold if lookup else '' }}"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -18765,6 +18766,16 @@ details.section[open] > summary {
         misrepresent that. A line naming {{ org_name }} as the provider is
         shown under the header whenever client branding is in use.
       </p>
+      <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}/lookup"
+            style="margin: 0 0 1.2rem; padding: 0.8rem 0.9rem;
+                   border: 1px solid var(--line); border-radius: 6px;
+                   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
+        <span class="muted" style="font-size: 0.8rem;">Pull logo and colors from their website</span>
+        <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" required
+               style="flex: 1; min-width: 200px; padding: 0.42rem;
+                      border: 1px solid var(--line); border-radius: 5px;" />
+        <button type="submit" class="btn">Read their site</button>
+      </form>
       <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
             enctype="multipart/form-data" style="margin: 0 0 1.2rem;">
         <div class="muted" style="font-size: 0.8rem; margin-bottom: 0.4rem;">Logo</div>
@@ -23053,9 +23064,16 @@ def _brand_lookup_safe_url(raw: str):
 
 def _brand_lookup_read(url: str, limit: int):
     import urllib.request as _url
+    # A browser's headers. Hospital and university sites commonly sit behind
+    # a CDN bot filter that answers an unfamiliar User-Agent with a 403 or a
+    # challenge page, which read as "nothing published" rather than "blocked".
     req = _url.Request(url, headers={
-        "User-Agent": f"{PRODUCT_NAME} brand lookup",
-        "Accept": "*/*",
+        "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/128.0 Safari/537.36"),
+        "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
+                   "image/avif,image/webp,image/svg+xml,image/*,*/*;q=0.8"),
+        "Accept-Language": "en-US,en;q=0.9",
     })
     with _url.urlopen(req, timeout=BRAND_LOOKUP_TIMEOUT) as resp:
         # Read one byte past the limit so an oversized response is detected
@@ -23064,6 +23082,80 @@ def _brand_lookup_read(url: str, limit: int):
         if len(data) > limit:
             raise ValueError("too large")
         return data, resp.headers.get("Content-Type", ""), resp.geturl()
+
+
+def _brand_hex(value: str) -> str:
+    """#abc, #aabbcc or rgb(r,g,b) → '#AABBCC'; anything else → ''."""
+    v = (value or "").strip()
+    m = re.fullmatch(r"#([0-9A-Fa-f]{3})", v)
+    if m:
+        return "#" + "".join(c * 2 for c in m.group(1)).upper()
+    m = re.fullmatch(r"#([0-9A-Fa-f]{6})(?:[0-9A-Fa-f]{2})?", v)
+    if m:
+        return "#" + m.group(1).upper()
+    m = re.fullmatch(r"rgba?\(\s*(\d+)[\s,]+(\d+)[\s,]+(\d+)[^)]*\)", v)
+    if m:
+        return "#" + "".join(f"{min(255, int(x)):02X}" for x in m.groups())
+    return ""
+
+
+def _brand_rgb(h: str):
+    return tuple(int(h[i:i + 2], 16) for i in (1, 3, 5))
+
+
+def _brand_distance(a: str, b: str) -> float:
+    if not a or not b:
+        return 999.0
+    return sum((x - y) ** 2 for x, y in zip(_brand_rgb(a), _brand_rgb(b))) ** 0.5
+
+
+def _brand_is_neutral(h: str) -> bool:
+    """Black, white and grays — never a brand color on their own."""
+    r, g, b = _brand_rgb(h)
+    return max(r, g, b) - min(r, g, b) < 28 or max(r, g, b) < 18 or min(r, g, b) > 238
+
+
+_BRAND_VAR_RE = re.compile(
+    r"--[\w-]*(?:primary|brand|main|navy|header|accent|secondary|theme)[\w-]*\s*:\s*"
+    r"(#[0-9A-Fa-f]{3,8}\b|rgba?\([^)]*\))", re.I)
+_BRAND_HEADER_RULE_RE = re.compile(
+    r"([^{}]*(?:header|masthead|navbar|\bnav\b|top-?bar|site-head|banner|brand)[^{}]*)"
+    r"\{([^{}]*)\}", re.I)
+_BRAND_ANY_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}\b|#[0-9A-Fa-f]{3}\b|rgba?\([^)]*\)")
+
+
+def _brand_colors_from_css(css: str) -> list:
+    """Candidate brand colors from stylesheets, most likely first.
+
+    Weighted: named brand variables count most, colors used as backgrounds
+    on header/nav rules next, and plain frequency least. Neutrals are
+    dropped. It is a guess and is always presented as one.
+    """
+    from collections import Counter
+    score = Counter()
+    for m in _BRAND_VAR_RE.finditer(css or ""):
+        h = _brand_hex(m.group(1))
+        if h:
+            score[h] += 25 if re.search(r"primary|brand|navy|header", m.group(0), re.I) else 10
+    for sel, body in _BRAND_HEADER_RULE_RE.findall(css or ""):
+        for decl in re.findall(r"background(?:-color)?\s*:\s*([^;]+)", body, re.I):
+            for c in _BRAND_ANY_COLOR_RE.findall(decl):
+                h = _brand_hex(c)
+                if h:
+                    score[h] += 12
+    for c in _BRAND_ANY_COLOR_RE.findall(css or ""):
+        h = _brand_hex(c)
+        if h:
+            score[h] += 1
+    ranked = [h for h, _ in score.most_common() if not _brand_is_neutral(h)]
+    # Collapse near-duplicates (a brand blue and its hover shade).
+    out = []
+    for h in ranked:
+        if all(_brand_distance(h, o) > 40 for o in out):
+            out.append(h)
+        if len(out) >= 4:
+            break
+    return out
 
 
 def lookup_organization_brand(raw_url: str) -> dict:
@@ -23078,7 +23170,8 @@ def lookup_organization_brand(raw_url: str) -> dict:
     import urllib.parse as _parse
 
     out = {"found": [], "notes": [], "logo_data": None, "logo_mime": None,
-           "logo_source": "", "brand_navy": "", "site_name": "", "url": ""}
+           "logo_source": "", "brand_navy": "", "brand_gold": "",
+           "site_name": "", "url": ""}
 
     url, error = _brand_lookup_safe_url(raw_url)
     if error:
@@ -23112,20 +23205,81 @@ def lookup_organization_brand(raw_url: str) -> dict:
         out["site_name"] = site_name
         out["found"].append(f"name: {site_name}")
 
-    theme = meta("name", "theme-color")
-    if _re.fullmatch(r"#[0-9A-Fa-f]{6}", theme or ""):
-        out["brand_navy"] = theme.upper()
-        out["found"].append(f"header color: {out['brand_navy']}")
-    elif theme:
-        out["notes"].append(f"Their theme color is {theme!r}, which is not a "
-                            "six-digit hex value — set the color by hand.")
-    else:
-        out["notes"].append("They do not publish a theme color, so the header "
-                            "color is left as it is.")
+    # --- Colors ---------------------------------------------------------
+    # Declared colors first (what the site says its color is), then a guess
+    # from its stylesheets. A guess is labeled as one; the admin sees it in
+    # the form and corrects it before anything is created.
+    declared = (meta("name", "theme-color")
+                or meta("name", "msapplication-TileColor"))
+    header_hex = _brand_hex(declared)
+    header_src = "their theme color" if header_hex else ""
+    if not header_hex:
+        m = _re.search(r'<link[^>]+rel=["\']manifest["\'][^>]*>', html, _re.I)
+        href = m and _re.search(r'href=["\']([^"\']+)', m.group(0), _re.I)
+        if href:
+            try:
+                import json as _json
+                murl, err = _brand_lookup_safe_url(_parse.urljoin(final_url, href.group(1)))
+                if not err:
+                    mdata, _, _ = _brand_lookup_read(murl, 200_000)
+                    header_hex = _brand_hex(_json.loads(mdata.decode("utf-8", "ignore"))
+                                            .get("theme_color", ""))
+                    header_src = "their web app manifest" if header_hex else ""
+            except Exception:
+                pass
 
-    # Ordered by how likely each is to be the real mark rather than a
-    # cropped social-share banner.
+    css_text = "\n".join(_re.findall(r"<style[^>]*>(.*?)</style>", html, _re.I | _re.S))
+    sheets = [_parse.urljoin(final_url, h) for h in _re.findall(
+        r'<link[^>]+rel=["\']stylesheet["\'][^>]*href=["\']([^"\']+)', html, _re.I)]
+    sheets += [_parse.urljoin(final_url, h) for h in _re.findall(
+        r'<link[^>]+href=["\']([^"\']+)["\'][^>]*rel=["\']stylesheet["\']', html, _re.I)]
+    for sheet in sheets[:4]:
+        safe, err = _brand_lookup_safe_url(sheet)
+        if err:
+            continue
+        try:
+            data, _, _ = _brand_lookup_read(safe, BRAND_LOOKUP_MAX_HTML)
+            css_text += "\n" + data.decode("utf-8", "ignore")
+        except Exception:
+            continue
+
+    guessed = _brand_colors_from_css(css_text)
+    if not header_hex and guessed:
+        header_hex = guessed[0]
+        header_src = "a guess from their stylesheet"
+    accent_hex = next((c for c in guessed if c != header_hex
+                       and _brand_distance(c, header_hex) > 90), "")
+
+    if header_hex:
+        out["brand_navy"] = header_hex
+        out["found"].append(f"header color: {header_hex} ({header_src})")
+    else:
+        out["notes"].append("No header color could be found — set it by hand.")
+    if accent_hex:
+        out["brand_gold"] = accent_hex
+        out["found"].append(f"accent color: {accent_hex} (a guess from their stylesheet)")
+
+    # --- Logo -----------------------------------------------------------
+    # Ordered by how likely each is to be the actual logo: what the site
+    # declares as its logo, then the image its header marks as the logo,
+    # then the square icons and social image, which are often a cropped mark
+    # or a photo banner.
     candidates = []
+    for block in _re.findall(r'<script[^>]+application/ld\+json[^>]*>(.*?)</script>',
+                             html, _re.I | _re.S):
+        for m in _re.finditer(r'"logo"\s*:\s*(?:\{[^{}]*?"url"\s*:\s*)?"([^"]+)"', block):
+            candidates.append((_parse.urljoin(final_url, m.group(1)), "declared logo"))
+    header_html = (_re.search(r"<header\b.*?</header>", html, _re.I | _re.S)
+                   or _re.search(r"<nav\b.*?</nav>", html, _re.I | _re.S))
+    for scope, label in (((header_html.group(0) if header_html else ""), "header logo"),
+                         (html, "page logo")):
+        for tag in _re.findall(r"<img\b[^>]*>", scope, _re.I):
+            if not _re.search(r"logo|brand|wordmark", tag, _re.I):
+                continue
+            src = (_re.search(r'\bsrc=["\']([^"\']+)', tag, _re.I)
+                   or _re.search(r'\bdata-src=["\']([^"\']+)', tag, _re.I))
+            if src and not src.group(1).startswith("data:"):
+                candidates.append((_parse.urljoin(final_url, src.group(1)), label))
     for pattern, label in (
             (r'<link[^>]+rel=["\'][^"\']*apple-touch-icon[^"\']*["\'][^>]*>', "apple touch icon"),
             (r'<meta[^>]+property=["\']og:image["\'][^>]*>', "social image"),
@@ -23135,7 +23289,23 @@ def lookup_organization_brand(raw_url: str) -> dict:
             if href:
                 candidates.append((_parse.urljoin(final_url, href.group(1)), label))
 
+    # An inline SVG logo has no URL to fetch; keep its markup as a fallback.
+    inline_svg = None
+    if header_html:
+        m = _re.search(r"<svg\b[^>]*>.*?</svg>", header_html.group(0), _re.I | _re.S)
+        if m and _re.search(r"logo|brand", m.group(0)[:400], _re.I) and len(m.group(0)) > 200:
+            svg = m.group(0)
+            if "xmlns=" not in svg[:200]:
+                svg = svg.replace("<svg", '<svg xmlns="http://www.w3.org/2000/svg"', 1)
+            inline_svg = svg.encode()
+
+    seen = set()
     for candidate, label in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        if label in ("apple touch icon", "social image", "site icon") and inline_svg:
+            break                      # a real inline logo beats an icon
         safe, err = _brand_lookup_safe_url(candidate)
         if err:
             continue
@@ -23144,18 +23314,160 @@ def lookup_organization_brand(raw_url: str) -> dict:
         except Exception:
             continue
         mime = (ctype or "").split(";")[0].strip().lower()
+        if mime not in _LOGO_TYPES and data[:600].lstrip().startswith((b"<svg", b"<?xml")) \
+                and b"<svg" in data[:600]:
+            mime = "image/svg+xml"          # servers often mislabel SVG
         if mime not in _LOGO_TYPES or not data:
             continue
         out["logo_data"] = data
         out["logo_mime"] = mime
-        out["logo_source"] = f"{label} ({len(data) // 1024} KB)"
+        out["logo_source"] = f"{label} ({max(1, len(data) // 1024)} KB)"
         out["found"].append(f"logo: their {label}")
         break
+
+    if not out["logo_data"] and inline_svg:
+        out["logo_data"] = inline_svg
+        out["logo_mime"] = "image/svg+xml"
+        out["logo_source"] = "header logo (inline SVG)"
+        out["found"].append("logo: their header logo (inline SVG)")
 
     if not out["logo_data"]:
         out["notes"].append("No usable logo was published on that page. "
                             "Upload one instead.")
     return out
+
+
+def _brand_stash_ensure(conn):
+    if _already_ensured("brand_lookup_stash"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS brand_lookup_stash (
+                key        TEXT PRIMARY KEY,
+                mime       TEXT NOT NULL,
+                data       BYTEA NOT NULL,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def _brand_stash_put(data: bytes, mime: str):
+    """Hold a looked-up logo until the admin acts on it. Returns its key.
+    Rows older than a day are cleared on every write, so an abandoned
+    lookup does not keep someone's logo around."""
+    import secrets
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _brand_stash_ensure(conn)
+        key = secrets.token_urlsafe(18)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM brand_lookup_stash "
+                        "WHERE created_at < NOW() - INTERVAL '1 day'")
+            cur.execute("INSERT INTO brand_lookup_stash (key, mime, data) "
+                        "VALUES (%s, %s, %s)", (key, mime, data))
+        conn.commit()
+        return key
+    except Exception as e:
+        app.logger.error(f"[brand-lookup] stash failed: {type(e).__name__}")
+        return None
+    finally:
+        conn.close()
+
+
+def _brand_stash_get(key):
+    if not key or not isinstance(key, str) or len(key) > 64:
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _brand_stash_ensure(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT data, mime FROM brand_lookup_stash WHERE key = %s", (key,))
+            row = cur.fetchone()
+        if not row:
+            return None
+        return bytes(row[0]), row[1] or "image/png"
+    except Exception as e:
+        app.logger.error(f"[brand-lookup] stash read failed: {type(e).__name__}")
+        return None
+    finally:
+        conn.close()
+
+
+def _brand_stash_drop(key):
+    if not key or not isinstance(key, str) or len(key) > 64:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _brand_stash_ensure(conn)
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM brand_lookup_stash WHERE key = %s", (key,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
+
+
+@app.route("/admin/advisors/branding/<slug>/lookup", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_advisor_branding_lookup(slug):
+    """Re-read a client's website for an existing engagement and apply what
+    was found. Only fields the lookup actually found are changed, and an
+    uploaded logo is only replaced if a new one was found. Everything it set
+    is listed in the confirmation and can be edited right below."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    if advisor.get("internal_only"):
+        flash("Internal advisors do not carry client branding.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    site = (request.form.get("site_url") or "").strip()[:300]
+    result = lookup_organization_brand(site)
+    sets, params = [], []
+    if result.get("brand_navy"):
+        sets.append("brand_navy = %s"); params.append(result["brand_navy"])
+    if result.get("brand_gold"):
+        sets.append("brand_gold = %s"); params.append(result["brand_gold"])
+    if result.get("logo_data") and len(result["logo_data"]) <= LOGO_MAX_BYTES:
+        sets.append("brand_logo = %s"); params.append(result["logo_data"])
+        sets.append("brand_logo_mime = %s"); params.append(result["logo_mime"])
+
+    if not sets:
+        flash("Nothing usable was found on " + (result.get("url") or site or "that site")
+              + ". " + " ".join(result.get("notes", [])))
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE advisors SET {', '.join(sets)} WHERE slug = %s",
+                        (*params, slug))
+        conn.commit()
+        _forget_cached_advisor(slug)
+    except Exception as e:
+        app.logger.error(f"[brand-lookup] apply failed: {type(e).__name__}")
+        flash("Could not save what was found — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    finally:
+        conn.close()
+
+    flash(f"\u2713 Updated {advisor['name']} from their site: "
+          + "; ".join(result.get("found", [])) + ". Check the preview below "
+          "and correct anything that looks wrong.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/clients/lookup", methods=["POST"])
@@ -23177,6 +23489,7 @@ def admin_client_brand_lookup():
         "site": result.get("url") or site,
         "site_name": result.get("site_name", ""),
         "brand_navy": result.get("brand_navy", ""),
+        "brand_gold": result.get("brand_gold", ""),
         "logo_source": result.get("logo_source", ""),
         "found": result.get("found", []),
         "notes": result.get("notes", []),
@@ -23184,13 +23497,17 @@ def admin_client_brand_lookup():
     # The bytes go in the session only long enough to survive the redirect;
     # storing them anywhere durable before the admin has approved them would
     # mean holding a copy of someone's logo they never agreed to.
+    # The session is a signed cookie with a ~4 KB ceiling, so the logo bytes
+    # cannot live there — a real logo overflowed it, the browser dropped the
+    # cookie, and the lookup (and its logo) silently vanished. The bytes are
+    # held in a short-lived database row; the session carries only its key.
+    _brand_stash_drop(session.pop("brand_lookup_logo", None))
+    session.pop("brand_lookup_logo_mime", None)
     if result.get("logo_data"):
-        import base64
-        session["brand_lookup_logo"] = base64.b64encode(result["logo_data"]).decode()
-        session["brand_lookup_logo_mime"] = result["logo_mime"]
-    else:
-        session.pop("brand_lookup_logo", None)
-        session.pop("brand_lookup_logo_mime", None)
+        key = _brand_stash_put(result["logo_data"], result["logo_mime"])
+        if key:
+            session["brand_lookup_logo"] = key
+            session["brand_lookup_logo_mime"] = result["logo_mime"]
     session.permanent = True
 
     if result.get("found"):
@@ -23203,16 +23520,11 @@ def admin_client_brand_lookup():
 def admin_client_lookup_preview():
     """The fetched logo, for the preview. Served from the session, so it
     exists only for this admin and only until they act on it."""
-    raw = session.get("brand_lookup_logo")
-    if not raw:
+    stashed = _brand_stash_get(session.get("brand_lookup_logo"))
+    if not stashed:
         return ("", 404)
-    import base64
-    try:
-        data = base64.b64decode(raw)
-    except Exception:
-        return ("", 404)
-    resp = app.response_class(
-        data, mimetype=session.get("brand_lookup_logo_mime") or "image/png")
+    data, mime = stashed
+    resp = app.response_class(data, mimetype=mime)
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
@@ -23220,6 +23532,7 @@ def admin_client_lookup_preview():
 @app.route("/admin/clients/lookup/clear", methods=["POST"])
 @require_permission("edit_advisors")
 def admin_client_lookup_clear():
+    _brand_stash_drop(session.get("brand_lookup_logo"))
     for key in ("brand_lookup", "brand_lookup_logo", "brand_lookup_logo_mime"):
         session.pop(key, None)
     return redirect(url_for("admin_dashboard", tab="clients"))
@@ -23273,12 +23586,8 @@ def admin_create_client():
     # a file is deliberate, and the fetched one is a guess they may simply
     # not have got around to replacing.
     if not (upload and upload.filename) and session.get("brand_lookup_logo"):
-        import base64
-        try:
-            logo_data = base64.b64decode(session["brand_lookup_logo"])
-            logo_mime = session.get("brand_lookup_logo_mime") or "image/png"
-        except Exception:
-            logo_data = logo_mime = None
+        stashed = _brand_stash_get(session.get("brand_lookup_logo"))
+        logo_data, logo_mime = stashed if stashed else (None, None)
     if upload and upload.filename:
         logo_mime = (upload.mimetype or "").lower()
         if logo_mime not in _LOGO_TYPES:
@@ -23338,6 +23647,7 @@ def admin_create_client():
 
     # The lookup has been acted on; holding someone else's logo in a session
     # any longer than that serves nothing.
+    _brand_stash_drop(session.get("brand_lookup_logo"))
     for _k in ("brand_lookup", "brand_lookup_logo", "brand_lookup_logo_mime"):
         session.pop(_k, None)
     app.logger.info(f"[clients] engagement created: {slug}")
