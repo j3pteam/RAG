@@ -1,80 +1,54 @@
-# J3P Advisor — build 2026-09-22-i
+# J3P Advisor — build 2026-09-23-a
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## An advisor can be a persona of someone outside the firm
+## A client logo can be uploaded
 
-Two things were wrong for this case, and neither was visible on the page.
+**Advisors → the advisor → Client branding → Logo.** Choose a file, upload,
+done. Stored in the database like the advisor photo, not referenced by URL.
 
-**Every advisor's identity line said "grounded in Alan Friedman's
-thinking."** Named advisors add their expertise on top of the core voice,
-but the identity underneath stayed yours. Dr. Herbst's team would have met a
-J3P advisor wearing his name.
+A URL was the wrong default for this. A client's mark is rarely sitting on a
+public URL you can hotlink, and a URL that moves later breaks the page
+silently — nobody notices until a participant sees a broken image on a page
+carrying their own institution's name. The bytes cannot move.
 
-**Every advisor sent people to `clientservices@j3p.health`.** His own
-leadership team, asking who to follow up with, would have been routed to
-your client services.
+PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. SVG is included deliberately: it is
+the format a communications office hands over, and a logo in a header should
+stay sharp.
 
-Both now follow the advisor:
+| Upload | Result |
+|---|---|
+| 48 KB PNG | accepted |
+| 12 KB SVG | accepted |
+| 50 KB PDF | rejected — not an image type |
+| empty file | rejected |
+| 5 MB PNG | rejected, with the size named |
 
-| | Ordinary advisor | Persona for his team |
-|---|---|---|
-| Identity | grounded in Alan Friedman's thinking | grounded in Roy S. Herbst, MD, PhD's thinking |
-| Referrals | clientservices@j3p.health | their own address |
+## The details that make it usable
 
-Set under **Advisors → the advisor → Client branding → Persona of someone
-outside J3P**.
-
-## Consent is required, not recommended
-
-The form will not save a persona of a named person without a record of who
-confirmed their agreement and when. Refused, not warned about — a warning is
-dismissible, and this is the one control standing between a consented
-persona and an impersonation.
-
-```
-principal set, no consent recorded   -> REFUSED
-principal set, consent recorded      -> saved
-no principal                         -> saved (ordinary advisor)
-```
-
-The record is free text — "Confirmed by email with Dr. Herbst, 22 Sep 2026"
-— and is shown on the card afterward. It is a note, not proof, and it is
-worth keeping the actual email.
-
-## Setting his up
-
-1. **Advisors → Add or update an advisor** — "Roy S. Herbst, MD, PhD", with
-   his photo
-2. **Client branding** — Dartmouth's logo and colors
-3. **Persona of someone outside J3P** — grounded in his name, referrals to
-   his office, consent recorded
-4. **Knowledge tab** — his material, assigned to him only
-5. **Participant Links** — one per member of his leadership team
-6. **Voice Sample** — only with his recorded consent; the voice section
-   captures that separately
-
-Their pages will carry Dartmouth's look with a quiet "Delivered by J3P
-Health" line, because you are still the firm answering.
-
-## Two things I would settle before it reaches them
-
-**Whose data it is.** His team's transcripts would sit in the same database
-as every other client's. For a cancer center's leadership group that is
-likely to be asked about, and a separate deployment is the stronger answer —
-`NEW_BRAND.md` covers it.
-
-**What it says about him.** The persona answers his team in his name. If it
-is grounded in a knowledge base he has not reviewed, it will still speak
-confidently as him. Worth him seeing the material before the first
-participant link goes out.
+- **The preview sits on the header color it will actually appear against**,
+  not on white. A logo with a dark wordmark looks fine on a white card and
+  disappears on a navy header, and finding that out after sending the link
+  is the wrong order.
+- **An upload beats the URL field**, and the URL field says so when one
+  exists. Both can be set — someone pastes a URL, then uploads a file later
+  — and the upload is both the more deliberate act and the one that cannot
+  break.
+- **Remove is separate** and restores this site's logo.
+- The cache window matches the photo's, so a replaced logo appears within
+  five minutes rather than needing a hard refresh.
+- The "Delivered by J3P Health" line now also appears for an uploaded logo,
+  which the previous check missed.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-22-i`.
+should report `2026-09-23-a`.
+
+For Dr. Herbst: upload Dartmouth's mark, set the header color to match, and
+check the preview before sending any participant links.

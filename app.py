@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-22-i"
+APP_VERSION = "2026-09-23-a"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -8569,6 +8569,17 @@ def _advisors_ensure_table(conn):
         # advisor's participants; principal_consent records who confirmed
         # the named person agreed, and when — a persona of a real person
         # should not exist on anyone's say-so alone, including mine.
+        # An uploaded logo, stored like the advisor photo rather than
+        # referenced by URL. A client's mark is rarely on a public URL
+        # anyone can hotlink, and a URL that moves later silently breaks
+        # the page — the bytes do not.
+        for _blob_col, _type in (("brand_logo", "BYTEA"),
+                                 ("brand_logo_mime", "TEXT")):
+            try:
+                cur.execute(f"ALTER TABLE advisors ADD COLUMN IF NOT EXISTS "
+                            f"{_blob_col} {_type}")
+            except Exception:
+                pass
         for _brand_col in ("brand_logo_url", "brand_label", "brand_navy",
                            "brand_gold", "brand_paper",
                            "persona_principal", "referral_email",
@@ -8914,7 +8925,8 @@ def get_advisor(slug: str):
                                   COALESCE(brand_paper, ''),
                                   COALESCE(persona_principal, ''),
                                   COALESCE(referral_email, ''),
-                                  COALESCE(principal_consent, '')
+                                  COALESCE(principal_consent, ''),
+                                  (brand_logo IS NOT NULL)
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         result = None if row is None else {
@@ -8935,7 +8947,8 @@ def get_advisor(slug: str):
                 "brand_paper": row[16] or "",
                 "persona_principal": row[17] or "",
                 "referral_email": row[18] or "",
-                "principal_consent": row[19] or ""}
+                "principal_consent": row[19] or "",
+                "has_brand_logo": bool(row[20])}
         if cache is not None:
             cache[slug] = result
         return result
@@ -9976,6 +9989,50 @@ def active_persona_name() -> str:
         if adv:
             return adv["name"]
     return CONFIG["persona_name"]
+
+
+def get_advisor_logo(slug: str):
+    """An advisor's uploaded brand logo, if there is one."""
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT brand_logo, brand_logo_mime FROM advisors "
+                        "WHERE slug = %s", (slug,))
+            row = cur.fetchone()
+        if not row or row[0] is None:
+            return None
+        data = row[0]
+        return (bytes(data) if not isinstance(data, bytes) else data,
+                row[1] or "image/png")
+    except Exception as e:
+        app.logger.error(f"[advisors] logo read failed: {type(e).__name__}")
+        return None
+    finally:
+        conn.close()
+
+
+def save_advisor_logo(slug: str, data, mime: str) -> bool:
+    """Stores or clears an advisor's brand logo."""
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET brand_logo = %s, "
+                        "brand_logo_mime = %s WHERE slug = %s",
+                        (data, mime, slug))
+        conn.commit()
+        _forget_cached_advisor(slug)
+        return True
+    except Exception as e:
+        app.logger.error(f"[advisors] logo save failed: {type(e).__name__}")
+        return False
+    finally:
+        conn.close()
 
 
 def get_advisor_photo(slug: str):
@@ -13279,6 +13336,14 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
             _value = (advisor.get(_field) or "").strip()
             if _value:
                 page_cfg[_key] = _value
+        # An uploaded logo wins over a URL. Both can be set — someone pastes
+        # a URL, then uploads a file later — and the upload is the more
+        # deliberate act, as well as the one that cannot break when a link
+        # moves. The cache-buster matches the photo's, so a replaced logo
+        # appears within the same five-minute window.
+        if advisor.get("has_brand_logo"):
+            page_cfg["logo_url"] = (f"/a/{advisor['slug']}/logo"
+                                    f"?v={_avatar_cache_version()}")
     # A name for the default photo, so the general link can read "Alan
     # Friedman" rather than the app's own name.
     def name_the_advisor(cfg_out, person_name):
@@ -13379,6 +13444,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
         client_branded=bool(advisor and (advisor.get("brand_logo_url")
+                                         or advisor.get("has_brand_logo")
                                          or advisor.get("brand_navy"))),
         internal_only=bool(active and active.get("internal_only")),
         page_voice_mode=page_voice_mode,
@@ -13512,6 +13578,20 @@ def advisor_index_tolerant(slug, rest):
         return _render_chat(force_scheduling=True, advisor=advisor)
     # Anything else: send them to the advisor's default link
     return redirect(url_for("advisor_index", slug=slug))
+
+
+@app.route("/a/<slug>/logo")
+def advisor_logo(slug):
+    """An advisor's uploaded brand logo. 404 rather than a fallback: the
+    page only points here when one exists, so a request that finds nothing
+    means something is wrong and should say so."""
+    stored = get_advisor_logo(slug)
+    if not stored:
+        return ("", 404)
+    data, mime = stored
+    resp = app.response_class(data, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=300"
+    return resp
 
 
 @app.route("/a/<slug>/photo.jpg")
@@ -19182,10 +19262,46 @@ details.section[open] > summary {
           misrepresent that. A line naming {{ org_name }} as the provider is
           shown under the header whenever client branding is in use.
         </p>
+        <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
+              enctype="multipart/form-data" style="margin: 0 0 1.2rem;">
+          <div class="muted" style="font-size: 0.8rem; margin-bottom: 0.4rem;">Logo</div>
+          {% if adv.has_brand_logo %}
+          <div style="display: flex; align-items: center; gap: 0.9rem;
+                      flex-wrap: wrap; margin-bottom: 0.6rem;">
+            <img src="/a/{{ adv.slug }}/logo?v={{ avatar_version }}" alt=""
+                 style="max-height: 42px; max-width: 200px;
+                        background: {{ adv.brand_navy or cfg.navy }};
+                        padding: 0.4rem 0.6rem; border-radius: 4px;" />
+            <span class="muted" style="font-size: 0.78rem;">
+              Shown on the header background it will actually sit on.
+            </span>
+          </div>
+          {% endif %}
+          <input type="file" name="logo"
+                 accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" />
+          <button type="submit" class="btn" style="margin-left: 0.4rem;">
+            {{ "Replace logo" if adv.has_brand_logo else "Upload logo" }}
+          </button>
+          <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
+            PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. An uploaded logo is used
+            in preference to the URL field below, and unlike a URL it cannot
+            break when the client reorganizes their website.
+          </p>
+        </form>
+        {% if adv.has_brand_logo %}
+        <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
+              style="margin: -0.8rem 0 1.2rem;">
+          <input type="hidden" name="remove" value="1" />
+          <button type="submit" class="btn-quiet"
+                  style="font-size: 0.78rem;">Remove the uploaded logo</button>
+        </form>
+        {% endif %}
+
         <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}">
           <div style="display: grid; gap: 0.7rem;
                       grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
-            <label style="font-size: 0.8rem;">Logo URL
+            <label style="font-size: 0.8rem;">Logo URL{% if adv.has_brand_logo %}
+              <span class="muted">(overridden by the upload)</span>{% endif %}
               <input type="text" name="brand_logo_url" value="{{ adv.brand_logo_url }}"
                      placeholder="https://…/client-logo.png"
                      style="width: 100%; box-sizing: border-box; padding: 0.42rem;
@@ -22314,6 +22430,59 @@ def admin_create_internal_advisor():
     flash("\u2713 Created the internal J3P advisor. It is reachable at "
           "/a/j3p-internal by signed-in admin accounts only, and participant "
           "links to it are refused. Add its knowledge base on the Knowledge tab.")
+    return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+# A logo is a mark on a header, not a photograph: SVG is the format a
+# client's communications office will hand over, and it stays sharp.
+_LOGO_TYPES = dict(_AVATAR_TYPES)
+_LOGO_TYPES["image/svg+xml"] = "svg"
+LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+@app.route("/admin/advisors/logo/<slug>", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_advisor_logo(slug):
+    """Uploads or removes an advisor's brand logo."""
+    advisor = get_advisor(slug)
+    if not advisor:
+        flash("That advisor no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    if request.form.get("remove") == "1":
+        if save_advisor_logo(slug, None, None):
+            flash(f"\u2713 Removed {advisor['name']}'s logo. Their pages use "
+                  "this site's logo again.")
+        else:
+            flash("Could not remove that — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    upload = request.files.get("logo")
+    if not upload or not upload.filename:
+        flash("Choose a file first.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    mime = (upload.mimetype or "").lower()
+    if mime not in _LOGO_TYPES:
+        flash(f"{upload.filename} is a {mime or 'unrecognized'} file. "
+              "Use PNG, SVG, JPEG, WEBP or GIF.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    data = upload.read()
+    if not data:
+        flash("That file was empty — nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+    if len(data) > LOGO_MAX_BYTES:
+        flash(f"That logo is {len(data) // 1024} KB. The limit is "
+              f"{LOGO_MAX_BYTES // 1024} KB — a header logo should be well "
+              "under it, so this usually means a full-resolution export.")
+        return redirect(url_for("admin_dashboard", tab="advisors"))
+
+    if save_advisor_logo(slug, data, mime):
+        app.logger.info(f"[advisors] logo uploaded for {slug} ({len(data)} bytes)")
+        flash(f"\u2713 {advisor['name']}'s pages now carry the uploaded logo.")
+    else:
+        flash("Could not save that — nothing was changed.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
 
 
