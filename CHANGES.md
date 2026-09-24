@@ -1,73 +1,75 @@
-# J3P Advisor — build 2026-09-24-g
+# J3P Advisor — build 2026-09-24-h
 
-`app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
-deployment guides.
+`app.py`, the pre-deploy checks, and **`patch_exports.py`** — a one-time
+script that edits your `exports.py`.
+
+---
+
+## First: I made a mistake while working on this
+
+Hunting for `exports.py` on disk, I ran `cp /mnt/user-data/uploads/*.py .`,
+which overwrote my working copy of `app.py` with a version of it from
+**September 15**. I then "found" three bugs in that file and told you about
+them. Two were not real:
+
+- the missing table flattening — present in your build all along
+- a stray `</label>` in Participant Access — not in your build
+- a `NameError` on oversized uploads — not in your build either
+
+I restored from the packaged `2026-09-24-g` and re-applied only the genuine
+change. Nothing from that detour is in this build. Disregard that part of my
+last message.
 
 ---
 
-## Why clicking that conversation did nothing
+## Internal documents keep the firm's own names
 
-My bug, and a careless one. `openConversation` began with:
-
-```js
-if (btn.classList.contains("current")) return;
-```
-
-I wrote that to avoid reloading a conversation that was already open. But
-**"current" means the session is pointing at it, not that it is on screen** —
-the page renders only the greeting on load. So the one case where someone
-most obviously wants to click is the one case I made do nothing, silently.
-
-The early return is gone. Clicking any conversation loads it.
-
-## And the transcript comes back on its own
-
-Reopening the page now restores the conversation you were in, rather than
-showing a greeting while the model still has the full history — the page and
-the advisor were disagreeing about what had been said.
-
-It only runs when the transcript is genuinely empty, so it never overwrites
-a conversation in progress.
-
-## The earlier disappearance, and why it will stop
-
-Your previous screenshot showed no conversations at all. That was a
-different fault, and worth knowing about because it affects more than this
-rail.
-
-A signed-in person's history token was derived from **`app.secret_key` plus
-their email**. With `FLASK_SECRET_KEY` unset, each worker generates its own
-key at startup — so the same person got a different token on every worker
-and after every restart:
+You were right that this was in `exports.py`. `build()` calls
+`scrub_brand()` on every document, and that function does not merely remove
+the names — it **drops whole lines** whose remainder is under 12
+alphanumeric characters, and leaves holes in the ones it keeps:
 
 ```
-worker 1          u_7f17b295d1c4b968…
-worker 2          u_6e70eb33153f9cb4…
-after a redeploy  u_45f42c4b0a4469a4…
+before   The fixed retainer provides priority access to J3P Health's full practice.
+after    The fixed retainer provides priority access to 's full practice.
+
+before   - Access to J3P Health's broader cadre of specialists
+after    - Access to 's broader cadre of specialists
+
+before   - J3P Health
+after    (the bullet is gone)
 ```
 
-The conversations were being recorded. They were being recorded under an
-identity that no longer existed.
+Two changes, both in `patch_exports.py`:
 
-Two things were wrong: the key may be unset, and a session key should never
-have been the salt in the first place — it is meant to be rotatable, and
-tying identity to it means rotating it silently destroys every transcript
-ever recorded.
+**`build()` takes `scrub=True`.** The caller decides, because only the
+caller knows whose session it is. `app.py` now passes `scrub=False` when the
+advisor is internal, exactly as `chat()` already bypasses its own scrubber.
 
-Now: `FLASK_SECRET_KEY` is used when set, so a properly configured
-deployment keeps the tokens it already has. Otherwise a salt is generated
-once and **persisted**, stable from then on. If it cannot be persisted the
-log says so plainly rather than appearing to have fixed it.
+**Scrubbing replaces rather than deletes.** A client deliverable now reads
+"access to our practice's full practice" instead of "access to 's full
+practice". Still not elegant, but it is a document rather than visibly
+broken output that the client sees and you do not.
 
-**Still worth setting `FLASK_SECRET_KEY`.** It fixes sign-ins and the
-release acknowledgment dropping at random, which this does not touch.
-
-Conversations recorded under an old, vanished token cannot be recovered —
-there is no way to know which token belonged to whom.
-
----
+The drop-the-line test is unchanged in effect — it is judged on what
+deletion would leave, so a bullet that is only a brand name still goes.
 
 ## Installing
 
-Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-g`.
+1. `python3 patch_exports.py` from the repo root. It writes
+   `exports.py.bak` first, verifies the result parses, and **refuses to
+   write anything** unless all four edits match exactly — so a
+   half-patched file is not a possible outcome. If your `exports.py` has
+   moved on from the version I was given, it will say so and change
+   nothing.
+2. Replace `app.py`.
+3. Commit both. Diagnostics should report `2026-09-24-h`.
+
+## Still outstanding from that file
+
+Real Word **tables** — `parse_blocks` has no table concept, so the
+flattening workaround stays for now. That is a contained addition to
+`parse_blocks` plus the docx and pdf renderers, and I would rather do it as
+its own change than bundle it with a fix you are waiting on.
+
+`list_documents` at ~460 ms is `database.py`, not this file.

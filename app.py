@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-g"
+APP_VERSION = "2026-09-24-h"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -15149,8 +15149,15 @@ def export_response(fmt):
         return jsonify({"error": f"Unsupported format: {fmt}"}), 400
 
     try:
+        # An internal session keeps this firm's names in its documents.
+        # exports.py scrubs them by default, which is right for a client
+        # deliverable and wrong here: the reply on screen names J3P freely,
+        # and a Word file that quietly says something else is worse than
+        # either version on its own.
+        _export_advisor = get_advisor(session.get("advisor_slug"))
+        _internal = bool(_export_advisor and _export_advisor.get("internal_only"))
         buffer, filename, mimetype = exports.build(
-            fmt, flatten_markdown_tables(text), title)
+            fmt, flatten_markdown_tables(text), title, scrub=not _internal)
     except Exception as e:
         app.logger.error(f"Export failed ({fmt}): {e}")
         return jsonify({"error": f"Could not generate {fmt.upper()}: {str(e)[:200]}"}), 500
