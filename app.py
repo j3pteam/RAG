@@ -3976,6 +3976,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
     </button>
     <div class="presence-name">{{ cfg.avatar_name or cfg.persona_name }}</div>
+    {% if client_org and client_org != (cfg.avatar_name or cfg.persona_name) %}
+    <div class="presence-status" style="text-transform: none; letter-spacing: 0.02em;">{{ client_org }}</div>
+    {% endif %}
     <div class="presence-status" id="presence-status">Ready</div>
   </div>
   {% endif %}
@@ -8605,7 +8608,7 @@ def initials_for(name: str) -> str:
     return (core[0][0] + core[-1][0]).upper()
 
 
-def placeholder_avatar_svg(name: str) -> str:
+def placeholder_avatar_svg(name: str, bg: str = "#27334A", fg: str = "#D2BC8D") -> str:
     """A monogram to stand in for a photo.
 
     Chosen over a generic silhouette: initials read as a deliberate choice
@@ -8618,12 +8621,31 @@ def placeholder_avatar_svg(name: str) -> str:
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {size} {size}" '
         f'width="{size}" height="{size}" role="img" aria-label="{text}">'
-        f'<circle cx="{size/2}" cy="{size/2}" r="{size/2}" fill="#27334A"/>'
+        f'<circle cx="{size/2}" cy="{size/2}" r="{size/2}" fill="{bg}"/>'
         f'<text x="50%" y="50%" dy="0.35em" text-anchor="middle" '
         f'font-family="Jost, Helvetica, Arial, sans-serif" font-weight="400" '
-        f'font-size="{font}" letter-spacing="6" fill="#D2BC8D">{text}</text>'
+        f'font-size="{font}" letter-spacing="6" fill="{fg}">{text}</text>'
         f'</svg>'
     )
+
+
+def _is_client_engagement(adv) -> bool:
+    """Same test the admin panel uses to put an advisor on Add Client."""
+    return bool(adv and not adv.get("internal_only") and (
+        adv.get("brand_label") or adv.get("brand_logo_url")
+        or adv.get("has_brand_logo") or adv.get("brand_navy")))
+
+
+def client_release_body(org: str) -> str:
+    """The release for a client engagement: releases this firm AND the
+    client organization. Used only on client-engagement pages; every other
+    page keeps RELEASE_BODY_HTML as written."""
+    from html import escape as _esc
+    legal = f"{ORG_LEGAL_NAME} and {_esc(org)}"
+    return brand(RELEASE_BODY_HTML
+                 .replace("I release {legal}, its coaches,",
+                          "I release {legal}, their coaches,")
+                 .replace("{legal}", legal))
 
 
 def _advisors_ensure_table(conn):
@@ -13490,7 +13512,11 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         allow_materials=_effective("allow_materials_override", "allow_materials"),
         show_scheduling_button=show,
         release_heading=RELEASE_HEADING,
-        release_body=brand(RELEASE_BODY_HTML),
+        release_body=(client_release_body(advisor["brand_label"])
+                      if _is_client_engagement(advisor) and advisor.get("brand_label")
+                      else brand(RELEASE_BODY_HTML)),
+        client_org=((advisor.get("brand_label") or "")
+                    if _is_client_engagement(advisor) else ""),
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=TIPI_ITEMS,
         # Both intakes are off for an internal session regardless of the
@@ -13677,6 +13703,15 @@ def advisor_photo(slug):
     advisor = get_advisor(slug)
     if advisor and advisor.get("no_photo"):
         resp = app.response_class(placeholder_avatar_svg(advisor["name"]),
+                                  mimetype="image/svg+xml")
+        resp.headers["Cache-Control"] = "no-cache"
+        return resp
+    # A client engagement never falls back to this firm's photo: the
+    # participant sees the advisor's initials in the client's own colors.
+    if _is_client_engagement(advisor):
+        bg = advisor.get("brand_navy") or "#27334A"
+        fg = advisor.get("brand_gold") or "#FFFFFF"
+        resp = app.response_class(placeholder_avatar_svg(advisor["name"], bg, fg),
                                   mimetype="image/svg+xml")
         resp.headers["Cache-Control"] = "no-cache"
         return resp
@@ -18538,15 +18573,14 @@ details.section[open] > summary {
             enctype="multipart/form-data">
         <div style="display: grid; gap: 0.8rem;
                     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
-          <label style="font-size: 0.82rem;">Advisor name <span class="muted">(required)</span>
-            <input type="text" name="name" required placeholder="e.g. John Sample, MD"
-                   value="{{ lookup.name if lookup else '' }}"
+          <label style="font-size: 0.82rem;">Advisor participants talk to <span class="muted">(required)</span>
+            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.82rem;">Organization
-            <input type="text" name="brand_label" placeholder="e.g. Sample Health System"
-                   value="{{ (lookup.site_name or lookup.name) if lookup else '' }}"
+            <input type="text" name="brand_label" placeholder="e.g. Dartmouth Cancer Center"
+                   value="{{ (lookup.name or lookup.site_name) if lookup else '' }}"
                    style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -18824,9 +18858,15 @@ details.section[open] > summary {
                    style="width: 100%; box-sizing: border-box; padding: 0.42rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.8rem;">Wordmark beside the logo
+          <label style="font-size: 0.8rem;">Advisor participants talk to
+            <input type="text" name="persona_name" value="{{ adv.name }}"
+                   placeholder="e.g. Roy Herbst, MD PhD"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Organization
             <input type="text" name="brand_label" value="{{ adv.brand_label }}"
-                   placeholder="{{ adv.name }}"
+                   placeholder="e.g. Dartmouth Cancer Center"
                    style="width: 100%; box-sizing: border-box; padding: 0.42rem;
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -23779,6 +23819,10 @@ def admin_advisor_branding(slug):
                         (values["brand_logo_url"], values["brand_label"],
                          values["brand_navy"], values["brand_gold"],
                          values["brand_paper"], slug))
+            _persona = (request.form.get("persona_name") or "").strip()[:80]
+            if _persona and _persona != advisor.get("name"):
+                cur.execute("UPDATE advisors SET name = %s WHERE slug = %s",
+                            (_persona, slug))
             if lookup_logo:
                 cur.execute("UPDATE advisors SET brand_logo = %s, "
                             "brand_logo_mime = %s WHERE slug = %s",
