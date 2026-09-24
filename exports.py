@@ -46,6 +46,11 @@ _BRAND_TOKENS = [
 ]
 _BRAND_RE = re.compile("|".join(_BRAND_TOKENS), re.IGNORECASE)
 
+# What a removed name becomes mid-sentence. Deleting it outright produced
+# "priority access to 's full practice and methodology" — visibly broken,
+# and the client sees it rather than the person who generated the file.
+_BRAND_REPLACEMENT = "our practice"
+
 
 def scrub_brand(text: str) -> str:
     """Remove advisor branding from document content."""
@@ -56,10 +61,12 @@ def scrub_brand(text: str) -> str:
         if not _BRAND_RE.search(line):
             out_lines.append(line)          # untouched — never reformat it
             continue
-        # A short line that is essentially just branding gets dropped
-        residue = _BRAND_RE.sub("", line)
-        if len(re.sub(r"[^A-Za-z0-9]", "", residue)) < 12:
+        # A line that is essentially nothing but branding is dropped.
+        # Judged on what would be left if the name were deleted, so the
+        # replacement cannot make an empty line look substantial.
+        if len(re.sub(r"[^A-Za-z0-9]", "", _BRAND_RE.sub("", line))) < 12:
             continue
+        residue = _BRAND_RE.sub(_BRAND_REPLACEMENT, line)
         # Tidy only the lines we actually edited, so list markers and other
         # formatting elsewhere in the document are left alone.
         residue = re.sub(r"[ \t]{2,}", " ", residue)
@@ -351,7 +358,9 @@ def split_documents(text: str) -> list:
       2. Horizontal rules ('---') between substantial chunks
     A normal single document full of '## ' section headings is NOT split.
     """
-    body = scrub_brand(strip_meta(text or ""))
+    # Splitting only needs the boundaries. Scrubbing here would settle
+    # the question before the caller has had a say in it.
+    body = strip_meta(text or "")
     if not body.strip():
         return [{"title": "", "body": ""}]
 
@@ -985,13 +994,22 @@ MIME_TYPES = {
 }
 
 
-def build(fmt: str, text: str, title: str = None):
-    """Return (BytesIO, filename, mimetype) for the requested format."""
+def build(fmt: str, text: str, title: str = None, scrub: bool = True):
+    """Return (BytesIO, filename, mimetype) for the requested format.
+
+    scrub=False keeps the firm's own names in the document. That is
+    correct for an internal session, where those names are the subject
+    rather than a leak — the advisor is talking to colleagues about the
+    firm's own work. The caller decides, because only the caller knows
+    whose session this is.
+    """
     fmt = (fmt or "").lower().strip()
     if fmt not in BUILDERS:
         raise ValueError(f"Unsupported format: {fmt}")
-    # Chat-only instructions and advisor branding must never reach the document
-    text = scrub_brand(strip_meta(text))
+    # Chat-only instructions never belong in a document, whoever it is for.
+    text = strip_meta(text)
+    if scrub:
+        text = scrub_brand(text)
     resolved_title = (title or "").strip() or derive_title(text)
     body = drop_leading_title(text, resolved_title)
     buffer = BUILDERS[fmt](body, resolved_title)
