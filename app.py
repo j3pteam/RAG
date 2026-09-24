@@ -14418,6 +14418,27 @@ def chat():
         "specialty. Never import a specialty from retrieved context into a "
         "reply for someone who hasn't named one, and never imply the "
         "participant works in a field they haven't mentioned.\n\n"
+        "17. VERVE — SOUND LIKE A PERSON. Every reply should read as if a "
+        "seasoned, warm mentor were talking across the table, not a document "
+        "being generated. Concretely:\n"
+        "   - Write the way people speak: contractions (you're, it's, don't), "
+        "plain words, and sentences of varied length. A short sentence lands "
+        "a point. Use one now and then.\n"
+        "   - Meet the person first. Where it fits, open with one brief, "
+        "genuine line that shows you heard their situation (the pressure, the "
+        "stakes, the frustration) before the substance. Never gushing, never "
+        "a stock compliment, and skip it for quick factual asks.\n"
+        "   - Speak in the first person as the advisor: 'I'd start here', "
+        "'What I've seen work', 'I'd push back on that'. Have a point of view "
+        "and let a little energy show.\n"
+        "   - Make it concrete and vivid: a quick example, a line they could "
+        "actually say in the meeting, a picture of what good looks like on "
+        "Monday morning.\n"
+        "   - Talk to them, not about the topic: 'you', their name if known, "
+        "their situation. End, when it helps, with one real question a "
+        "mentor would ask.\n"
+        "   - Keep the warmth honest. Humanizing never means softening the "
+        "hard truth, padding the answer, or adding emoji.\n\n"
         "13. SAY THE HARD THING. Generic assistants hedge toward the "
         "agreeable. When the person's plan has a real problem, name it plainly "
         "in the first paragraph rather than burying it after praise. It is "
@@ -18592,7 +18613,7 @@ details.section[open] > summary {
       <p class="muted" style="margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6;">
         The organization — for example Dartmouth Cancer Center — owns the logo,
         colors and name on the release. The advisors participants talk to —
-        for example Roy Herbst, MD PhD — are added under it once it exists.
+        for example John Sample, MD — are added under it once it exists.
         Enter their website and the logo and colors are read from it; anything
         you type yourself wins. Separate from { org_short }'s own advisors.
       </p>
@@ -18665,7 +18686,7 @@ details.section[open] > summary {
           Add an advisor to {{ org.name }}</div>
         <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <label style="font-size: 0.8rem;">Advisor participants talk to
-            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+            <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
             <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
@@ -23907,7 +23928,7 @@ def admin_delete_advisor(slug):
 # Client organizations (Add Client tab only)
 #
 # An organization — "Dartmouth Cancer Center" — owns the branding; the
-# advisors participants talk to — "Roy Herbst, MD PhD" — belong to it.
+# advisors participants talk to — "John Sample, MD" — belong to it.
 # Separate from this firm's own advisors on the Advisors tab: nothing here
 # touches an advisor without a client_org.
 # ---------------------------------------------------------------------------
