@@ -8641,11 +8641,22 @@ def client_release_body(org: str) -> str:
     client organization. Used only on client-engagement pages; every other
     page keeps RELEASE_BODY_HTML as written."""
     from html import escape as _esc
-    legal = f"{ORG_LEGAL_NAME} and {_esc(org)}"
-    return brand(RELEASE_BODY_HTML
-                 .replace("I release {legal}, its coaches,",
-                          "I release {legal}, their coaches,")
-                 .replace("{legal}", legal))
+    org = _esc(org)
+    return f"""
+  <p>
+    By checking the box below, I acknowledge that I am voluntarily using
+    this AI advisor, provided to {org} by {ORG_LEGAL_NAME}, and understand
+    that the content, coaching and guidance it provides are for personal
+    and professional development purposes only. I understand that this is
+    not medical, psychological, legal, or other professional advice, and
+    that I am responsible for my own decisions and actions.
+  </p>
+  <p>
+    To the extent permitted by law, I release {ORG_LEGAL_NAME} and {org},
+    and their respective coaches, employees, and representatives, from
+    liability arising from my voluntary use of this AI advisor.
+  </p>
+"""
 
 
 def _advisors_ensure_table(conn):
@@ -9757,7 +9768,11 @@ def _participant_links_ensure_table(conn):
         # button. NULL means inherit the advisor's setting, which is what a
         # new link gets: freezing the advisor's current value at creation
         # time would silently diverge the moment the advisor changed theirs.
-        for col, ddl in (("show_scheduling", "BOOLEAN"),):
+        for col, ddl in (("show_scheduling", "BOOLEAN"),
+                         # Client engagements only (Add Client tab): per-link
+                         # control of the two intakes. NULL = follow advisor.
+                         ("context_intake", "BOOLEAN"),
+                         ("personality", "BOOLEAN")):
             cur.execute(f"""
                 ALTER TABLE participant_links
                 ADD COLUMN IF NOT EXISTS {col} {ddl}
@@ -9835,7 +9850,8 @@ def list_participant_links() -> list:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, token, label, advisor_slug, enabled, created_at,
-                       last_used_at, first_name, email, show_scheduling
+                       last_used_at, first_name, email, show_scheduling,
+                       context_intake, personality
                 FROM participant_links ORDER BY created_at DESC
             """)
             for row in cur.fetchall():
@@ -9845,6 +9861,7 @@ def list_participant_links() -> list:
                     "created_at": row[5], "last_used_at": row[6],
                     "first_name": row[7] or "", "email": row[8] or "",
                     "show_scheduling": row[9],   # None = follow the advisor
+                    "context_intake": row[10], "personality": row[11],
                 })
     except Exception as e:
         app.logger.error(f"[participant-links] list failed: {e}")
@@ -9975,7 +9992,8 @@ def get_participant_link(token: str):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT id, token, label, advisor_slug, enabled, created_at,
-                       last_used_at, first_name, show_scheduling
+                       last_used_at, first_name, show_scheduling,
+                       context_intake, personality
                 FROM participant_links WHERE token = %s
             """, (token,))
             row = cur.fetchone()
@@ -9985,7 +10003,8 @@ def get_participant_link(token: str):
                 "advisor_slug": row[3] or "", "enabled": bool(row[4]),
                 "created_at": row[5], "last_used_at": row[6],
                 "first_name": row[7] or "",
-                "show_scheduling": row[8]}   # None = follow the advisor
+                "show_scheduling": row[8],   # None = follow the advisor
+                "context_intake": row[9], "personality": row[10]}
     except Exception as e:
         app.logger.error(f"[participant-links] read failed: {e}")
         return None
@@ -10007,6 +10026,29 @@ def touch_participant_link(token: str):
         conn.commit()
     except Exception as e:
         app.logger.error(f"[participant-links] touch failed: {e}")
+    finally:
+        conn.close()
+
+
+def set_participant_link_intake(link_id: int, column: str, value) -> bool:
+    """Per-link intake override for a client engagement link.
+    column is 'context_intake' or 'personality'; value True/False/None."""
+    if column not in ("context_intake", "personality"):
+        return False
+    conn = _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE participant_links SET {column} = %s "
+                        "WHERE id = %s", (value, link_id))
+            changed = cur.rowcount
+        conn.commit()
+        return changed > 0
+    except Exception as e:
+        app.logger.error(f"[participant-links] intake update failed: {type(e).__name__}")
+        return False
     finally:
         conn.close()
 
@@ -13344,7 +13386,8 @@ def _avatar_cache_version() -> int:
     return int(time.time() // 300)
 
 
-def _render_chat(force_scheduling=None, advisor=None, participant_first_name=None):
+def _render_chat(force_scheduling=None, advisor=None, participant_first_name=None,
+                 link_context_intake=None, link_personality=None):
     """Render the chat page.
 
     force_scheduling overrides the admin default; advisor selects a named
@@ -13529,10 +13572,14 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         # than hidden in the template, so the flags the page reads are
         # actually false — there is no overlay to skip and no half-state
         # where the markup is absent but the entry gate still waits on it.
+        # A client link's own setting (Add Client tab) wins; None follows
+        # the advisor and site as before.
         personality_enabled=(False if is_internal else
+                             bool(link_personality) if link_personality is not None else
                              _effective("personality_override",
                                         "personality_assessment_enabled", True)),
         context_intake_enabled=(False if is_internal else
+                                bool(link_context_intake) if link_context_intake is not None else
                                 _effective("context_intake_override",
                                            "context_intake_enabled", False)),
         context_position_options=CONTEXT_POSITION_OPTIONS,
@@ -13793,9 +13840,12 @@ def participant_link_index(token):
         session.pop("advisor_slug", None)
     # This person's own booking setting wins over the advisor's, and None
     # means they never had one of their own — follow the advisor.
+    _client = _is_client_engagement(advisor)
     return _render_chat(advisor=advisor,
                         participant_first_name=link.get("first_name"),
-                        force_scheduling=link.get("show_scheduling"))
+                        force_scheduling=link.get("show_scheduling"),
+                        link_context_intake=(link.get("context_intake") if _client else None),
+                        link_personality=(link.get("personality") if _client else None))
 
 
 @app.route("/no-scheduling")
@@ -18406,6 +18456,7 @@ details.section[open] > summary {
             <th style="width: 20%;">Label</th><th>Link</th>
             <th style="width: 10%;">Status</th>
             <th style="width: 13%;">Booking</th>
+            {% if return_tab == "clients" %}<th style="width: 16%;">Intake</th>{% endif %}
             <th style="width: 12%;">Last used</th>
             {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
           </tr>
@@ -18459,6 +18510,31 @@ details.section[open] > summary {
               </span>
               {% endif %}
             </td>
+            {% if return_tab == "clients" %}
+            <td>
+              {% for key, lbl in [("context_intake", "Questions"), ("personality", "Personality")] %}
+              {% set cur = l[key] %}
+              {% if can_edit %}
+              <form method="POST" action="/admin/participant-links/intake/{{ l.id }}"
+                    style="margin: 0 0 0.3rem;">
+                <input type="hidden" name="which" value="{{ key }}" />
+                <label style="font-size: 0.7rem;" class="muted">{{ lbl }}</label>
+                <select name="value" onchange="this.form.submit()"
+                        style="width: 100%; padding: 0.25rem; font-family: inherit;
+                               font-size: 0.76rem; border: 1px solid var(--line);
+                               border-radius: 2px; background: var(--paper);">
+                  <option value="" {% if cur is none %}selected{% endif %}>Follow advisor</option>
+                  <option value="1" {% if cur is sameas true %}selected{% endif %}>On</option>
+                  <option value="0" {% if cur is sameas false %}selected{% endif %}>Off</option>
+                </select>
+              </form>
+              {% else %}
+              <span class="muted" style="font-size: 0.74rem;">{{ lbl }}:
+                {% if cur is none %}follow{% elif cur %}on{% else %}off{% endif %}</span><br />
+              {% endif %}
+              {% endfor %}
+            </td>
+            {% endif %}
             <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
             {% if can_edit %}
             <td>
@@ -24386,6 +24462,23 @@ def admin_set_advisor_scheduling(slug):
              else "always show" if value else "always hide")
     flash(f"✓ Booking button for {advisor['name']}: {where}.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+@app.route("/admin/participant-links/intake/<int:link_id>", methods=["POST"])
+@require_permission("edit_participant_links")
+def admin_set_participant_link_intake(link_id):
+    """Add Client tab: turn the context questions or the personality survey
+    on or off for one participant link."""
+    column = (request.form.get("which") or "").strip()
+    value = _tristate_form_value("value")
+    label = {"context_intake": "Context questions",
+             "personality": "Personality survey"}.get(column)
+    if label and set_participant_link_intake(link_id, column, value):
+        flash(f"\u2713 {label} for that link: "
+              + ("follow the advisor." if value is None else "on." if value else "off."))
+    else:
+        flash("Could not update that link.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/participant-links/scheduling/<int:link_id>", methods=["POST"])
