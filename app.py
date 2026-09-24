@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-j"
+APP_VERSION = "2026-09-24-k"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -22430,6 +22430,11 @@ def admin_dashboard():
         active_tab = "overview"
     want_activity = active_tab == "activity"
     want_advisors = active_tab == "advisors"
+    # The Clients tab now renders advisor cards of its own — participant
+    # links, their documents, their branding — so it needs the same data the
+    # Advisors tab does. Without this the sections render empty and a link
+    # that was created successfully looks as though it was not.
+    want_advisor_data = active_tab in ("advisors", "clients")
     want_knowledge = active_tab == "knowledge"
 
     db_ok = db.is_enabled()
@@ -22505,7 +22510,7 @@ def admin_dashboard():
     _phase_mark("feedback stats + log")
     _personality_by_interaction = personality_for([r.get("id") for r in feedback_rows])
     _advisor_map = (document_advisor_map()
-                    if active_tab in ("knowledge", "advisors") else {})
+                    if active_tab in ("knowledge", "advisors", "clients") else {})
     _phase_mark("document_advisor_map")
     _advisor_names = {a["slug"]: a["name"] for a in _advisor_rows}
     _advisor_docs = {}
@@ -22514,7 +22519,7 @@ def admin_dashboard():
             _advisor_docs.setdefault(slug, []).append(d)
     # Grouped once here rather than filtered per card in the template.
     # "" is the default persona, which has no row in the advisors table.
-    _participant_links = list_participant_links() if want_advisors else []
+    _participant_links = list_participant_links() if want_advisor_data else []
     _phase_mark("participant links")
     _links_by_advisor = {}
     for _l in _participant_links:

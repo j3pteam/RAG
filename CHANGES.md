@@ -1,50 +1,50 @@
-# J3P Advisor — build 2026-09-24-j
+# J3P Advisor — build 2026-09-24-k
 
-`app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged — run it
-once if you have not already).
+`app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged).
 
 ---
 
-## Links for a client are created, and stay, on Add Client
+## The link was created. The page could not show it.
 
-The link form inside an engagement was still posting `return_to=advisors`,
-so creating one threw you onto the Advisors tab — where the engagement does
-not appear. The shared form now returns to whichever tab it was used on.
+My bug. The admin panel loads data per tab, to avoid running every query on
+every page:
 
-## Client engagements are gone from the other tabs' pickers
+```python
+want_advisors = active_tab == "advisors"
+_participant_links = list_participant_links() if want_advisors else []
+```
 
-They were still reachable in two places I had missed:
+When I moved client engagements onto their own tab, I moved the sections but
+not the data behind them. On Add Client, `want_advisors` is false — so the
+participant-links list was **always empty**, whatever you created.
 
-**Voice sample → Copy to…** on the Advisors tab listed client engagements as
-a destination. A client engagement is not a person with a voice to clone,
-and copying a coach's voice onto one would mean a real person speaking as a
-client's advisor.
+"No participant links for Roy Friedman yet" was not a failure report. It was
+the page truthfully describing a list it had been handed empty.
 
-**Knowledge → the four "scoped to…" pickers** on upload, folder upload, URL
-and text. Choosing a client there means picking them from a dropdown of
-everyone, which is the step that gets missed — and the consequence is a
-client's material answering another client's questions. Their documents are
-uploaded inside their engagement, where the advisor is fixed rather than
-chosen.
+The same applied to **Their documents**: the document-to-advisor map was
+loaded only for the Knowledge and Advisors tabs, so that section would have
+stayed empty no matter what you uploaded.
 
-| | Advisors | Knowledge | Add Client |
-|---|---|---|---|
-| Client offered in a picker | 0 | 0 in upload | — |
-| Client's links, docs, branding | no | no | yes |
+Both now load for Add Client as well. Verified by rendering the tab with a
+link present — it lists, and the "none yet" line is gone.
 
-## One thing I deliberately did not remove
+## Worth checking on your deployment
 
-The **reassignment controls on documents that already exist** — the checkbox
-list and the per-row scope selector — still list client engagements. Two of
-them, confirmed in the render.
+The link you made for "Alan" was almost certainly created. Open Add Client
+after deploying and it should be listed under Roy Friedman. If you made
+several while nothing appeared, they will all be there — nothing was lost,
+it simply was not shown.
 
-Removing them would have been more consistent and worse: a document already
-assigned to a client could then never be unassigned or moved, with no way
-back. Consistency is not worth stranding data.
+## A pattern in these last few builds
+
+Three faults in a row have come from the same thing: moving a feature to a
+new tab and leaving something behind — the instructions, the redirect
+targets, and now the data. Each time the visible symptom pointed somewhere
+else. A move is not one change, and I have been treating it as one.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-j`.
+should report `2026-09-24-k`.
