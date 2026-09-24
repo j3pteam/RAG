@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-m"
+APP_VERSION = "2026-09-24-n"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -3791,7 +3791,17 @@ INDEX_HTML = r"""<!DOCTYPE html>
 
   <header>
     <div class="brand">
-      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo" />
+      {# A client logo can fail to load — a URL that moved, a site that
+         blocks hotlinking, an upload that is not there. A broken-image icon
+         in the header of a client's own session is the worst way to find
+         that out, so it falls back to this deployment's logo and the
+         failure is reported in the admin panel instead. #}
+      <img src="{{ cfg.logo_url }}" alt="{{ cfg.persona_name }}" class="brand-logo"
+           {% if site_logo_url and cfg.logo_url != site_logo_url %}
+           {# Single-quoted: tojson emits double quotes, which would close the
+              attribute early and break the tag. #}
+           onerror='this.onerror=null; this.src={{ site_logo_url|tojson }};'
+           {% endif %} />
       <span class="brand-divider"></span>
       <span class="brand-tag">{{ cfg.persona_name }}</span>
       {% if internal_only %}<span class="brand-internal">Internal</span>{% endif %}
@@ -13500,6 +13510,7 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
         page_advisor_slug=(active["slug"] if active else ""),
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
+        site_logo_url=CONFIG["logo_url"],
         client_branded=bool(advisor and (advisor.get("brand_logo_url")
                                          or advisor.get("has_brand_logo")
                                          or advisor.get("brand_navy"))),
@@ -18624,6 +18635,49 @@ details.section[open] > summary {
                 data-url="{{ base_url }}/a/{{ adv.slug }}"
                 data-advisor="{{ adv.name }}">Share</button>
       </div>
+      {# What is actually stored, rather than what was intended. A colour
+         that never saved and a colour that saved as the site default look
+         identical on the session page, and the only way to tell them apart
+         was to read the database. #}
+      <div style="display: flex; gap: 1.4rem; flex-wrap: wrap; margin: 0 0 0.9rem;
+                  font-size: 0.78rem;" class="muted">
+        <span>
+          Logo:
+          {% if adv.has_brand_logo %}<strong>uploaded</strong>
+          {% elif adv.brand_logo_url %}<strong>from a URL</strong>
+          {% else %}<strong>not set</strong> — using this site's
+          {% endif %}
+        </span>
+        <span>
+          Header:
+          {% if adv.brand_navy %}
+          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
+                       border-radius: 2px; vertical-align: -1px;
+                       background: {{ adv.brand_navy }};
+                       border: 1px solid rgba(0,0,0,0.2);"></span>
+          <strong>{{ adv.brand_navy }}</strong>
+          {% else %}<strong>not set</strong>{% endif %}
+        </span>
+        <span>
+          Accent:
+          {% if adv.brand_gold %}
+          <span style="display: inline-block; width: 0.7rem; height: 0.7rem;
+                       border-radius: 2px; vertical-align: -1px;
+                       background: {{ adv.brand_gold }};
+                       border: 1px solid rgba(0,0,0,0.2);"></span>
+          <strong>{{ adv.brand_gold }}</strong>
+          {% else %}<strong>not set</strong>{% endif %}
+        </span>
+      </div>
+      {% if adv.brand_logo_url and not adv.has_brand_logo %}
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.78rem; line-height: 1.6;">
+        Their logo is linked from
+        <code>{{ adv.brand_logo_url }}</code>. If it does not appear on their
+        session page, that address is unreachable from a browser — many sites
+        block other sites from loading their images. Upload the file instead;
+        an upload cannot break.
+      </p>
+      {% endif %}
       <p class="muted" style="margin: 0 0 1rem; font-size: 0.82rem;">
         {% if adv.persona_principal %}
         <br />Speaks as a voice grounded in {{ adv.persona_principal }}'s thinking.

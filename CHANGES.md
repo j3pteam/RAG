@@ -1,49 +1,60 @@
-# J3P Advisor — build 2026-09-24-m
+# J3P Advisor — build 2026-09-24-n
 
 `app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged).
 
 ---
 
-## Saving a client setting keeps you on Add Client
+## I cannot tell from here why the branding did not take — so the panel now says
 
-Setting Roy Herbst's branding dropped you on the **Advisors** tab — a tab
-his engagement is not on. The three routes behind those forms were written
-when the forms sat on the advisor card, and still sent people to Advisors
-afterward.
+Your screenshot shows a **broken image** where the logo should be and the
+colors unchanged. Those are two different failures and I could not tell
+which from outside, so rather than guess a third time I made the panel
+report what is actually stored.
 
-**18 redirects across three routes** now return to Add Client: branding,
-persona, and logo — including every validation failure, so a rejected color
-leaves you on the form you were filling in rather than somewhere else
-entirely.
-
-## I stopped fixing these one report at a time
-
-This is the fourth build in a row correcting something left behind by moving
-client engagements to their own tab. Rather than wait for the next one, I
-audited it:
-
-**Every client-related route, and where it sends you:**
+Each engagement now shows:
 
 ```
-/admin/clients/lookup             clients
-/admin/clients/lookup/clear       clients
-/admin/clients/create             clients
-/admin/advisors/logo/<slug>       clients
-/admin/advisors/persona/<slug>    clients
-/admin/advisors/branding/<slug>   clients
+Logo: uploaded          Header: ■ #00693E      Accent: ■ #9D162E
+Logo: from a URL        Header: not set        Accent: not set
+Logo: not set           Header: not set        Accent: not set
+   — using this site's
 ```
 
-**And the Advisors pane itself** — no branding form, no persona form, no
-client logo upload, no color fields, and the filter that keeps engagements
-out of the list is in place.
+**"not set" and "set to something that looks like the default" are
+indistinguishable on the session page.** That is why this kept being hard to
+diagnose. Open Add Client after deploying and the row will say which case
+you are in.
 
-That is all of it. If something client-related still appears on Advisors
-after this, it is something I have not thought of rather than something I
-knew about and missed.
+If it reads **from a URL**, the card also warns that many sites block other
+sites from loading their images — which is exactly what a broken image in
+the header looks like — and suggests uploading the file instead.
+
+## A broken image no longer reaches a client's session
+
+If a client logo fails to load for any reason, the header falls back to this
+deployment's logo. A broken-image icon in the header of a client's own
+session is the worst possible place to discover a bad URL.
+
+## And a bug in that fix, caught before it shipped
+
+My first version produced:
+
+```html
+onerror="this.onerror=null; this.src="/full_logo.png";"
+```
+
+`|tojson` emits double quotes, which closed the attribute early and broke
+the tag. The HTML check does not look inside attribute values, so it passed
+— I caught it by parsing the rendered tag and checking the attribute
+survived intact. Now single-quoted, and verified to parse as one attribute
+with its value whole.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-m`.
+should report `2026-09-24-n`.
+
+Then open Add Client and read the Logo / Header / Accent row on Roy Herbst.
+Tell me what it says and I will know which of the two failures this is.
