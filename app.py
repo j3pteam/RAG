@@ -13417,6 +13417,11 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
     # text and the contact address stay this deployment's, because the
     # engagement is still run by this firm — a page that looked entirely
     # like the client's would misrepresent who is answering.
+    # Client engagements only: the footer does not name this firm's product.
+    if _is_client_engagement(advisor):
+        page_cfg["footer_ai_note"] = ("This is AI and can make mistakes. "
+                                      "Please double-check responses.")
+
     if advisor:
         for _field, _key in (("brand_logo_url", "logo_url"),
                              ("brand_navy", "navy"),
