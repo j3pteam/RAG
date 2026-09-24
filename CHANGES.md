@@ -1,75 +1,47 @@
-# J3P Advisor — build 2026-09-24-c
+# J3P Advisor — build 2026-09-24-d
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## Found it, and your two screenshots are what found it
+## The consent record no longer blocks
 
-Two things in them settled a question I have been guessing at for days.
+It was never real protection, and I should have weighed that before making
+it a hard stop. It is a free-text box — anyone can type anything into it —
+so refusing to create the engagement bought no actual safeguard while
+standing between you and your own setup.
 
-**No "opening N database connections" line appeared.** That line only shows
-when a physical connection is opened, so connections are being reused and
-the network handshake is *not* the cost. Every earlier theory of mine that
-blamed the public proxy was wrong.
+The field stays, and so does the note:
 
-**`list_advisors` was 1870 ms on Overview and 121 ms on Diagnostics.** The
-same query, 15× apart, moments apart. A query does not vary like that. What
-varies is whether something else happened alongside it.
+> Naming a real person makes this advisor speak as a voice grounded in their
+> thinking, to people who may report to them. Worth having their agreement
+> before it does — this box is somewhere to note when and how, not a
+> requirement.
 
-## What was happening
+What protects the named person is the agreement itself. A form cannot check
+that, and pretending it can is worse than saying so.
 
-Every table has an "ensure" function that creates it and adds any columns
-introduced since. Each `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` is a round
-trip **whether or not it does anything**, and the advisors table had
-accumulated 24 of them as features were added — several of them mine, this
-week.
+Removed from both places it applied: the Add Client form and the persona
+form on an existing engagement.
 
-They run once per worker, on its first request. So:
+## The logo uploads with the engagement
 
-- the first page load a worker handles pays all 24
-- it happens again on every redeploy, and every time Railway cycles a worker
-- the *second* load looks fine, which is why it never reproduced when I
-  looked for it
+A **Their logo** field now sits in the same form. One step means one step —
+telling you to come back and upload it afterward was a second step wearing a
+different name.
 
-1870 ms was the first request on that worker. 121 ms was what the query
-actually costs.
+The file is validated **before anything is created**. A rejected logo would
+otherwise leave a half-set-up advisor behind, which is the exact state this
+route exists to prevent — so a wrong file type, an empty file or one over
+2 MB stops the whole thing with nothing written. When it is accepted, the
+logo is stored in the same transaction as the branding and persona fields.
 
-## The fix
-
-One query to `information_schema` asking which columns exist, then only the
-ALTERs genuinely missing:
-
-| Situation | Round trips |
-|---|---|
-| Everything already there — the normal case | **1** |
-| Two columns missing, after a new feature | 3 |
-| Fresh database | 22 |
-| **Before this change, every time** | **24** |
-
-Applied to the advisors and chat_history tables, which are the two that had
-grown.
-
-The columns are now a single list in one place, which also means adding one
-is a one-line change rather than another ALTER appended to a pile.
-
-## What is left
-
-`list_documents` is steady at 456–492 ms across both loads. That is
-`database.py`, the one file in this project I have never had. If you send
-it, that is the next 450 ms.
-
-`page-specific lookups` at 605 ms on Diagnostics is the diagnostics queries
-themselves, which only that tab pays.
+Optional, and still replaceable later under Current engagements.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-c`.
-
-The very first load after deploying still pays the old cost once per worker
-— it is the load that runs the new migration. From the second onward it
-should be steady.
+should report `2026-09-24-d`.

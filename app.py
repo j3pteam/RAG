@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-c"
+APP_VERSION = "2026-09-24-d"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18219,7 +18219,8 @@ details.section[open] > summary {
         {{ org_principal }} is the worst outcome, and it is what happens when
         setup stops after the first form.
       </p>
-      <form method="POST" action="/admin/clients/create">
+      <form method="POST" action="/admin/clients/create"
+            enctype="multipart/form-data">
         <div style="display: grid; gap: 0.8rem;
                     grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
           <label style="font-size: 0.82rem;">Advisor name <span class="muted">(required)</span>
@@ -18253,7 +18254,18 @@ details.section[open] > summary {
                           border: 1px solid var(--line); border-radius: 5px;" />
           </label>
         </div>
-        <label style="display: block; margin-top: 0.8rem; font-size: 0.82rem;">
+        <label style="display: block; margin-top: 0.9rem; font-size: 0.82rem;">
+          Their logo
+          <input type="file" name="logo"
+                 accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
+                 style="display: block; margin-top: 0.35rem;" />
+        </label>
+        <p class="muted" style="margin: 0.35rem 0 0; font-size: 0.78rem;">
+          PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. Optional — it can be
+          uploaded or replaced later under Current engagements.
+        </p>
+
+        <label style="display: block; margin-top: 0.9rem; font-size: 0.82rem;">
           If you named someone above, record who confirmed their agreement and when
           <input type="text" name="principal_consent"
                  placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
@@ -18262,15 +18274,15 @@ details.section[open] > summary {
         </label>
         <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.6;">
           Naming a real person makes this advisor speak as a voice grounded in
-          their thinking, to people who may report to them. That is not created
-          without a record of their agreement.
+          their thinking, to people who may report to them. Worth having their
+          agreement before it does — this box is somewhere to note when and
+          how, not a requirement.
         </p>
         <button type="submit" class="btn" style="margin-top: 1rem;">Create the engagement</button>
       </form>
       <p class="muted" style="margin: 1rem 0 0; font-size: 0.8rem; line-height: 1.6;">
-        The logo is uploaded afterward, below — it needs a file rather than a
-        form field. Their knowledge base is loaded on the Knowledge tab, and
-        participant links are issued on the Advisors tab as for anyone else.
+        Their knowledge base is loaded on the Knowledge tab, and participant
+        links are issued on the Advisors tab as for anyone else.
       </p>
     </details>
 
@@ -22582,11 +22594,13 @@ def admin_create_client():
         return redirect(url_for("admin_dashboard", tab="clients"))
 
     principal = (request.form.get("persona_principal") or "").strip()[:120]
+    # Recorded, not required. A free-text box cannot verify anything —
+    # anyone can type anything into it — so blocking on it bought no real
+    # protection while standing between the owner and their own setup. What
+    # protects the named person is the agreement itself, which no form can
+    # check. The field stays because a note of when and how it was obtained
+    # is genuinely useful later.
     consent = (request.form.get("principal_consent") or "").strip()[:300]
-    if principal and not consent:
-        flash(f"Record who confirmed {principal}'s agreement and when. "
-              "Nothing was created.")
-        return redirect(url_for("admin_dashboard", tab="clients"))
 
     referral = (request.form.get("referral_email") or "").strip()[:200]
     if referral and "@" not in referral:
@@ -22602,6 +22616,26 @@ def admin_create_client():
                   "Nothing was created.")
             return redirect(url_for("admin_dashboard", tab="clients"))
         colors[field] = v
+
+    # Checked before anything is created. Validating after would mean a
+    # rejected logo leaves a half-set-up advisor behind, which is the exact
+    # state this route exists to prevent.
+    upload = request.files.get("logo")
+    logo_data = logo_mime = None
+    if upload and upload.filename:
+        logo_mime = (upload.mimetype or "").lower()
+        if logo_mime not in _LOGO_TYPES:
+            flash(f"{upload.filename} is a {logo_mime or 'unrecognized'} file. "
+                  "Use PNG, SVG, JPEG, WEBP or GIF. Nothing was created.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
+        logo_data = upload.read()
+        if not logo_data:
+            flash("That logo file was empty. Nothing was created.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
+        if len(logo_data) > LOGO_MAX_BYTES:
+            flash(f"That logo is {len(logo_data) // 1024} KB; the limit is "
+                  f"{LOGO_MAX_BYTES // 1024} KB. Nothing was created.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
 
     slug = slugify_advisor(name)
     if get_advisor(slug):
@@ -22628,6 +22662,10 @@ def admin_create_client():
                             ((request.form.get("brand_label") or "").strip()[:120],
                              colors["brand_navy"], colors["brand_gold"],
                              principal, referral, consent, slug))
+                if logo_data is not None:
+                    cur.execute("UPDATE advisors SET brand_logo = %s, "
+                                "brand_logo_mime = %s WHERE slug = %s",
+                                (logo_data, logo_mime, slug))
             conn.commit()
             _forget_cached_advisor(slug)
             ok = True
@@ -22642,9 +22680,9 @@ def admin_create_client():
         return redirect(url_for("admin_dashboard", tab="clients"))
 
     app.logger.info(f"[clients] engagement created: {slug}")
-    flash(f"\u2713 {name} is set up. Upload their logo below, load their "
-          "documents on the Knowledge tab, then issue participant links "
-          "from the Advisors tab.")
+    flash(f"\u2713 {name} is set up{' with their logo' if logo_data else ''}. "
+          "Load their documents on the Knowledge tab, then issue participant "
+          "links from the Advisors tab.")
     return redirect(url_for("admin_dashboard", tab="clients"))
 
 
@@ -22707,14 +22745,7 @@ def admin_advisor_persona(slug):
     referral = (request.form.get("referral_email") or "").strip()[:200]
     consent = (request.form.get("principal_consent") or "").strip()[:300]
 
-    # Naming a real person as the voice of an advisor requires a record of
-    # their agreement. Refused rather than warned about: a warning is
-    # dismissible and this is the one control standing between a consented
-    # persona and an impersonation.
-    if principal and not consent:
-        flash("Record who confirmed " + principal + "'s agreement and when. "
-              "A persona of a named person is not created without it.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+    # Recorded, not required — see the note in admin_create_client.
 
     if referral and "@" not in referral:
         flash("That referral address does not look like an email address. "
