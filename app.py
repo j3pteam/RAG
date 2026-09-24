@@ -18643,9 +18643,20 @@ details.section[open] > summary {
         <span class="muted" style="font-size: 0.82rem;">
           Header: <strong>{{ org.navy or "not set" }}</strong> &middot;
           Accent: <strong>{{ org.gold or "not set" }}</strong>
-          {% if org.site_url %}&middot; {{ org.site_url }}{% endif %}
         </span>
       </div>
+      {% if admin_perms.edit_advisors %}
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/website"
+            style="margin: 0 0 1rem; display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
+        <label style="font-size: 0.8rem; flex: 1; min-width: 260px;">Website
+          <input type="text" name="site_url" value="{{ org.site_url }}"
+                 placeholder="e.g. cedars-sinai.org"
+                 style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                        border: 1px solid var(--line); border-radius: 5px;" />
+        </label>
+        <button type="submit" class="btn">Save &amp; re-read logo and colors</button>
+      </form>
+      {% endif %}
 
       {% if admin_perms.edit_advisors %}
       <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
@@ -24162,6 +24173,48 @@ def admin_org_branding(slug):
         conn.close()
     flash(f"\u2713 {name} saved and applied to all of its advisors"
           + (" — from their site: " + "; ".join(found) if found else "") + ".")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/<slug>/website", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_website(slug):
+    """Change an organization's website and re-read its logo and colors
+    from the new address. Whatever the site does not provide is kept."""
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    site = (request.form.get("site_url") or "").strip()[:300]
+    values = {"navy": "", "gold": ""}
+    found, logo = _org_apply_lookup(values, site) if site else ([], None)
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE client_orgs SET site_url = %s,
+                                  navy = COALESCE(NULLIF(%s, ''), navy),
+                                  gold = COALESCE(NULLIF(%s, ''), gold)
+                           WHERE slug = %s""",
+                        (site, values["navy"], values["gold"], slug))
+            if logo:
+                cur.execute("UPDATE client_orgs SET logo = %s, logo_mime = %s "
+                            "WHERE slug = %s", (logo[0], logo[1], slug))
+        conn.commit()
+        sync_org_to_advisors(slug, conn)
+    finally:
+        conn.close()
+    if not site:
+        flash(f"\u2713 Website removed for {org['name']}. Logo and colors were kept.")
+    elif values["navy"] or values["gold"] or logo:
+        flash(f"\u2713 {org['name']} website updated — read from the site: "
+              + "; ".join(found) + ".")
+    else:
+        flash(f"Website saved for {org['name']}, but nothing usable could be read "
+              "from it (" + "; ".join(found) + "). Set the colors under "
+              "Organization branding.")
     return redirect(url_for("admin_dashboard", tab="clients"))
 
 
