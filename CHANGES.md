@@ -1,50 +1,46 @@
-# J3P Advisor — build 2026-09-24-k
+# J3P Advisor — build 2026-09-24-l
 
 `app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged).
 
 ---
 
-## The link was created. The page could not show it.
+## Copy and Share on the session link
 
-My bug. The admin panel loads data per tab, to avoid running every query on
-every page:
+The engagement's session link was plain text you had to select by hand. It
+is now a clickable link with **Copy** and **Share** beside it, matching the
+participant links directly below.
 
-```python
-want_advisors = active_tab == "advisors"
-_participant_links = list_participant_links() if want_advisors else []
-```
+Share uses the phone's own share sheet where there is one, and falls back to
+a small menu on desktop. The message names the advisor:
 
-When I moved client engagements onto their own tab, I moved the sections but
-not the data behind them. On Add Client, `want_advisors` is false — so the
-participant-links list was **always empty**, whatever you created.
+> Here is your private link to a session with Roy Friedman:
+> …
+> It opens in a browser — nothing to install.
 
-"No participant links for Roy Friedman yet" was not a failure report. It was
-the page truthfully describing a list it had been handed empty.
+## A Copy button that has never worked
 
-The same applied to **Their documents**: the document-to-advisor map was
-loaded only for the Knowledge and Advisors tabs, so that section would have
-stayed empty no matter what you uploaded.
+While wiring this I found that the Copy button on the **internal advisor**
+card uses `data-copy`. The handler reads `data-url`. It has done nothing at
+all since I added it in `2026-09-22-a` — clicking it silently copied
+nothing.
 
-Both now load for Add Client as well. Verified by rendering the tab with a
-link present — it lists, and the "none yet" line is gone.
+Fixed, and given a Share button too. There are no `data-copy` attributes
+left in the file.
 
-## Worth checking on your deployment
+That one is on me twice over: I wrote the attribute without checking the
+handler, and a button that silently does nothing is the hardest kind of
+failure for you to report — it looks like the clipboard not working.
 
-The link you made for "Alan" was almost certainly created. Open Add Client
-after deploying and it should be listed under Roy Friedman. If you made
-several while nothing appeared, they will all be there — nothing was lost,
-it simply was not shown.
+## And a brand leak in the share text
 
-## A pattern in these last few builds
-
-Three faults in a row have come from the same thing: moving a feature to a
-new tab and leaving something behind — the instructions, the redirect
-targets, and now the data. Each time the visible symptom pointed somewhere
-else. A move is not one change, and I have been treating it as one.
+The share message fell back to a hardcoded "the J3P Advisor" when no advisor
+name was attached. On a white-label deployment that would have mailed a
+client's own people an invitation to J3P. It now uses whatever
+`PERSONA_NAME` is set to for that deployment.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-k`.
+should report `2026-09-24-l`.

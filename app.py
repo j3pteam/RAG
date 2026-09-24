@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-k"
+APP_VERSION = "2026-09-24-l"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18610,8 +18610,21 @@ details.section[open] > summary {
           {{ adv.brand_label or "no organization set" }}
         </span>
       </summary>
+      <div style="display: flex; align-items: center; gap: 0.45rem;
+                  flex-wrap: wrap; margin: 0 0 0.6rem;">
+        <span class="muted" style="font-size: 0.82rem;">Their session link:</span>
+        <a href="{{ base_url }}/a/{{ adv.slug }}" target="_blank"
+           class="adv-link">{{ base_url }}/a/{{ adv.slug }}</a>
+        {# data-url, not data-copy: that is the attribute the handler at the
+           bottom of this page reads. The internal advisor's Copy button used
+           data-copy and has therefore never copied anything. #}
+        <button type="button" class="copy-link"
+                data-url="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
+        <button type="button" class="share-link"
+                data-url="{{ base_url }}/a/{{ adv.slug }}"
+                data-advisor="{{ adv.name }}">Share</button>
+      </div>
       <p class="muted" style="margin: 0 0 1rem; font-size: 0.82rem;">
-        Their session link: <code>{{ base_url }}/a/{{ adv.slug }}</code>
         {% if adv.persona_principal %}
         <br />Speaks as a voice grounded in {{ adv.persona_principal }}'s thinking.
         {% endif %}
@@ -19702,7 +19715,10 @@ details.section[open] > summary {
           <a href="/a/{{ adv.slug }}" target="_blank" class="adv-link"
              >{{ base_url }}/a/{{ adv.slug }}</a>
           <button type="button" class="copy-link"
-                  data-copy="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
+                  data-url="{{ base_url }}/a/{{ adv.slug }}">Copy</button>
+          <button type="button" class="share-link"
+                  data-url="{{ base_url }}/a/{{ adv.slug }}"
+                  data-advisor="{{ adv.name }}">Share</button>
         </div>
       </div>
       <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem; line-height: 1.6;">
@@ -21472,7 +21488,10 @@ details.section[open] > summary {
         closeShareMenus();
 
         const url = btn.dataset.url || "";
-        const who = btn.dataset.advisor || "the J3P Advisor";
+        // Falls back to this deployment's product name, not a hardcoded
+        // one — a client deployment would otherwise mail their people
+        // an invitation to "the J3P Advisor".
+        const who = btn.dataset.advisor || {{ cfg.persona_name|tojson }};
         const subject = `Your session with ${who}`;
         const body = `Here is your private link to a session with ${who}:\n\n${url}\n\n`
                    + `It opens in a browser — nothing to install.`;
