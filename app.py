@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-23-b"
+APP_VERSION = "2026-09-24-a"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -8838,6 +8838,14 @@ def advisors_with_detail(advisor_rows=None, doc_map=None, personality_map=None,
             advisor_style_bio(adv["name"], adv["personality"]["scores"])
             if adv["personality"] else ""
         )
+        # A client engagement is an advisor carrying any of a client's
+        # branding or a persona of someone outside this firm. Derived rather
+        # than stored as its own flag, so an advisor cannot be marked as an
+        # engagement while carrying none of the things that make it one.
+        adv["is_client_engagement"] = bool(
+            adv.get("brand_label") or adv.get("brand_logo_url")
+            or adv.get("has_brand_logo") or adv.get("brand_navy")
+            or adv.get("persona_principal") or adv.get("referral_email"))
         out.append(adv)
     return out
 
@@ -8856,14 +8864,23 @@ def list_advisors():
                        COALESCE(scheduling_url, ''), show_scheduling_override,
                        show_avatar_override, allow_materials_override,
                        personality_override, portal_token, COALESCE(client_bio, ''),
-                       COALESCE(expertise, ''), COALESCE(internal_only, FALSE)
+                       COALESCE(expertise, ''), COALESCE(internal_only, FALSE),
+                       COALESCE(brand_label, ''), COALESCE(brand_logo_url, ''),
+                       COALESCE(brand_navy, ''), COALESCE(brand_gold, ''),
+                       COALESCE(brand_paper, ''), (brand_logo IS NOT NULL),
+                       COALESCE(persona_principal, ''),
+                       COALESCE(referral_email, ''),
+                       COALESCE(principal_consent, '')
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
                  show_scheduling_override, show_avatar_override,
                  allow_materials_override, personality_override,
                  portal_token, client_bio, expertise,
-                 internal_only) in cur.fetchall():
+                 internal_only, brand_label, brand_logo_url,
+                 brand_navy, brand_gold, brand_paper, has_brand_logo,
+                 persona_principal, referral_email,
+                 principal_consent) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -8875,7 +8892,16 @@ def list_advisors():
                             "portal_token": portal_token or "",
                             "client_bio": client_bio or "",
                             "expertise": expertise or "",
-                            "internal_only": bool(internal_only)})
+                            "internal_only": bool(internal_only),
+                            "brand_label": brand_label or "",
+                            "brand_logo_url": brand_logo_url or "",
+                            "brand_navy": brand_navy or "",
+                            "brand_gold": brand_gold or "",
+                            "brand_paper": brand_paper or "",
+                            "has_brand_logo": bool(has_brand_logo),
+                            "persona_principal": persona_principal or "",
+                            "referral_email": referral_email or "",
+                            "principal_consent": principal_consent or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -18055,6 +18081,12 @@ details.section[open] > summary {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
       Advisors
     </a>
+    {% if admin_perms.edit_advisors %}
+    <a class="tab-btn {{ 'active' if active_tab == 'clients' else '' }}" href="{{ url_for('admin_dashboard', tab='clients') }}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M10 21v-6h4v6"/></svg>
+      Add Client
+    </a>
+    {% endif %}
     {% if admin_perms.edit_biometric %}
     <a class="tab-btn {{ 'active' if active_tab == 'biometric' else '' }}" href="{{ url_for('admin_dashboard', tab='biometric') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
@@ -18207,6 +18239,251 @@ details.section[open] > summary {
   {% endmacro %}
 
   {% if admin_perms.edit_biometric %}
+  {% if active_tab == "clients" %}
+  <div class="tab-pane" data-tab="clients">
+
+    <h2 class="group-heading">New engagement</h2>
+    <details class="section" open>
+      <summary>
+        <h2>Set up a client</h2>
+        <span class="section-note">one step</span>
+      </summary>
+      <p class="muted" style="margin: 0 0 1.1rem; font-size: 0.85rem; line-height: 1.6;">
+        A client engagement is an advisor with their organization's look, and
+        optionally their own leader's voice. This creates it in one step so
+        there is no half-finished state — an advisor named for a client but
+        still wearing {{ org_short }}'s branding and speaking as
+        {{ org_principal }} is the worst outcome, and it is what happens when
+        setup stops after the first form.
+      </p>
+      <form method="POST" action="/admin/clients/create">
+        <div style="display: grid; gap: 0.8rem;
+                    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
+          <label style="font-size: 0.82rem;">Advisor name <span class="muted">(required)</span>
+            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Organization
+            <input type="text" name="brand_label" placeholder="e.g. Dartmouth Cancer Center"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Grounded in whose thinking
+            <input type="text" name="persona_principal" placeholder="{{ org_principal }}"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Send participants to
+            <input type="text" name="referral_email" placeholder="{{ cfg.contact_email }}"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Header color
+            <input type="text" name="brand_navy" placeholder="#27334A"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.82rem;">Accent color
+            <input type="text" name="brand_gold" placeholder="#D2BC8D"
+                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+        </div>
+        <label style="display: block; margin-top: 0.8rem; font-size: 0.82rem;">
+          If you named someone above, record who confirmed their agreement and when
+          <input type="text" name="principal_consent"
+                 placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
+                 style="width: 100%; box-sizing: border-box; padding: 0.45rem;
+                        border: 1px solid var(--line); border-radius: 5px;" />
+        </label>
+        <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.6;">
+          Naming a real person makes this advisor speak as a voice grounded in
+          their thinking, to people who may report to them. That is not created
+          without a record of their agreement.
+        </p>
+        <button type="submit" class="btn" style="margin-top: 1rem;">Create the engagement</button>
+      </form>
+      <p class="muted" style="margin: 1rem 0 0; font-size: 0.8rem; line-height: 1.6;">
+        The logo is uploaded afterward, below — it needs a file rather than a
+        form field. Their knowledge base is loaded on the Knowledge tab, and
+        participant links are issued on the Advisors tab as for anyone else.
+      </p>
+    </details>
+
+    <h2 class="group-heading">Current engagements</h2>
+    {% set client_advisors = advisors | rejectattr("internal_only")
+                             | selectattr("is_client_engagement") | list %}
+    {% if client_advisors %}
+    {% for adv in client_advisors %}
+    <details class="section">
+      <summary>
+        <h2>{{ adv.name }}</h2>
+        <span class="section-note">
+          {{ adv.brand_label or "no organization set" }}
+        </span>
+      </summary>
+      <p class="muted" style="margin: 0 0 1rem; font-size: 0.82rem;">
+        Their session link: <code>{{ base_url }}/a/{{ adv.slug }}</code>
+        {% if adv.persona_principal %}
+        <br />Speaks as a voice grounded in {{ adv.persona_principal }}'s thinking.
+        {% endif %}
+        {% if adv.referral_email %}
+        <br />Participants are sent to {{ adv.referral_email }}.
+        {% endif %}
+      </p>
+    <details class="advisor-section">
+      <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
+        <span class="section-note">set</span>{% endif %}</summary>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+        For an engagement run inside this deployment where the client
+        should see their own look. Only {{ adv.name }}'s pages change;
+        every other advisor keeps this site's branding. Leave a field
+        empty to use this site's value for it.
+      </p>
+      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+        The look changes, not the substance. Replies, the release text and
+        the contact address stay yours, because you are still the firm
+        answering — a page that looked entirely like the client's would
+        misrepresent that. A line naming {{ org_name }} as the provider is
+        shown under the header whenever client branding is in use.
+      </p>
+      <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
+            enctype="multipart/form-data" style="margin: 0 0 1.2rem;">
+        <div class="muted" style="font-size: 0.8rem; margin-bottom: 0.4rem;">Logo</div>
+        {% if adv.has_brand_logo %}
+        <div style="display: flex; align-items: center; gap: 0.9rem;
+                    flex-wrap: wrap; margin-bottom: 0.6rem;">
+          <img src="/a/{{ adv.slug }}/logo?v={{ avatar_version }}" alt=""
+               style="max-height: 42px; max-width: 200px;
+                      background: {{ adv.brand_navy or cfg.navy }};
+                      padding: 0.4rem 0.6rem; border-radius: 4px;" />
+          <span class="muted" style="font-size: 0.78rem;">
+            Shown on the header background it will actually sit on.
+          </span>
+        </div>
+        {% endif %}
+        <input type="file" name="logo"
+               accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" />
+        <button type="submit" class="btn" style="margin-left: 0.4rem;">
+          {{ "Replace logo" if adv.has_brand_logo else "Upload logo" }}
+        </button>
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
+          PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. An uploaded logo is used
+          in preference to the URL field below, and unlike a URL it cannot
+          break when the client reorganizes their website.
+        </p>
+      </form>
+      {% if adv.has_brand_logo %}
+      <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
+            style="margin: -0.8rem 0 1.2rem;">
+        <input type="hidden" name="remove" value="1" />
+        <button type="submit" class="btn-quiet"
+                style="font-size: 0.78rem;">Remove the uploaded logo</button>
+      </form>
+      {% endif %}
+
+      <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}">
+        <div style="display: grid; gap: 0.7rem;
+                    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+          <label style="font-size: 0.8rem;">Logo URL{% if adv.has_brand_logo %}
+            <span class="muted">(overridden by the upload)</span>{% endif %}
+            <input type="text" name="brand_logo_url" value="{{ adv.brand_logo_url }}"
+                   placeholder="https://…/client-logo.png"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Wordmark beside the logo
+            <input type="text" name="brand_label" value="{{ adv.brand_label }}"
+                   placeholder="{{ adv.name }}"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Header color
+            <input type="text" name="brand_navy" value="{{ adv.brand_navy }}"
+                   placeholder="#27334A"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Accent color
+            <input type="text" name="brand_gold" value="{{ adv.brand_gold }}"
+                   placeholder="#D2BC8D"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Page background
+            <input type="text" name="brand_paper" value="{{ adv.brand_paper }}"
+                   placeholder="#FAF6F0"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+        </div>
+        <button type="submit" class="btn" style="margin-top: 0.9rem;">Save branding</button>
+      </form>
+
+      <div style="margin-top: 1.4rem; padding-top: 1.2rem;
+                  border-top: 1px dashed var(--line);">
+        <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          By default every advisor speaks as a voice grounded in
+          {{ org_principal }}'s thinking and sends people to
+          {{ cfg.contact_email }}. For an advisor built for a client's own
+          team — their leader's voice, used inside their organization —
+          both of those are wrong.
+        </p>
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
+          <strong>This builds a persona of a real, named person.</strong>
+          Their agreement is not a formality: their name, their thinking
+          and potentially their voice will answer questions from people
+          who report to them. Record who confirmed it and when — the
+          field is required, and nothing is saved without it.
+        </p>
+        <form method="POST" action="/admin/advisors/persona/{{ adv.slug }}">
+          <div style="display: grid; gap: 0.7rem;
+                      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
+            <label style="font-size: 0.8rem;">Grounded in whose thinking
+              <input type="text" name="persona_principal"
+                     value="{{ adv.persona_principal }}"
+                     placeholder="{{ org_principal }}"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+            <label style="font-size: 0.8rem;">Send participants to
+              <input type="text" name="referral_email"
+                     value="{{ adv.referral_email }}"
+                     placeholder="{{ cfg.contact_email }}"
+                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                            border: 1px solid var(--line); border-radius: 5px;" />
+            </label>
+          </div>
+          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
+            Who confirmed their agreement, and when
+            <input type="text" name="principal_consent"
+                   value="{{ adv.principal_consent }}"
+                   placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
+                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
+                          border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          {% if adv.principal_consent %}
+          <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.78rem;">
+            On record: {{ adv.principal_consent }}
+          </p>
+          {% endif %}
+          <button type="submit" class="btn" style="margin-top: 0.9rem;">Save persona</button>
+        </form>
+      </div>
+    </details>
+    </details>
+    {% endfor %}
+    {% else %}
+    <p class="muted">
+      No client engagements yet. The form above creates one; it will appear
+      here afterward.
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
   {% if active_tab == "biometric" %}
   <div class="tab-pane" data-tab="biometric">
     <h2 class="group-heading">Biometric Data</h2>
@@ -19259,150 +19536,6 @@ details.section[open] > summary {
       {{ participant_links_section(adv.slug, adv.name,
                                    participant_links_by_advisor.get(adv.slug, []),
                                    admin_perms.edit_participant_links) }}
-      {% endif %}
-
-      {% if not adv.internal_only %}
-      <details class="advisor-section">
-        <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
-          <span class="section-note">set</span>{% endif %}</summary>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-          For an engagement run inside this deployment where the client
-          should see their own look. Only {{ adv.name }}'s pages change;
-          every other advisor keeps this site's branding. Leave a field
-          empty to use this site's value for it.
-        </p>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-          The look changes, not the substance. Replies, the release text and
-          the contact address stay yours, because you are still the firm
-          answering — a page that looked entirely like the client's would
-          misrepresent that. A line naming {{ org_name }} as the provider is
-          shown under the header whenever client branding is in use.
-        </p>
-        <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
-              enctype="multipart/form-data" style="margin: 0 0 1.2rem;">
-          <div class="muted" style="font-size: 0.8rem; margin-bottom: 0.4rem;">Logo</div>
-          {% if adv.has_brand_logo %}
-          <div style="display: flex; align-items: center; gap: 0.9rem;
-                      flex-wrap: wrap; margin-bottom: 0.6rem;">
-            <img src="/a/{{ adv.slug }}/logo?v={{ avatar_version }}" alt=""
-                 style="max-height: 42px; max-width: 200px;
-                        background: {{ adv.brand_navy or cfg.navy }};
-                        padding: 0.4rem 0.6rem; border-radius: 4px;" />
-            <span class="muted" style="font-size: 0.78rem;">
-              Shown on the header background it will actually sit on.
-            </span>
-          </div>
-          {% endif %}
-          <input type="file" name="logo"
-                 accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" />
-          <button type="submit" class="btn" style="margin-left: 0.4rem;">
-            {{ "Replace logo" if adv.has_brand_logo else "Upload logo" }}
-          </button>
-          <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
-            PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. An uploaded logo is used
-            in preference to the URL field below, and unlike a URL it cannot
-            break when the client reorganizes their website.
-          </p>
-        </form>
-        {% if adv.has_brand_logo %}
-        <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
-              style="margin: -0.8rem 0 1.2rem;">
-          <input type="hidden" name="remove" value="1" />
-          <button type="submit" class="btn-quiet"
-                  style="font-size: 0.78rem;">Remove the uploaded logo</button>
-        </form>
-        {% endif %}
-
-        <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}">
-          <div style="display: grid; gap: 0.7rem;
-                      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
-            <label style="font-size: 0.8rem;">Logo URL{% if adv.has_brand_logo %}
-              <span class="muted">(overridden by the upload)</span>{% endif %}
-              <input type="text" name="brand_logo_url" value="{{ adv.brand_logo_url }}"
-                     placeholder="https://…/client-logo.png"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            <label style="font-size: 0.8rem;">Wordmark beside the logo
-              <input type="text" name="brand_label" value="{{ adv.brand_label }}"
-                     placeholder="{{ adv.name }}"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            <label style="font-size: 0.8rem;">Header color
-              <input type="text" name="brand_navy" value="{{ adv.brand_navy }}"
-                     placeholder="#27334A"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            <label style="font-size: 0.8rem;">Accent color
-              <input type="text" name="brand_gold" value="{{ adv.brand_gold }}"
-                     placeholder="#D2BC8D"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            <label style="font-size: 0.8rem;">Page background
-              <input type="text" name="brand_paper" value="{{ adv.brand_paper }}"
-                     placeholder="#FAF6F0"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-          </div>
-          <button type="submit" class="btn" style="margin-top: 0.9rem;">Save branding</button>
-        </form>
-
-        <div style="margin-top: 1.4rem; padding-top: 1.2rem;
-                    border-top: 1px dashed var(--line);">
-          <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
-          <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-            By default every advisor speaks as a voice grounded in
-            {{ org_principal }}'s thinking and sends people to
-            {{ cfg.contact_email }}. For an advisor built for a client's own
-            team — their leader's voice, used inside their organization —
-            both of those are wrong.
-          </p>
-          <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-            <strong>This builds a persona of a real, named person.</strong>
-            Their agreement is not a formality: their name, their thinking
-            and potentially their voice will answer questions from people
-            who report to them. Record who confirmed it and when — the
-            field is required, and nothing is saved without it.
-          </p>
-          <form method="POST" action="/admin/advisors/persona/{{ adv.slug }}">
-            <div style="display: grid; gap: 0.7rem;
-                        grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
-              <label style="font-size: 0.8rem;">Grounded in whose thinking
-                <input type="text" name="persona_principal"
-                       value="{{ adv.persona_principal }}"
-                       placeholder="{{ org_principal }}"
-                       style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                              border: 1px solid var(--line); border-radius: 5px;" />
-              </label>
-              <label style="font-size: 0.8rem;">Send participants to
-                <input type="text" name="referral_email"
-                       value="{{ adv.referral_email }}"
-                       placeholder="{{ cfg.contact_email }}"
-                       style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                              border: 1px solid var(--line); border-radius: 5px;" />
-              </label>
-            </div>
-            <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
-              Who confirmed their agreement, and when
-              <input type="text" name="principal_consent"
-                     value="{{ adv.principal_consent }}"
-                     placeholder="e.g. Confirmed by email with Dr. Herbst, 22 Sep 2026"
-                     style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                            border: 1px solid var(--line); border-radius: 5px;" />
-            </label>
-            {% if adv.principal_consent %}
-            <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.78rem;">
-              On record: {{ adv.principal_consent }}
-            </p>
-            {% endif %}
-            <button type="submit" class="btn" style="margin-top: 0.9rem;">Save persona</button>
-          </form>
-        </div>
-      </details>
       {% endif %}
 
       <div class="advisor-section-group is-setup">Setup</div>
@@ -22045,7 +22178,7 @@ def advisor_portal_logout():
     return redirect(url_for("advisor_portal_login_info"))
 
 
-ADMIN_TABS = ("overview", "activity", "advisors", "biometric",
+ADMIN_TABS = ("overview", "activity", "advisors", "clients", "biometric",
               "knowledge", "users", "settings", "diagnostics")
 
 
@@ -22463,6 +22596,88 @@ def admin_create_internal_advisor():
 _LOGO_TYPES = dict(_AVATAR_TYPES)
 _LOGO_TYPES["image/svg+xml"] = "svg"
 LOGO_MAX_BYTES = 2 * 1024 * 1024
+
+
+@app.route("/admin/clients/create", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_create_client():
+    """Creates a client engagement in one step.
+
+    Done as separate forms this is four saves, and stopping after the first
+    leaves an advisor named for a client still wearing this firm's branding
+    and speaking as its principal — which is worse than not having started.
+    Either the whole engagement exists or none of it does.
+    """
+    name = (request.form.get("name") or "").strip()[:120]
+    if not name:
+        flash("An advisor name is required.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    principal = (request.form.get("persona_principal") or "").strip()[:120]
+    consent = (request.form.get("principal_consent") or "").strip()[:300]
+    if principal and not consent:
+        flash(f"Record who confirmed {principal}'s agreement and when. "
+              "Nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    referral = (request.form.get("referral_email") or "").strip()[:200]
+    if referral and "@" not in referral:
+        flash("That referral address does not look like an email address. "
+              "Nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    colors = {}
+    for field in ("brand_navy", "brand_gold"):
+        v = (request.form.get(field) or "").strip()
+        if v and not re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
+            flash(f"{v!r} is not a six-digit hex color like #27334A. "
+                  "Nothing was created.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
+        colors[field] = v
+
+    slug = slugify_advisor(name)
+    if get_advisor(slug):
+        flash(f"An advisor already exists at {slug}. Rename this one, or "
+              "edit the existing engagement below.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    if not save_advisor(slug, name):
+        flash("Could not create the advisor — the database was unavailable.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    conn = _settings_db_conn()
+    ok = False
+    if conn:
+        try:
+            _advisors_ensure_table(conn)
+            with conn.cursor() as cur:
+                cur.execute("""UPDATE advisors SET brand_label = %s,
+                                      brand_navy = %s, brand_gold = %s,
+                                      persona_principal = %s,
+                                      referral_email = %s,
+                                      principal_consent = %s
+                               WHERE slug = %s""",
+                            ((request.form.get("brand_label") or "").strip()[:120],
+                             colors["brand_navy"], colors["brand_gold"],
+                             principal, referral, consent, slug))
+            conn.commit()
+            _forget_cached_advisor(slug)
+            ok = True
+        except Exception as e:
+            app.logger.error(f"[clients] setup failed: {type(e).__name__}")
+
+    if not ok:
+        # Never leave the half-finished state this route exists to prevent.
+        delete_advisor(slug)
+        flash("Could not complete the setup, so the advisor was removed "
+              "again. Nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+
+    app.logger.info(f"[clients] engagement created: {slug}")
+    flash(f"\u2713 {name} is set up. Upload their logo below, load their "
+          "documents on the Knowledge tab, then issue participant links "
+          "from the Advisors tab.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/advisors/logo/<slug>", methods=["POST"])

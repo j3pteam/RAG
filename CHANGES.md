@@ -1,75 +1,62 @@
-# J3P Advisor — build 2026-09-23-b
+# J3P Advisor — build 2026-09-24-a
 
 `app.py`, the pre-deploy checks, `verify_brand.py`, `brands/`, and the
 deployment guides.
 
 ---
 
-## First, what I did not build
+## Add Client is its own tab
 
-A guarantee that no reply ever matches what another model would say is not
-achievable, and I would rather say so than ship something that appears to do
-it.
+Managing your own coaches and standing up a client engagement are different
+jobs, and the client tooling was cluttering every advisor card — including
+the four it will never apply to.
 
-**The app is built on Claude.** Its replies are a Claude model's output,
-shaped by your prompt and your knowledge base. There is no version of this
-where its answers are not, at root, one model's answers.
+**Admin → Add Client** now holds all of it. The Advisors tab is back to what
+it was: profiles, photos, links, knowledge, voice.
 
-**Checking is impossible in principle.** It would mean querying every model,
-for every question, before every reply — and they change weekly. Nothing can
-return an answer that is guaranteed different from something it never saw.
+## Set up a client in one step
 
-**Succeeding would make the advisor worse.** Asked what the TIPI measures,
-there is one correct answer. Forcing a different one means being wrong on
-purpose, in front of physician leaders who will notice.
+Name, organization, whose thinking it is grounded in, where participants are
+sent, and the two colors — one form, one save.
 
-## What the request is actually about
+Done as separate forms this is four saves, and stopping after the first
+leaves an advisor named for a client **still wearing J3P's branding and
+speaking as Alan Friedman**. That is worse than not having started, and it
+is exactly what happens when someone is interrupted halfway. Either the
+whole engagement exists or none of it does: if any part of the setup fails,
+the advisor is removed again rather than left in that state.
 
-A participant should never feel they could have gotten this from ChatGPT.
-That is a real goal, and mostly already handled: the prompt has nine
-differentiation rules, including one stating the advisor is not ChatGPT,
-Claude, Gemini or Copilot and must not name an underlying model.
+Validated before anything is created — a colour that is not six-digit hex, a
+referral address with no `@`, or a named person with no consent record all
+stop the whole thing with nothing written.
 
-The gap was that nothing required the **substance** to be specific — only
-the voice. A reply could obey every tone rule and still be generic advice
-in a distinctive style.
+## Current engagements
 
-## Rule 4b: say something only this practice could say
+Below the form, each client engagement with its session link, whose voice it
+speaks in, where participants are sent, the logo upload, the branding fields
+and the persona fields.
 
-Added to the prompt, applying to every response:
+Roy Herbst appears here as soon as his branding or persona is set — the list
+is derived from the advisor actually carrying a client's branding or a
+persona, not from a separate flag. An advisor cannot be listed as an
+engagement while carrying none of the things that make it one.
 
-- Anchor in the retrieved material, this practice's frameworks, or what the
-  person has already said — their role, their organization, the constraint
-  they named, the pattern in their assessment
-- Where the retrieved material takes a position, take it, **including where
-  it cuts against conventional advice** — this is the one thing a general
-  assistant structurally cannot do
-- No numbered lists of universal best practices
-- If the honest answer really is generic, say it in one sentence and spend
-  the reply on what is specific to them
-- Never "research shows" in the abstract when specific material is available
+Your own coaches — Alan, Bruce, David — stay out of this tab entirely.
 
-## And a way to see whether it is working
+## One thing I had to fix to make it work
 
-The grounding check already re-runs retrieval against every reply. I have
-reframed what it measures in Diagnostics, because it is the closest thing
-you have to a distinctiveness meter:
-
-> An unsupported reply is one the model produced from its own general
-> knowledge — which means a participant could have gotten much the same
-> answer from any general-purpose assistant.
-
-**A rising unsupported count means the knowledge base is thin on what people
-are actually asking about.** That is the real lever. Prompt wording changes
-the voice; only your material changes what the advisor knows that others do
-not — and that is the part no one else can copy.
+`list_advisors()` did not return any of the branding or persona fields, so
+the "is this a client engagement?" test would have been false for everyone
+and the tab would have looked permanently empty. Caught by rendering it, not
+by reading it.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-23-b`.
+should report `2026-09-24-a`.
 
-Worth watching after a week of real use: Diagnostics → Answer grounding. The
-questions landing in the unsupported bucket are your content roadmap.
+Roy Herbst's existing profile will appear under Add Client once you set his
+organization, colors or persona — until then he is an ordinary advisor,
+which is what he currently is.
