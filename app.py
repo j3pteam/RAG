@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-h"
+APP_VERSION = "2026-09-24-i"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18588,8 +18588,9 @@ details.section[open] > summary {
         <button type="submit" class="btn" style="margin-top: 1rem;">Create the engagement</button>
       </form>
       <p class="muted" style="margin: 1rem 0 0; font-size: 0.8rem; line-height: 1.6;">
-        Their knowledge base is loaded on the Knowledge tab, and participant
-        links are issued on the Advisors tab as for anyone else.
+        Once created, everything else for this client — their documents,
+        their participant links, their logo and colors — is under Current
+        engagements below. Nothing about a client is managed on another tab.
       </p>
     </details>
 
@@ -18614,6 +18615,46 @@ details.section[open] > summary {
         <br />Participants are sent to {{ adv.referral_email }}.
         {% endif %}
       </p>
+
+      {# Their knowledge base, scoped to them. The Knowledge tab can do this
+         too, but only by remembering to pick the right advisor from a
+         dropdown of everyone — which is the step that gets missed, and the
+         consequence is a client's material answering someone else's
+         questions. Here the advisor is not a choice. #}
+      <details class="advisor-section">
+        <summary>Their documents{% if advisor_docs.get(adv.slug) %}
+          ({{ advisor_docs.get(adv.slug)|length }}){% endif %}</summary>
+        <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.8rem; line-height: 1.6;">
+          Retrieved only for {{ adv.name }}'s sessions. The shared
+          {{ org_short }} base is still available to them on top of this —
+          these are the documents nobody else can see.
+        </p>
+        {% set their_docs = advisor_docs.get(adv.slug) %}
+        {% if their_docs %}
+        <ul class="muted" style="margin: 0 0 0.9rem; padding-left: 1.1rem;
+                                 font-size: 0.82rem; line-height: 1.7;">
+          {% for d in their_docs %}<li>{{ d.title }}</li>{% endfor %}
+        </ul>
+        {% else %}
+        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem;">
+          Nothing yet. Their sessions draw on the shared {{ org_short }} base
+          until something is added here.
+        </p>
+        {% endif %}
+        <form method="POST" action="/admin/upload" enctype="multipart/form-data"
+              class="upload">
+          <input type="file" name="file"
+                 accept=".pdf,.docx,.xlsx,.xlsm,.pptx,.csv,.tsv,.txt,.md,.rtf" required />
+          <input type="text" name="title" placeholder="Document title (optional)" />
+          <input type="hidden" name="owner" value="{{ adv.slug }}" />
+          <input type="hidden" name="return_to" value="clients" />
+          <button type="submit" class="btn">Upload &amp; Embed</button>
+        </form>
+        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
+          PDF, Word, Excel, PowerPoint, CSV, TXT, MD or RTF, up to
+          {{ cfg.max_upload_mb }} MB. Chunked and embedded automatically.
+        </p>
+      </details>
 
       {# Issued here rather than on the Advisors tab, because the engagement
          no longer appears there. Without this there would be no way to give
@@ -23122,8 +23163,8 @@ def admin_create_client():
         session.pop(_k, None)
     app.logger.info(f"[clients] engagement created: {slug}")
     flash(f"\u2713 {name} is set up{' with their logo' if logo_data else ''}. "
-          "Load their documents on the Knowledge tab, then issue participant "
-          "links from the Advisors tab.")
+          "Their documents and participant links are below, under Current "
+          "engagements.")
     return redirect(url_for("admin_dashboard", tab="clients"))
 
 
@@ -24008,17 +24049,29 @@ def admin_settings():
     return redirect(url_for("admin_dashboard", tab="settings"))
 
 
+def _upload_return_tab() -> str:
+    """Where an upload form wants to land afterward.
+
+    A document uploaded from a client engagement belongs to that engagement,
+    so the person doing it should stay there rather than be thrown onto the
+    Knowledge tab to find their way back. Whitelisted because the value
+    reaches url_for.
+    """
+    target = (request.form.get("return_to") or "knowledge").strip()
+    return target if target in ("knowledge", "clients") else "knowledge"
+
+
 @app.route("/admin/upload", methods=["POST"])
 @require_permission("edit_knowledge")
 def admin_upload():
     if not (db.is_enabled() and emb.is_enabled()):
         flash("Cannot upload: RAG not fully configured.")
-        return redirect(url_for("admin_dashboard", tab="knowledge"))
+        return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
     file = request.files.get("file")
     if not file or not file.filename:
         flash("No file selected.")
-        return redirect(url_for("admin_dashboard", tab="knowledge"))
+        return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
     title = (request.form.get("title") or "").strip() or file.filename
 
@@ -24032,19 +24085,19 @@ def admin_upload():
             f"({duplicate['chunk_count']} chunks). Delete the existing entry first "
             f"if you want to replace it."
         )
-        return redirect(url_for("admin_dashboard", tab="knowledge"))
+        return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
     try:
         file_bytes = file.read()
         text = extract_attachment_text(file.filename, file_bytes)
         if not text.strip():
             flash(f"No text could be extracted from {file.filename}.")
-            return redirect(url_for("admin_dashboard", tab="knowledge"))
+            return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
         chunks = emb.chunk_text(text)
         if not chunks:
             flash("Document produced no chunks (too short or empty).")
-            return redirect(url_for("admin_dashboard", tab="knowledge"))
+            return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
         # Embed all chunks in batch
         vectors = emb.embed_batch(chunks)
@@ -24057,7 +24110,7 @@ def admin_upload():
         app.logger.error(f"Upload failed: {e}")
         flash(f"Upload failed: {str(e)[:200]}")
 
-    return redirect(url_for("admin_dashboard", tab="knowledge"))
+    return redirect(url_for("admin_dashboard", tab=_upload_return_tab()))
 
 
 @app.route("/admin/upload-folder", methods=["POST"])

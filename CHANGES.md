@@ -1,75 +1,54 @@
-# J3P Advisor — build 2026-09-24-h
+# J3P Advisor — build 2026-09-24-i
 
-`app.py`, the pre-deploy checks, and **`patch_exports.py`** — a one-time
-script that edits your `exports.py`.
-
----
-
-## First: I made a mistake while working on this
-
-Hunting for `exports.py` on disk, I ran `cp /mnt/user-data/uploads/*.py .`,
-which overwrote my working copy of `app.py` with a version of it from
-**September 15**. I then "found" three bugs in that file and told you about
-them. Two were not real:
-
-- the missing table flattening — present in your build all along
-- a stray `</label>` in Participant Access — not in your build
-- a `NameError` on oversized uploads — not in your build either
-
-I restored from the packaged `2026-09-24-g` and re-applied only the genuine
-change. Nothing from that detour is in this build. Disregard that part of my
-last message.
+`app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged from
+`-h` — run it once if you have not already).
 
 ---
 
-## Internal documents keep the firm's own names
+## Everything for a client is now on Add Client
 
-You were right that this was in `exports.py`. `build()` calls
-`scrub_brand()` on every document, and that function does not merely remove
-the names — it **drops whole lines** whose remainder is under 12
-alphanumeric characters, and leaves holes in the ones it keeps:
+Your screenshot caught the thing that gave it away: the confirmation said
+"issue participant links from the Advisors tab" — a tab where the engagement
+no longer appears. I moved the engagements and left the instructions behind.
 
-```
-before   The fixed retainer provides priority access to J3P Health's full practice.
-after    The fixed retainer provides priority access to 's full practice.
+Both pointers are gone, and the one genuinely missing piece is now here too.
 
-before   - Access to J3P Health's broader cadre of specialists
-after    - Access to 's broader cadre of specialists
+| | Where it was | Where it is |
+|---|---|---|
+| Create the engagement | Add Client | Add Client |
+| Read their website | Add Client | Add Client |
+| Branding, colors, logo | Add Client | Add Client |
+| Persona and referral address | Add Client | Add Client |
+| Participant links | Add Client | Add Client |
+| Photo | Add Client | Add Client |
+| **Their documents** | **Knowledge tab** | **Add Client** |
 
-before   - J3P Health
-after    (the bullet is gone)
-```
+## Their documents, where the advisor is not a choice
 
-Two changes, both in `patch_exports.py`:
+The Knowledge tab can still upload for any advisor — that is right for your
+own coaches. But doing it there for a client means remembering to pick them
+from a dropdown of everyone, and that is the step that gets missed. The
+consequence is not cosmetic: a client's material answering another client's
+questions.
 
-**`build()` takes `scrub=True`.** The caller decides, because only the
-caller knows whose session it is. `app.py` now passes `scrub=False` when the
-advisor is internal, exactly as `chat()` already bypasses its own scrubber.
+Inside their engagement, the advisor is fixed. The form shows what they
+already have, and says plainly that the shared base still applies on top:
 
-**Scrubbing replaces rather than deletes.** A client deliverable now reads
-"access to our practice's full practice" instead of "access to 's full
-practice". Still not elegant, but it is a document rather than visibly
-broken output that the client sees and you do not.
+> Retrieved only for Roy Herbst's sessions. The shared J3P base is still
+> available to them on top of this — these are the documents nobody else
+> can see.
 
-The drop-the-line test is unchanged in effect — it is judged on what
-deletion would leave, so a bullet that is only a brand name still goes.
+Uploading returns you to Add Client rather than dropping you on Knowledge,
+using the same whitelisted `return_to` pattern as the other forms.
+
+## Verified
+
+Rendered the tab with an engagement present and confirmed all nine pieces
+are there, and that no text on the tab sends you to another one.
+
+---
 
 ## Installing
 
-1. `python3 patch_exports.py` from the repo root. It writes
-   `exports.py.bak` first, verifies the result parses, and **refuses to
-   write anything** unless all four edits match exactly — so a
-   half-patched file is not a possible outcome. If your `exports.py` has
-   moved on from the version I was given, it will say so and change
-   nothing.
-2. Replace `app.py`.
-3. Commit both. Diagnostics should report `2026-09-24-h`.
-
-## Still outstanding from that file
-
-Real Word **tables** — `parse_blocks` has no table concept, so the
-flattening workaround stays for now. That is a contained addition to
-`parse_blocks` plus the docx and pdf renderers, and I would rather do it as
-its own change than bundle it with a fix you are waiting on.
-
-`list_documents` at ~460 ms is `database.py`, not this file.
+Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
+should report `2026-09-24-i`.
