@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-l"
+APP_VERSION = "2026-09-24-m"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -23232,7 +23232,7 @@ def admin_advisor_logo(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     if request.form.get("remove") == "1":
         if save_advisor_logo(slug, None, None):
@@ -23240,35 +23240,35 @@ def admin_advisor_logo(slug):
                   "this site's logo again.")
         else:
             flash("Could not remove that — nothing was changed.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     upload = request.files.get("logo")
     if not upload or not upload.filename:
         flash("Choose a file first.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     mime = (upload.mimetype or "").lower()
     if mime not in _LOGO_TYPES:
         flash(f"{upload.filename} is a {mime or 'unrecognized'} file. "
               "Use PNG, SVG, JPEG, WEBP or GIF.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     data = upload.read()
     if not data:
         flash("That file was empty — nothing was saved.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
     if len(data) > LOGO_MAX_BYTES:
         flash(f"That logo is {len(data) // 1024} KB. The limit is "
               f"{LOGO_MAX_BYTES // 1024} KB — a header logo should be well "
               "under it, so this usually means a full-resolution export.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     if save_advisor_logo(slug, data, mime):
         app.logger.info(f"[advisors] logo uploaded for {slug} ({len(data)} bytes)")
         flash(f"\u2713 {advisor['name']}'s pages now carry the uploaded logo.")
     else:
         flash("Could not save that — nothing was changed.")
-    return redirect(url_for("admin_dashboard", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/advisors/persona/<slug>", methods=["POST"])
@@ -23278,7 +23278,7 @@ def admin_advisor_persona(slug):
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     principal = (request.form.get("persona_principal") or "").strip()[:120]
     referral = (request.form.get("referral_email") or "").strip()[:200]
@@ -23289,12 +23289,12 @@ def admin_advisor_persona(slug):
     if referral and "@" not in referral:
         flash("That referral address does not look like an email address. "
               "Nothing was saved.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     conn = _settings_db_conn()
     if not conn:
         flash("Database unavailable — nothing was saved.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
     try:
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
@@ -23307,7 +23307,7 @@ def admin_advisor_persona(slug):
     except Exception as e:
         app.logger.error(f"[advisors] persona save failed: {type(e).__name__}")
         flash("Could not save that — nothing was changed.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     if principal:
         app.logger.info(f"[advisors] {slug} set as a persona of a named person")
@@ -23316,20 +23316,26 @@ def admin_advisor_persona(slug):
               + (f", and sends participants to {referral}." if referral else "."))
     else:
         flash(f"\u2713 {advisor['name']} is back to this firm's default voice.")
-    return redirect(url_for("admin_dashboard", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/advisors/branding/<slug>", methods=["POST"])
 @require_permission("edit_advisors")
 def admin_advisor_branding(slug):
-    """Per-advisor brand overrides for a client engagement."""
+    """Per-advisor brand overrides for a client engagement.
+
+    Returns to Add Client, where the form lives. These three routes were
+    written when the forms sat on the advisor card and still sent people to
+    Advisors afterward — a tab the engagement is no longer on, so saving
+    branding appeared to move the client somewhere else.
+    """
     advisor = get_advisor(slug)
     if not advisor:
         flash("That advisor no longer exists.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
     if advisor.get("internal_only"):
         flash("Internal advisors do not carry client branding.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     values = {}
     for field in ("brand_logo_url", "brand_label", "brand_navy",
@@ -23343,12 +23349,12 @@ def admin_advisor_branding(slug):
         if v and not re.fullmatch(r"#[0-9A-Fa-f]{6}", v):
             flash(f"{v!r} is not a six-digit hex color like #27334A. "
                   "Nothing was saved.")
-            return redirect(url_for("admin_dashboard", tab="advisors"))
+            return redirect(url_for("admin_dashboard", tab="clients"))
 
     conn = _settings_db_conn()
     if not conn:
         flash("Database unavailable — nothing was saved.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
     try:
         _advisors_ensure_table(conn)
         with conn.cursor() as cur:
@@ -23364,14 +23370,14 @@ def admin_advisor_branding(slug):
     except Exception as e:
         app.logger.error(f"[advisors] branding save failed: {type(e).__name__}")
         flash("Could not save that — nothing was changed.")
-        return redirect(url_for("admin_dashboard", tab="advisors"))
+        return redirect(url_for("admin_dashboard", tab="clients"))
 
     if any(values.values()):
         flash(f"\u2713 {advisor['name']}'s pages now use the client branding. "
               "Every other advisor is unchanged.")
     else:
         flash(f"\u2713 {advisor['name']} is back to this site's branding.")
-    return redirect(url_for("admin_dashboard", tab="advisors"))
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/advisors/internal/<slug>", methods=["POST"])

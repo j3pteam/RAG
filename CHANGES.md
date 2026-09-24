@@ -1,46 +1,49 @@
-# J3P Advisor — build 2026-09-24-l
+# J3P Advisor — build 2026-09-24-m
 
 `app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged).
 
 ---
 
-## Copy and Share on the session link
+## Saving a client setting keeps you on Add Client
 
-The engagement's session link was plain text you had to select by hand. It
-is now a clickable link with **Copy** and **Share** beside it, matching the
-participant links directly below.
+Setting Roy Herbst's branding dropped you on the **Advisors** tab — a tab
+his engagement is not on. The three routes behind those forms were written
+when the forms sat on the advisor card, and still sent people to Advisors
+afterward.
 
-Share uses the phone's own share sheet where there is one, and falls back to
-a small menu on desktop. The message names the advisor:
+**18 redirects across three routes** now return to Add Client: branding,
+persona, and logo — including every validation failure, so a rejected color
+leaves you on the form you were filling in rather than somewhere else
+entirely.
 
-> Here is your private link to a session with Roy Friedman:
-> …
-> It opens in a browser — nothing to install.
+## I stopped fixing these one report at a time
 
-## A Copy button that has never worked
+This is the fourth build in a row correcting something left behind by moving
+client engagements to their own tab. Rather than wait for the next one, I
+audited it:
 
-While wiring this I found that the Copy button on the **internal advisor**
-card uses `data-copy`. The handler reads `data-url`. It has done nothing at
-all since I added it in `2026-09-22-a` — clicking it silently copied
-nothing.
+**Every client-related route, and where it sends you:**
 
-Fixed, and given a Share button too. There are no `data-copy` attributes
-left in the file.
+```
+/admin/clients/lookup             clients
+/admin/clients/lookup/clear       clients
+/admin/clients/create             clients
+/admin/advisors/logo/<slug>       clients
+/admin/advisors/persona/<slug>    clients
+/admin/advisors/branding/<slug>   clients
+```
 
-That one is on me twice over: I wrote the attribute without checking the
-handler, and a button that silently does nothing is the hardest kind of
-failure for you to report — it looks like the clipboard not working.
+**And the Advisors pane itself** — no branding form, no persona form, no
+client logo upload, no color fields, and the filter that keeps engagements
+out of the list is in place.
 
-## And a brand leak in the share text
-
-The share message fell back to a hardcoded "the J3P Advisor" when no advisor
-name was attached. On a white-label deployment that would have mailed a
-client's own people an invitation to J3P. It now uses whatever
-`PERSONA_NAME` is set to for that deployment.
+That is all of it. If something client-related still appears on Advisors
+after this, it is something I have not thought of rather than something I
+knew about and missed.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-l`.
+should report `2026-09-24-m`.
