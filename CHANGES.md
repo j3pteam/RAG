@@ -1,54 +1,50 @@
-# J3P Advisor — build 2026-09-24-i
+# J3P Advisor — build 2026-09-24-j
 
-`app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged from
-`-h` — run it once if you have not already).
+`app.py`, the pre-deploy checks, and `patch_exports.py` (unchanged — run it
+once if you have not already).
 
 ---
 
-## Everything for a client is now on Add Client
+## Links for a client are created, and stay, on Add Client
 
-Your screenshot caught the thing that gave it away: the confirmation said
-"issue participant links from the Advisors tab" — a tab where the engagement
-no longer appears. I moved the engagements and left the instructions behind.
+The link form inside an engagement was still posting `return_to=advisors`,
+so creating one threw you onto the Advisors tab — where the engagement does
+not appear. The shared form now returns to whichever tab it was used on.
 
-Both pointers are gone, and the one genuinely missing piece is now here too.
+## Client engagements are gone from the other tabs' pickers
 
-| | Where it was | Where it is |
-|---|---|---|
-| Create the engagement | Add Client | Add Client |
-| Read their website | Add Client | Add Client |
-| Branding, colors, logo | Add Client | Add Client |
-| Persona and referral address | Add Client | Add Client |
-| Participant links | Add Client | Add Client |
-| Photo | Add Client | Add Client |
-| **Their documents** | **Knowledge tab** | **Add Client** |
+They were still reachable in two places I had missed:
 
-## Their documents, where the advisor is not a choice
+**Voice sample → Copy to…** on the Advisors tab listed client engagements as
+a destination. A client engagement is not a person with a voice to clone,
+and copying a coach's voice onto one would mean a real person speaking as a
+client's advisor.
 
-The Knowledge tab can still upload for any advisor — that is right for your
-own coaches. But doing it there for a client means remembering to pick them
-from a dropdown of everyone, and that is the step that gets missed. The
-consequence is not cosmetic: a client's material answering another client's
-questions.
+**Knowledge → the four "scoped to…" pickers** on upload, folder upload, URL
+and text. Choosing a client there means picking them from a dropdown of
+everyone, which is the step that gets missed — and the consequence is a
+client's material answering another client's questions. Their documents are
+uploaded inside their engagement, where the advisor is fixed rather than
+chosen.
 
-Inside their engagement, the advisor is fixed. The form shows what they
-already have, and says plainly that the shared base still applies on top:
+| | Advisors | Knowledge | Add Client |
+|---|---|---|---|
+| Client offered in a picker | 0 | 0 in upload | — |
+| Client's links, docs, branding | no | no | yes |
 
-> Retrieved only for Roy Herbst's sessions. The shared J3P base is still
-> available to them on top of this — these are the documents nobody else
-> can see.
+## One thing I deliberately did not remove
 
-Uploading returns you to Add Client rather than dropping you on Knowledge,
-using the same whitelisted `return_to` pattern as the other forms.
+The **reassignment controls on documents that already exist** — the checkbox
+list and the per-row scope selector — still list client engagements. Two of
+them, confirmed in the render.
 
-## Verified
-
-Rendered the tab with an engagement present and confirmed all nine pieces
-are there, and that no text on the tab sends you to another one.
+Removing them would have been more consistent and worse: a document already
+assigned to a client could then never be unassigned or moved, with no way
+back. Consistency is not worth stranding data.
 
 ---
 
 ## Installing
 
 Replace `app.py`, keep the scripts and `brands/` alongside. Diagnostics
-should report `2026-09-24-i`.
+should report `2026-09-24-j`.

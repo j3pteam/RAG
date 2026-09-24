@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-24-i"
+APP_VERSION = "2026-09-24-j"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -18280,7 +18280,11 @@ details.section[open] > summary {
   {# Defined before the first tab that uses it: Jinja resolves macros
      in source order, and the Clients tab renders before the Advisors
      tab where this used to live. #}
-    {% macro participant_links_section(t_slug, t_name, t_links, can_edit) %}
+    {# return_tab: where the forms come back to. A link created inside a
+   client engagement belongs to that engagement, so it returns to Add
+   Client rather than dropping the person on Advisors. #}
+    {% macro participant_links_section(t_slug, t_name, t_links, can_edit,
+                                       return_tab='advisors') %}
       <details class="advisor-section">
         <summary>Participant Links{% if t_links %} ({{ t_links|length }}){% endif %}</summary>
         <p class="muted" style="margin: 0 0 0.8rem; font-size: 0.78rem;">
@@ -18297,7 +18301,7 @@ details.section[open] > summary {
           <form method="POST" action="{{ url_for('admin_create_participant_link') }}"
                 style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
             <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
-            <input type="hidden" name="return_to" value="advisors" />
+            <input type="hidden" name="return_to" value="{{ return_tab }}" />
             <input type="text" name="label" required
                    placeholder="Label for your own reference (e.g. Jane Smith)"
                    style="flex: 2 1 220px; padding: 0.45rem; border: 1px solid var(--line);
@@ -18327,7 +18331,7 @@ details.section[open] > summary {
                 style="display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center;">
             <input type="hidden" name="advisor_slug" value="{{ t_slug }}" />
             <input type="hidden" name="lock_advisor" value="1" />
-            <input type="hidden" name="return_to" value="advisors" />
+            <input type="hidden" name="return_to" value="{{ return_tab }}" />
             <input type="file" name="bulk_file" accept=".csv,.tsv,.xlsx,.xlsm,.xltx" required
                    style="flex: 2 1 220px; padding: 0.4rem; border: 1px solid var(--line);
                           border-radius: 2px; font-family: inherit; font-size: 0.78rem;" />
@@ -18384,7 +18388,7 @@ details.section[open] > summary {
               {% if can_edit %}
               <form method="POST" action="/admin/participant-links/scheduling/{{ l.id }}"
                     style="margin: 0;">
-                <input type="hidden" name="return_to" value="advisors" />
+                <input type="hidden" name="return_to" value="{{ return_tab }}" />
                 <select name="show_scheduling" onchange="this.form.submit()"
                         style="width: 100%; padding: 0.3rem; font-family: inherit;
                                font-size: 0.78rem; border: 1px solid var(--line);
@@ -18407,14 +18411,14 @@ details.section[open] > summary {
               <div style="display: flex; gap: 0.35rem; flex-wrap: wrap;">
                 <form method="POST" action="{{ url_for('admin_toggle_participant_link', link_id=l.id) }}">
                   <input type="hidden" name="enable" value="{{ '0' if l.enabled else '1' }}" />
-                  <input type="hidden" name="return_to" value="advisors" />
+                  <input type="hidden" name="return_to" value="{{ return_tab }}" />
                   <button type="submit" class="btn" style="font-size: 0.6rem;">
                     {{ "Disable" if l.enabled else "Enable" }}
                   </button>
                 </form>
                 <form method="POST" action="{{ url_for('admin_delete_participant_link', link_id=l.id) }}"
                       onsubmit="return confirm('Delete this participant link? It cannot be undone.');">
-                  <input type="hidden" name="return_to" value="advisors" />
+                  <input type="hidden" name="return_to" value="{{ return_tab }}" />
                   <button type="submit" class="btn-danger" style="font-size: 0.6rem;">Delete</button>
                 </form>
               </div>
@@ -18661,7 +18665,8 @@ details.section[open] > summary {
          anyone on their team a link. #}
       {{ participant_links_section(adv.slug, adv.name,
                                    participant_links_by_advisor.get(adv.slug, []),
-                                   admin_perms.edit_participant_links) }}
+                                   admin_perms.edit_participant_links,
+                                   "clients") }}
 
       <details class="advisor-section">
         <summary>Photo</summary>
@@ -19212,7 +19217,11 @@ details.section[open] > summary {
               {% if t_slug != default_persona_slug %}
               <option value="{{ default_persona_slug }}">The default persona (main link)</option>
               {% endif %}
-              {% for a in advisors %}{% if a.slug != t_slug %}
+              {# A client engagement is not a person with a voice to
+                 clone, and copying a coach's voice onto one would be
+                 a real person speaking as a client's advisor. #}
+              {% for a in advisors %}{% if a.slug != t_slug
+                                        and not a.is_client_engagement %}
               <option value="{{ a.slug }}">{{ a.name }} ({{ a.slug }})</option>
               {% endif %}{% endfor %}
             </select>
@@ -21220,7 +21229,13 @@ details.section[open] > summary {
       <input type="text" name="title" placeholder="Document title (optional)" />
             <select name="owner" title="Which knowledge base this belongs to">
         <option value="">Shared J3P base — all advisors</option>
-        {% for adv in advisors %}
+        {# Client engagements are set up and fed on the Add Client tab, where
+           the advisor is fixed rather than picked from a list of everyone —
+           picking the wrong one here would put a client's material in
+           another client's sessions. Reassignment controls on documents
+           that already exist still list them, or an assignment made
+           earlier could never be undone. #}
+        {% for adv in advisors if not adv.is_client_engagement %}
         <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
         {% endfor %}
       </select>
@@ -21242,7 +21257,13 @@ details.section[open] > summary {
       <input type="text" name="folder_title" placeholder="Folder title (optional)" />
             <select name="owner" title="Which knowledge base this belongs to">
         <option value="">Shared J3P base — all advisors</option>
-        {% for adv in advisors %}
+        {# Client engagements are set up and fed on the Add Client tab, where
+           the advisor is fixed rather than picked from a list of everyone —
+           picking the wrong one here would put a client's material in
+           another client's sessions. Reassignment controls on documents
+           that already exist still list them, or an assignment made
+           earlier could never be undone. #}
+        {% for adv in advisors if not adv.is_client_engagement %}
         <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
         {% endfor %}
       </select>
@@ -21306,7 +21327,13 @@ details.section[open] > summary {
       <input type="text" name="url_title" placeholder="Title (optional, auto-detected)" />
             <select name="owner" title="Which knowledge base this belongs to">
         <option value="">Shared J3P base — all advisors</option>
-        {% for adv in advisors %}
+        {# Client engagements are set up and fed on the Add Client tab, where
+           the advisor is fixed rather than picked from a list of everyone —
+           picking the wrong one here would put a client's material in
+           another client's sessions. Reassignment controls on documents
+           that already exist still list them, or an assignment made
+           earlier could never be undone. #}
+        {% for adv in advisors if not adv.is_client_engagement %}
         <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
         {% endfor %}
       </select>
@@ -21337,7 +21364,13 @@ details.section[open] > summary {
                        line-height: 1.5; resize: vertical;"></textarea>
             <select name="owner" title="Which knowledge base this belongs to">
         <option value="">Shared J3P base — all advisors</option>
-        {% for adv in advisors %}
+        {# Client engagements are set up and fed on the Add Client tab, where
+           the advisor is fixed rather than picked from a list of everyone —
+           picking the wrong one here would put a client's material in
+           another client's sessions. Reassignment controls on documents
+           that already exist still list them, or an assignment made
+           earlier could never be undone. #}
+        {% for adv in advisors if not adv.is_client_engagement %}
         <option value="{{ adv.slug }}">Only {{ adv.name }}</option>
         {% endfor %}
       </select>
