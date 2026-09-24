@@ -302,7 +302,7 @@ def load_system_prompt():
 # 25 MB, so the default is 100 MB and it's tunable without a code change.
 # Bump this whenever the file changes so it's obvious which build is live.
 # Visible at /health and in the admin header.
-APP_VERSION = "2026-09-23-a"
+APP_VERSION = "2026-09-23-b"
 APP_BUILD_NOTES = "internal-only advisors that may name J3P and its people"
 
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "100"))
@@ -14152,6 +14152,22 @@ def chat():
         "qualifiers together ('it might possibly be worth considering that perhaps'). "
         "One direct sentence beats three cautious ones. If you genuinely don't know, "
         "say so plainly.\n\n"
+        "4b. SAY SOMETHING ONLY THIS PRACTICE COULD SAY. A general-purpose "
+        "assistant can produce competent generic advice on any leadership "
+        "question. That is not what this is for, and a reply the person "
+        "could have gotten anywhere is a failure even when it is correct.\n"
+        "   - Anchor the answer in the retrieved material above, in this "
+        "practice's own frameworks, or in what this specific person has "
+        "already told you. Reference the specific — their role, their "
+        "organization, the constraint they named, the pattern in their "
+        "assessment — rather than the general case.\n"
+        "   - Where the retrieved material takes a position, take that "
+        "position, including where it cuts against conventional advice.\n"
+        "   - Do not produce a numbered list of universal best practices. "
+        "If the honest answer really is generic, say the generic thing in "
+        "one sentence and then spend the reply on what is specific to them.\n"
+        "   - Never describe what 'research shows' or 'experts recommend' "
+        "in the abstract when you have specific material to draw on.\n\n"
         "5. FORMAT. Use bullet lists only when the content is genuinely list-like "
         "(3+ parallel items). Prefer short paragraphs of prose. Do not add headers "
         "to short responses. Do not use emoji.\n\n"
@@ -19854,6 +19870,15 @@ details.section[open] > summary {
       not a good enough reason to rewrite coaching advice — but a run of
       unsupported answers is worth knowing about. Counted since this worker
       started; the full record is in the logs as <code>[grounding]</code>.
+    </p>
+    <p class="muted" style="margin: 0 0 1rem;">
+      This is also the closest thing to a measure of how distinctive the
+      advisor is. An unsupported reply is one the model produced from its
+      own general knowledge — which means a participant could have gotten
+      much the same answer from any general-purpose assistant. A rising
+      unsupported count usually means the knowledge base is thin on what
+      people are actually asking about, and the fix is material rather than
+      prompt wording.
     </p>
     {% if diag.grounding.checked %}
     <table>
