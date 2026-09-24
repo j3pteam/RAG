@@ -8707,6 +8707,11 @@ def _advisors_ensure_table(conn):
         "persona_principal": "TEXT",
         "referral_email": "TEXT",
         "principal_consent": "TEXT",
+        # Add Client tab: the organization (client_orgs.slug) this advisor
+        # belongs to. Its branding is copied onto the advisor's own brand_*
+        # columns whenever the organization changes, so every page that
+        # already reads those columns keeps working unchanged.
+        "client_org": "TEXT",
     })
     conn.commit()
 
@@ -8944,7 +8949,8 @@ def list_advisors():
                        COALESCE(brand_paper, ''), (brand_logo IS NOT NULL),
                        COALESCE(persona_principal, ''),
                        COALESCE(referral_email, ''),
-                       COALESCE(principal_consent, '')
+                       COALESCE(principal_consent, ''),
+                       COALESCE(client_org, '')
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
@@ -8954,7 +8960,7 @@ def list_advisors():
                  internal_only, brand_label, brand_logo_url,
                  brand_navy, brand_gold, brand_paper, has_brand_logo,
                  persona_principal, referral_email,
-                 principal_consent) in cur.fetchall():
+                 principal_consent, client_org) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -8975,7 +8981,8 @@ def list_advisors():
                             "has_brand_logo": bool(has_brand_logo),
                             "persona_principal": persona_principal or "",
                             "referral_email": referral_email or "",
-                            "principal_consent": principal_consent or ""})
+                            "principal_consent": principal_consent or "",
+                            "client_org": client_org or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -18568,178 +18575,124 @@ details.section[open] > summary {
   {% if active_tab == "clients" %}
   <div class="tab-pane" data-tab="clients">
 
-    <h2 class="group-heading">New engagement</h2>
+    <h2 class="group-heading">New client organization</h2>
     <details class="section" open>
       <summary>
-        <h2>Set up a client</h2>
-        <span class="section-note">one step</span>
+        <h2>Add an organization</h2>
+        <span class="section-note">then add its advisors</span>
       </summary>
-      <p class="muted" style="margin: 0 0 1.1rem; font-size: 0.85rem; line-height: 1.6;">
-        A client engagement is an advisor with their organization's look, and
-        optionally their own leader's voice. This creates it in one step so
-        there is no half-finished state — an advisor named for a client but
-        still wearing {{ org_short }}'s branding and speaking as
-        {{ org_principal }} is the worst outcome, and it is what happens when
-        setup stops after the first form.
+      <p class="muted" style="margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6;">
+        The organization — for example Dartmouth Cancer Center — owns the logo,
+        colors and name on the release. The advisors participants talk to —
+        for example Roy Herbst, MD PhD — are added under it once it exists.
+        Enter their website and the logo and colors are read from it; anything
+        you type yourself wins. Separate from { org_short }'s own advisors.
       </p>
-      {# Reading the client's own site fills most of this in. It is a guess,
-         so what it found is shown here for correction rather than applied
-         straight to the form below. #}
-      <form method="POST" action="/admin/clients/lookup"
-            style="margin: 0 0 1.4rem; padding: 0.9rem 1rem;
-                   background: rgba(0,0,0,0.025); border-radius: 6px;">
-        <div style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.5rem;">
-          Start from their website
-        </div>
-        <div style="display: flex; gap: 0.6rem; flex-wrap: wrap; align-items: flex-end;">
-          <label style="flex: 1 1 200px; font-size: 0.8rem;">Organization
-            <input type="text" name="name" value="{{ lookup.name if lookup else '' }}"
-                   placeholder="e.g. Sample Health System"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="flex: 1 1 240px; font-size: 0.8rem;">Their web address
-            <input type="text" name="site_url" value="{{ lookup.site if lookup else '' }}"
-                   placeholder="samplehealth.org"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <button type="submit" class="btn" style="flex: 0 0 auto;">Read their site</button>
-        </div>
-        <p class="muted" style="margin: 0.55rem 0 0; font-size: 0.78rem; line-height: 1.6;">
-          Reads only the logo and color a site publishes for link previews —
-          the same things it hands to Slack or a search engine. Nothing is
-          created, and a logo found here is theirs: check you are entitled to
-          use it before this goes to their people.
-        </p>
-      </form>
-
-      {% if lookup %}
-      <div style="margin: 0 0 1.4rem; padding: 0.9rem 1rem; border-radius: 6px;
-                  border: 1px solid var(--line);">
-        <div style="display: flex; justify-content: space-between;
-                    align-items: baseline; gap: 1rem; flex-wrap: wrap;">
-          <strong style="font-size: 0.88rem;">What that site published</strong>
-          <form method="POST" action="/admin/clients/lookup/clear" style="margin: 0;">
-            <button type="submit" class="btn-quiet" style="font-size: 0.76rem;">Discard</button>
-          </form>
-        </div>
-        {% if lookup.found %}
-        <ul class="muted" style="margin: 0.6rem 0 0; padding-left: 1.1rem;
-                                 font-size: 0.82rem; line-height: 1.7;">
-          {% for item in lookup.found %}<li>{{ item }}</li>{% endfor %}
-        </ul>
-        {% endif %}
-        {% if has_lookup_logo %}
-        <div style="display: flex; align-items: center; gap: 0.9rem;
-                    margin-top: 0.8rem; flex-wrap: wrap;">
-          <img src="/admin/clients/lookup/logo" alt=""
-               style="max-height: 46px; max-width: 220px; padding: 0.4rem 0.6rem;
-                      border-radius: 4px;
-                      background: {{ lookup.brand_navy or cfg.navy }};" />
-          <span class="muted" style="font-size: 0.78rem;">
-            Their {{ lookup.logo_source }}, on the header color it would sit on.
-            Check it is the mark and not a cropped banner.
-          </span>
-        </div>
-        {% endif %}
-        {% for note in lookup.notes %}
-        <p class="muted" style="margin: 0.55rem 0 0; font-size: 0.8rem;">{{ note }}</p>
-        {% endfor %}
-        <p class="muted" style="margin: 0.7rem 0 0; font-size: 0.8rem; line-height: 1.6;">
-          The form below has been filled in with this. Correct anything that is
-          wrong before creating the engagement — nothing has been saved yet.
-        </p>
-      </div>
-      {% endif %}
-
-      <form method="POST" action="/admin/clients/create"
-            enctype="multipart/form-data">
+      <form method="POST" action="/admin/orgs/create" enctype="multipart/form-data">
         <div style="display: grid; gap: 0.8rem;
-                    grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));">
-          <label style="font-size: 0.82rem;">Advisor participants talk to <span class="muted">(required)</span>
-            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+                    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label style="font-size: 0.82rem;">Organization <span class="muted">(required)</span>
+            <input type="text" name="name" required placeholder="e.g. Dartmouth Cancer Center" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.82rem;">Organization
-            <input type="text" name="brand_label" placeholder="e.g. Dartmouth Cancer Center"
-                   value="{{ (lookup.name or lookup.site_name) if lookup else '' }}"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+          <label style="font-size: 0.82rem;">Their website
+            <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.82rem;">Grounded in whose thinking
-            <input type="text" name="persona_principal" placeholder="{{ org_principal }}"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+          <label style="font-size: 0.82rem;">Header color <span class="muted">(optional)</span>
+            <input type="text" name="navy" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.82rem;">Send participants to
-            <input type="text" name="referral_email" placeholder="{{ cfg.contact_email }}"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+          <label style="font-size: 0.82rem;">Accent color <span class="muted">(optional)</span>
+            <input type="text" name="gold" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.82rem;">Header color
-            <input type="text" name="brand_navy" placeholder="#27334A"
-                   value="{{ lookup.brand_navy if lookup else '' }}"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+          <label style="font-size: 0.82rem;">Send participants to <span class="muted">(optional)</span>
+            <input type="text" name="referral_email" placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
-          <label style="font-size: 0.82rem;">Accent color
-            <input type="text" name="brand_gold" placeholder="#D2BC8D"
-                   value="{{ lookup.brand_gold if lookup else '' }}"
-                   style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
+          <label style="font-size: 0.82rem;">Logo <span class="muted">(optional)</span>
+            <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
+                   style="display: block; margin-top: 0.35rem;" />
           </label>
         </div>
-        <label style="display: block; margin-top: 0.9rem; font-size: 0.82rem;">
-          Their logo
-          <input type="file" name="logo"
-                 accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
-                 style="display: block; margin-top: 0.35rem;" />
-        </label>
-        <p class="muted" style="margin: 0.35rem 0 0; font-size: 0.78rem;">
-          PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. Optional — it can be
-          uploaded or replaced later under Current engagements.
-          {% if has_lookup_logo %}
-          <br /><strong>The logo read from their site will be used unless you
-          choose a file here.</strong>
-          {% endif %}
-        </p>
-
-        <label style="display: block; margin-top: 0.9rem; font-size: 0.82rem;">
-          If you named someone above, record who confirmed their agreement and when
-          <input type="text" name="principal_consent"
-                 placeholder="e.g. Confirmed by email with Dr. Sample, 22 Sep 2026"
-                 style="width: 100%; box-sizing: border-box; padding: 0.45rem;
-                        border: 1px solid var(--line); border-radius: 5px;" />
-        </label>
-        <p class="muted" style="margin: 0.6rem 0 0; font-size: 0.8rem; line-height: 1.6;">
-          Naming a real person makes this advisor speak as a voice grounded in
-          their thinking, to people who may report to them. Worth having their
-          agreement before it does — this box is somewhere to note when and
-          how, not a requirement.
-        </p>
-        <button type="submit" class="btn" style="margin-top: 1rem;">Create the engagement</button>
+        <button type="submit" class="btn" style="margin-top: 1rem;">Create organization</button>
       </form>
-      <p class="muted" style="margin: 1rem 0 0; font-size: 0.8rem; line-height: 1.6;">
-        Once created, everything else for this client — their documents,
-        their participant links, their logo and colors — is under Current
-        engagements below. Nothing about a client is managed on another tab.
-      </p>
     </details>
 
-    <h2 class="group-heading">Current engagements</h2>
+    <h2 class="group-heading">Client organizations</h2>
     {% set client_advisors = advisors | rejectattr("internal_only")
                              | selectattr("is_client_engagement") | list %}
-    {% if client_advisors %}
-    {% for org_group in client_advisors | groupby("brand_label") %}
-    <h3 style="margin: 1.4rem 0 0.6rem; font-size: 0.95rem; letter-spacing: 0.04em;">
-      {{ org_group.grouper or "No organization set" }}
-      <span class="muted" style="font-weight: 400; font-size: 0.8rem;">
-        · {{ org_group.list|length }} advisor{{ '' if org_group.list|length == 1 else 's' }}</span>
-    </h3>
-    {% for adv in org_group.list %}
-    <details class="section">
+    {% if client_orgs %}
+    {% for org in client_orgs %}
+    {% set org_advisors = client_advisors | selectattr("client_org", "equalto", org.slug) | list %}
+    <details class="section" open style="margin-top: 1.6rem; border-left: 4px solid {{ org.navy or cfg.navy }};">
+      <summary>
+        <h2>{{ org.name }}</h2>
+        <span class="section-note">{{ org_advisors|length }} advisor{{ '' if org_advisors|length == 1 else 's' }}</span>
+      </summary>
+      <div style="display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 0.9rem;">
+        {% if org.has_logo %}
+        <img src="/admin/orgs/{{ org.slug }}/logo" alt=""
+             style="max-height: 42px; max-width: 220px; background: {{ org.navy or cfg.navy }};
+                    padding: 0.4rem 0.6rem; border-radius: 4px;" />
+        {% endif %}
+        <span class="muted" style="font-size: 0.82rem;">
+          Header: <strong>{{ org.navy or "not set" }}</strong> &middot;
+          Accent: <strong>{{ org.gold or "not set" }}</strong>
+          {% if org.site_url %}&middot; {{ org.site_url }}{% endif %}
+        </span>
+      </div>
+
+      {% if admin_perms.edit_advisors %}
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
+            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;">
+        <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">
+          Add an advisor to {{ org.name }}</div>
+        <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label style="font-size: 0.8rem;">Advisor participants talk to
+            <input type="text" name="name" required placeholder="e.g. Roy Herbst, MD PhD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
+            <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+        </div>
+        <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
+      </form>
+      {% endif %}
+
+      <details class="advisor-section">
+        <summary>Organization branding</summary>
+        <form method="POST" action="/admin/orgs/{{ org.slug }}/branding" enctype="multipart/form-data">
+          <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
+            <label style="font-size: 0.8rem;">Organization name
+              <input type="text" name="name" value="{{ org.name }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Website
+              <input type="text" name="site_url" value="{{ org.site_url }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Header color
+              <input type="text" name="navy" value="{{ org.navy }}" placeholder="#27334A" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Accent color
+              <input type="text" name="gold" value="{{ org.gold }}" placeholder="#D2BC8D" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Send participants to
+              <input type="text" name="referral_email" value="{{ org.referral_email }}"
+                     placeholder="{{ cfg.contact_email }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+            <label style="font-size: 0.8rem;">Replace logo
+              <input type="file" name="logo" accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif"
+                     style="display: block; margin-top: 0.35rem;" /></label>
+          </div>
+          <label style="display: block; margin-top: 0.7rem; font-size: 0.8rem;">
+            <input type="checkbox" name="reread" value="1" /> Re-read logo and colors from the website</label>
+          {% if org.has_logo %}
+          <label style="display: block; margin-top: 0.3rem; font-size: 0.8rem;">
+            <input type="checkbox" name="remove_logo" value="1" /> Remove the logo</label>
+          {% endif %}
+          <button type="submit" class="btn" style="margin-top: 0.8rem;">Save and apply to all advisors</button>
+        </form>
+        {% if not org_advisors %}
+        <form method="POST" action="/admin/orgs/{{ org.slug }}/delete" style="margin-top: 0.8rem;"
+              data-doc-title="{{ org.name }}">
+          <button type="submit" class="btn-danger">Delete organization</button>
+        </form>
+        {% endif %}
+      </details>
+    </details>
+    {% for adv in org_advisors %}
+    <details class="section" style="margin-left: 1.6rem;">
       <summary>
         <h2>{{ adv.name }}</h2>
         <span class="section-note">
@@ -18889,113 +18842,16 @@ details.section[open] > summary {
         </div>
       </details>
     <details class="advisor-section">
-      <summary>Client branding{% if adv.brand_logo_url or adv.brand_navy %}
-        <span class="section-note">set</span>{% endif %}</summary>
-      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-        For an engagement run inside this deployment where the client
-        should see their own look. Only {{ adv.name }}'s pages change;
-        every other advisor keeps this site's branding. Leave a field
-        empty to use this site's value for it.
-      </p>
-      <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-        The look changes, not the substance. Replies, the release text and
-        the contact address stay yours, because you are still the firm
-        answering — a page that looked entirely like the client's would
-        misrepresent that. A line naming {{ org_name }} as the provider is
-        shown under the header whenever client branding is in use.
-      </p>
-      <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}/lookup"
-            style="margin: 0 0 1.2rem; padding: 0.8rem 0.9rem;
-                   border: 1px solid var(--line); border-radius: 6px;
-                   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-        <span class="muted" style="font-size: 0.8rem;">Pull logo and colors from their website</span>
-        <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" required
-               value="{{ adv.brand_logo_url if adv.brand_logo_url and not
-                        (adv.brand_logo_url|lower).endswith(('.png','.jpg','.jpeg','.gif','.webp','.svg'))
-                        else '' }}"
-               style="flex: 1; min-width: 200px; padding: 0.42rem;
-                      border: 1px solid var(--line); border-radius: 5px;" />
-        <button type="submit" class="btn">Read their site</button>
+      <summary>Name &amp; persona</summary>
+      <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
+        Logo and colors come from {{ adv.brand_label }} — change them in the
+        organization's card above.</p>
+      <form method="POST" action="/admin/clients/{{ adv.slug }}/rename"
+            style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
+        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">Advisor participants talk to
+          <input type="text" name="name" value="{{ adv.name }}" required style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+        <button type="submit" class="btn">Rename</button>
       </form>
-      <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
-            enctype="multipart/form-data" style="margin: 0 0 1.2rem;">
-        <div class="muted" style="font-size: 0.8rem; margin-bottom: 0.4rem;">Logo</div>
-        {% if adv.has_brand_logo %}
-        <div style="display: flex; align-items: center; gap: 0.9rem;
-                    flex-wrap: wrap; margin-bottom: 0.6rem;">
-          <img src="/a/{{ adv.slug }}/logo?v={{ avatar_version }}" alt=""
-               style="max-height: 42px; max-width: 200px;
-                      background: {{ adv.brand_navy or cfg.navy }};
-                      padding: 0.4rem 0.6rem; border-radius: 4px;" />
-          <span class="muted" style="font-size: 0.78rem;">
-            Shown on the header background it will actually sit on.
-          </span>
-        </div>
-        {% endif %}
-        <input type="file" name="logo"
-               accept="image/png,image/svg+xml,image/jpeg,image/webp,image/gif" />
-        <button type="submit" class="btn" style="margin-left: 0.4rem;">
-          {{ "Replace logo" if adv.has_brand_logo else "Upload logo" }}
-        </button>
-        <p class="muted" style="margin: 0.5rem 0 0; font-size: 0.78rem;">
-          PNG, SVG, JPEG, WEBP or GIF, up to 2 MB. An uploaded logo is used
-          in preference to the URL field below, and unlike a URL it cannot
-          break when the client reorganizes their website.
-        </p>
-      </form>
-      {% if adv.has_brand_logo %}
-      <form method="POST" action="/admin/advisors/logo/{{ adv.slug }}"
-            style="margin: -0.8rem 0 1.2rem;">
-        <input type="hidden" name="remove" value="1" />
-        <button type="submit" class="btn-quiet"
-                style="font-size: 0.78rem;">Remove the uploaded logo</button>
-      </form>
-      {% endif %}
-
-      <form method="POST" action="/admin/advisors/branding/{{ adv.slug }}">
-        <div style="display: grid; gap: 0.7rem;
-                    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));">
-          <label style="font-size: 0.8rem;">Logo URL{% if adv.has_brand_logo %}
-            <span class="muted">(overridden by the upload)</span>{% endif %}
-            <input type="text" name="brand_logo_url" value="{{ adv.brand_logo_url }}"
-                   placeholder="https://…/client-logo.png"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Advisor participants talk to
-            <input type="text" name="persona_name" value="{{ adv.name }}"
-                   placeholder="e.g. Roy Herbst, MD PhD"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Organization
-            <input type="text" name="brand_label" value="{{ adv.brand_label }}"
-                   placeholder="e.g. Dartmouth Cancer Center"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Header color
-            <input type="text" name="brand_navy" value="{{ adv.brand_navy }}"
-                   placeholder="#27334A"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Accent color
-            <input type="text" name="brand_gold" value="{{ adv.brand_gold }}"
-                   placeholder="#D2BC8D"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Page background
-            <input type="text" name="brand_paper" value="{{ adv.brand_paper }}"
-                   placeholder="#FAF6F0"
-                   style="width: 100%; box-sizing: border-box; padding: 0.42rem;
-                          border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-        </div>
-        <button type="submit" class="btn" style="margin-top: 0.9rem;">Save branding</button>
-      </form>
-
       <div style="margin-top: 1.4rem; padding-top: 1.2rem;
                   border-top: 1px dashed var(--line);">
         <h3 style="margin: 0 0 0.5rem; font-size: 0.9rem;">Persona of someone outside {{ org_short }}</h3>
@@ -19048,19 +18904,6 @@ details.section[open] > summary {
         </form>
       </div>
     </details>
-      {% if admin_perms.edit_advisors and adv.brand_label %}
-      <form method="POST" action="/admin/clients/{{ adv.slug }}/add-advisor"
-            style="margin-top: 1.2rem; padding: 0.8rem 0.9rem;
-                   border: 1px solid var(--line); border-radius: 6px;
-                   display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap;">
-        <span class="muted" style="font-size: 0.8rem;">
-          Add another advisor at {{ adv.brand_label }}</span>
-        <input type="text" name="name" required placeholder="e.g. Jane Sample, MD"
-               style="flex: 1; min-width: 200px; padding: 0.42rem;
-                      border: 1px solid var(--line); border-radius: 5px;" />
-        <button type="submit" class="btn">Add advisor</button>
-      </form>
-      {% endif %}
       {% if admin_perms.edit_advisors %}
       <div style="margin-top: 1.2rem; padding-top: 0.9rem;
                   border-top: 1px solid var(--line); display: flex;
@@ -19078,11 +18921,14 @@ details.section[open] > summary {
       {% endif %}
     </details>
     {% endfor %}
+    {% if not org_advisors %}
+    <p class="muted" style="margin: 0.4rem 0 0 0.4rem; font-size: 0.82rem;">
+      No advisors in {{ org.name }} yet — add one in its card above.</p>
+    {% endif %}
     {% endfor %}
     {% else %}
     <p class="muted">
-      No client engagements yet. The form above creates one; it will appear
-      here afterward.
+      No client organizations yet. The form above creates one.
     </p>
     {% endif %}
   </div>
@@ -22734,6 +22580,8 @@ def admin_dashboard():
     # "" (All advisors) means no persona filter at all.
     log_personas = db.list_feedback_personas() if (db_ok and want_activity) else []
     # Needed by the scope check below, so it is loaded before it, not after.
+    if request.args.get("tab") == "clients":
+        backfill_client_orgs()
     _advisor_rows = list_advisors()
     _phase_mark("list_advisors")
 
@@ -22911,6 +22759,7 @@ def admin_dashboard():
         org_name=ORG_NAME,
         org_short=ORG_SHORT,
         lookup=session.get("brand_lookup") if active_tab == "clients" else None,
+        client_orgs=list_client_orgs() if active_tab == "clients" else [],
         has_lookup_logo=(bool(session.get("brand_lookup_logo"))
                          and active_tab == "clients"),
         has_internal_advisor=any(r.get("internal_only")
@@ -24010,6 +23859,379 @@ def admin_delete_advisor(slug):
     else:
         flash("Could not remove that advisor.")
     return redirect(url_for("admin_dashboard", tab="advisors"))
+
+
+
+# ---------------------------------------------------------------------------
+# Client organizations (Add Client tab only)
+#
+# An organization — "Dartmouth Cancer Center" — owns the branding; the
+# advisors participants talk to — "Roy Herbst, MD PhD" — belong to it.
+# Separate from this firm's own advisors on the Advisors tab: nothing here
+# touches an advisor without a client_org.
+# ---------------------------------------------------------------------------
+_ORG_BRAND_FIELDS = ("site_url", "navy", "gold", "referral_email")
+
+
+def _orgs_ensure_table(conn):
+    if _already_ensured("client_orgs"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS client_orgs (
+                slug           TEXT PRIMARY KEY,
+                name           TEXT NOT NULL,
+                site_url       TEXT NOT NULL DEFAULT '',
+                navy           TEXT NOT NULL DEFAULT '',
+                gold           TEXT NOT NULL DEFAULT '',
+                referral_email TEXT NOT NULL DEFAULT '',
+                logo           BYTEA,
+                logo_mime      TEXT,
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def list_client_orgs() -> list:
+    conn = _settings_db_conn()
+    if not conn:
+        return []
+    try:
+        _orgs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT slug, name, site_url, navy, gold, referral_email, "
+                        "(logo IS NOT NULL) FROM client_orgs ORDER BY name")
+            return [{"slug": r[0], "name": r[1], "site_url": r[2], "navy": r[3],
+                     "gold": r[4], "referral_email": r[5], "has_logo": bool(r[6])}
+                    for r in cur.fetchall()]
+    except Exception as e:
+        app.logger.error(f"[orgs] list failed: {type(e).__name__}")
+        return []
+    finally:
+        conn.close()
+
+
+def get_client_org(slug: str):
+    for o in list_client_orgs():
+        if o["slug"] == slug:
+            return o
+    return None
+
+
+def _org_slug(name: str) -> str:
+    return "org-" + slugify_advisor(name)
+
+
+def sync_org_to_advisors(org_slug: str, conn=None) -> bool:
+    """Copy an organization's branding onto every advisor in it."""
+    own = conn is None
+    conn = conn or _settings_db_conn()
+    if not conn:
+        return False
+    try:
+        _advisors_ensure_table(conn)
+        _orgs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                UPDATE advisors AS a SET
+                    brand_label = o.name,
+                    brand_navy = NULLIF(o.navy, ''),
+                    brand_gold = NULLIF(o.gold, ''),
+                    brand_logo = o.logo, brand_logo_mime = o.logo_mime,
+                    brand_logo_url = '',
+                    referral_email = COALESCE(NULLIF(o.referral_email, ''), a.referral_email)
+                FROM client_orgs AS o
+                WHERE o.slug = %s AND a.client_org = o.slug""", (org_slug,))
+            cur.execute("SELECT slug FROM advisors WHERE client_org = %s", (org_slug,))
+            slugs = [r[0] for r in cur.fetchall()]
+        conn.commit()
+        for sl in slugs:
+            _forget_cached_advisor(sl)
+        return True
+    except Exception as e:
+        app.logger.error(f"[orgs] sync failed: {type(e).__name__}")
+        return False
+    finally:
+        if own:
+            conn.close()
+
+
+def backfill_client_orgs():
+    """Engagements created before organizations existed get one, grouped by
+    the organization name they already carry. Runs on the Add Client tab;
+    a no-op once every client advisor has an organization."""
+    rows = [a for a in list_advisors()
+            if _is_client_engagement(a) and not a.get("client_org")]
+    if not rows:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _orgs_ensure_table(conn)
+        with conn.cursor() as cur:
+            for a in rows:
+                org_name = (a.get("brand_label") or a["name"]).strip()
+                oslug = _org_slug(org_name)
+                cur.execute("""
+                    INSERT INTO client_orgs (slug, name, navy, gold, referral_email,
+                                             logo, logo_mime)
+                    SELECT %s, %s, COALESCE(brand_navy, ''), COALESCE(brand_gold, ''),
+                           COALESCE(referral_email, ''), brand_logo, brand_logo_mime
+                    FROM advisors WHERE slug = %s
+                    ON CONFLICT (slug) DO NOTHING""", (oslug, org_name, a["slug"]))
+                cur.execute("UPDATE advisors SET client_org = %s WHERE slug = %s",
+                            (oslug, a["slug"]))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[orgs] backfill failed: {type(e).__name__}")
+    finally:
+        conn.close()
+
+
+def _org_apply_lookup(values: dict, site: str):
+    """Fill empty colors and a missing logo from the organization's site."""
+    found, logo = [], None
+    if not site:
+        return found, logo
+    result = lookup_organization_brand(site)
+    if not values.get("navy") and result.get("brand_navy"):
+        values["navy"] = result["brand_navy"]
+    if not values.get("gold") and result.get("brand_gold"):
+        values["gold"] = result["brand_gold"]
+    if result.get("logo_data") and len(result["logo_data"]) <= LOGO_MAX_BYTES:
+        logo = (result["logo_data"], result["logo_mime"])
+    found = result.get("found") or result.get("notes") or []
+    return found, logo
+
+
+def _org_upload(field="logo"):
+    """(data, mime) from an uploaded logo, None if none, or an error string."""
+    up = request.files.get(field)
+    if not (up and up.filename):
+        return None
+    mime = (up.mimetype or "").lower()
+    if mime not in _LOGO_TYPES:
+        return f"{up.filename} is not a PNG, SVG, JPEG, WEBP or GIF."
+    data = up.read()
+    if not data or len(data) > LOGO_MAX_BYTES:
+        return "That logo is empty or larger than 2 MB."
+    return (data, mime)
+
+
+def _clean_hex(v):
+    v = (v or "").strip()
+    return _brand_hex(v) if v else ""
+
+
+@app.route("/admin/orgs/create", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_create():
+    name = (request.form.get("name") or "").strip()[:120]
+    if not name:
+        flash("Give the organization a name.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    slug = _org_slug(name)
+    if get_client_org(slug):
+        flash(f"{name} already exists below. Add advisors to it there.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    values = {"site_url": (request.form.get("site_url") or "").strip()[:300],
+              "navy": _clean_hex(request.form.get("navy")),
+              "gold": _clean_hex(request.form.get("gold")),
+              "referral_email": (request.form.get("referral_email") or "").strip()[:200]}
+    upload = _org_upload()
+    if isinstance(upload, str):
+        flash(upload + " Nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    found, looked_logo = _org_apply_lookup(values, values["site_url"])
+    logo = upload or looked_logo
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        _orgs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""INSERT INTO client_orgs (slug, name, site_url, navy, gold,
+                                                    referral_email, logo, logo_mime)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)""",
+                        (slug, name, values["site_url"], values["navy"], values["gold"],
+                         values["referral_email"],
+                         logo[0] if logo else None, logo[1] if logo else None))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[orgs] create failed: {type(e).__name__}")
+        flash("Could not create the organization.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    finally:
+        conn.close()
+    flash(f"\u2713 {name} created"
+          + (" — from their site: " + "; ".join(found) if found else "")
+          + ". Now add its advisors below.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/<slug>/branding", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_branding(slug):
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    name = (request.form.get("name") or "").strip()[:120] or org["name"]
+    values = {"site_url": (request.form.get("site_url") or "").strip()[:300],
+              "navy": (request.form.get("navy") or "").strip(),
+              "gold": (request.form.get("gold") or "").strip(),
+              "referral_email": (request.form.get("referral_email") or "").strip()[:200]}
+    for k in ("navy", "gold"):
+        if values[k] and not _brand_hex(values[k]):
+            flash(f"{values[k]!r} is not a color like #27334A. Nothing was saved.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
+        values[k] = _brand_hex(values[k]) if values[k] else ""
+    upload = _org_upload()
+    if isinstance(upload, str):
+        flash(upload + " Nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    found, looked_logo = [], None
+    if request.form.get("reread") and values["site_url"]:
+        values["navy"] = values["gold"] = ""          # re-read replaces colors
+        found, looked_logo = _org_apply_lookup(values, values["site_url"])
+    logo = upload or looked_logo
+    conn = _settings_db_conn()
+    if not conn:
+        flash("Database unavailable — nothing was saved.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""UPDATE client_orgs SET name = %s, site_url = %s, navy = %s,
+                                  gold = %s, referral_email = %s WHERE slug = %s""",
+                        (name, values["site_url"], values["navy"], values["gold"],
+                         values["referral_email"], slug))
+            if logo:
+                cur.execute("UPDATE client_orgs SET logo = %s, logo_mime = %s "
+                            "WHERE slug = %s", (logo[0], logo[1], slug))
+            if request.form.get("remove_logo"):
+                cur.execute("UPDATE client_orgs SET logo = NULL, logo_mime = NULL "
+                            "WHERE slug = %s", (slug,))
+        conn.commit()
+        sync_org_to_advisors(slug, conn)
+    except Exception as e:
+        app.logger.error(f"[orgs] branding failed: {type(e).__name__}")
+        flash("Could not save — nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    finally:
+        conn.close()
+    flash(f"\u2713 {name} saved and applied to all of its advisors"
+          + (" — from their site: " + "; ".join(found) if found else "") + ".")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/<slug>/logo")
+@require_permission("edit_advisors")
+def admin_org_logo(slug):
+    conn = _settings_db_conn()
+    if not conn:
+        return ("", 404)
+    try:
+        _orgs_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT logo, logo_mime FROM client_orgs WHERE slug = %s", (slug,))
+            row = cur.fetchone()
+    finally:
+        conn.close()
+    if not row or row[0] is None:
+        return ("", 404)
+    resp = app.response_class(bytes(row[0]), mimetype=row[1] or "image/png")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/orgs/<slug>/advisors", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_add_advisor(slug):
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    name = (request.form.get("name") or "").strip()[:80]
+    if not name:
+        flash("Give the advisor a name.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    adv_slug = slugify_advisor(name)
+    if get_advisor(adv_slug):
+        adv_slug = slugify_advisor(f"{name} {org['name']}")
+        if get_advisor(adv_slug):
+            flash(f"An advisor named {name} already exists. Use a different name.")
+            return redirect(url_for("admin_dashboard", tab="clients"))
+    if not save_advisor(adv_slug, name):
+        flash("Could not create the advisor — the database was unavailable.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    principal = (request.form.get("persona_principal") or "").strip()[:120]
+    conn = _settings_db_conn()
+    ok = False
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("UPDATE advisors SET client_org = %s, brand_label = %s, "
+                            "persona_principal = NULLIF(%s, '') WHERE slug = %s",
+                            (slug, org["name"], principal, adv_slug))
+            conn.commit()
+            ok = sync_org_to_advisors(slug, conn)
+        except Exception as e:
+            app.logger.error(f"[orgs] add advisor failed: {type(e).__name__}")
+        finally:
+            conn.close()
+    if not ok:
+        delete_advisor(adv_slug)          # never leave an unbranded advisor
+        flash("Could not attach the advisor to the organization, so nothing was created.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    flash(f"\u2713 {name} added to {org['name']}. Their session link and "
+          "participant links are in their card below.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/clients/<slug>/rename", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_client_rename(slug):
+    adv = get_advisor(slug)
+    name = (request.form.get("name") or "").strip()[:80]
+    if not _is_client_engagement(adv) or not name:
+        flash("Nothing was changed.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    conn = _settings_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("UPDATE advisors SET name = %s WHERE slug = %s", (name, slug))
+        conn.commit()
+        _forget_cached_advisor(slug)
+        flash(f"\u2713 Renamed to {name}. Their link stays the same.")
+    except Exception as e:
+        app.logger.error(f"[orgs] rename failed: {type(e).__name__}")
+        flash("Could not rename.")
+    finally:
+        conn.close()
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/<slug>/delete", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_delete(slug):
+    org = get_client_org(slug)
+    if not org:
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    if any(a.get("client_org") == slug for a in list_advisors()):
+        flash(f"Delete {org['name']}'s advisors first.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    conn = _settings_db_conn()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("DELETE FROM client_orgs WHERE slug = %s", (slug,))
+        conn.commit()
+        flash(f"\u2713 {org['name']} removed.")
+    finally:
+        conn.close()
+    return redirect(url_for("admin_dashboard", tab="clients"))
 
 
 @app.route("/admin/clients/<slug>/use-initials", methods=["POST"])
