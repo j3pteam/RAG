@@ -19073,20 +19073,20 @@ details.section[open] > summary {
         <span class="section-note">then add its advisors</span>
       </summary>
       <p class="muted" style="margin: 0 0 1rem; font-size: 0.85rem; line-height: 1.6;">
-        The organization — for example Dartmouth Cancer Center — owns the logo,
+        The organization — for example Sample Health System — owns the logo,
         colors and name on the release. The advisors participants talk to —
         for example John Sample, MD — are added under it once it exists.
         Enter their website and the logo and colors are read from it; anything
-        you type yourself wins. Separate from { org_short }'s own advisors.
+        you type yourself wins. Separate from {{ org_short }}'s own advisors.
       </p>
       <form method="POST" action="/admin/orgs/create" enctype="multipart/form-data">
         <div style="display: grid; gap: 0.8rem;
                     grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
           <label style="font-size: 0.82rem;">Organization <span class="muted">(required)</span>
-            <input type="text" name="name" required placeholder="e.g. Dartmouth Cancer Center" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+            <input type="text" name="name" required placeholder="e.g. Sample Health System" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.82rem;">Their website
-            <input type="text" name="site_url" placeholder="e.g. cancer.dartmouth.edu" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+            <input type="text" name="site_url" placeholder="e.g. samplehealth.org" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
           <label style="font-size: 0.82rem;">Header color <span class="muted">(optional)</span>
             <input type="text" name="navy" placeholder="read from their site" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
@@ -19133,7 +19133,7 @@ details.section[open] > summary {
             style="margin: 0 0 1rem; display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
         <label style="font-size: 0.8rem; flex: 1; min-width: 260px;">Website
           <input type="text" name="site_url" value="{{ org.site_url }}"
-                 placeholder="e.g. cedars-sinai.org"
+                 placeholder="e.g. samplehealth.org"
                  style="width: 100%; box-sizing: border-box; padding: 0.45rem;
                         border: 1px solid var(--line); border-radius: 5px;" />
         </label>
@@ -24381,7 +24381,7 @@ def admin_delete_advisor(slug):
 # ---------------------------------------------------------------------------
 # Client organizations (Add Client tab only)
 #
-# An organization — "Dartmouth Cancer Center" — owns the branding; the
+# An organization — "Sample Health System" — owns the branding; the
 # advisors participants talk to — "John Sample, MD" — belong to it.
 # Separate from this firm's own advisors on the Advisors tab: nothing here
 # touches an advisor without a client_org.
