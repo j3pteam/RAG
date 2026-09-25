@@ -2333,6 +2333,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
       letter-spacing: 0.12em; text-transform: uppercase; vertical-align: middle;
     }
     .brand-divider { width: 1px; height: 38px; background: rgba(210, 188, 141, 0.35); flex-shrink: 0; }
+    .brand-title {
+      display: block; margin-top: 0.3rem; font-size: 0.78em;
+      letter-spacing: 0.08em; text-transform: none; opacity: 0.85;
+    }
     .brand-tag {
       font-size: 0.92rem; letter-spacing: 0.22em;
       text-transform: uppercase; color: var(--gold);
@@ -3842,7 +3846,7 @@ INDEX_HTML = r"""<!DOCTYPE html>
            onerror='this.onerror=null; this.src={{ site_logo_url|tojson }};'
            {% endif %} />
       <span class="brand-divider"></span>
-      <span class="brand-tag">{{ cfg.persona_name }}</span>
+      <span class="brand-tag">{{ cfg.persona_name }}{% if persona_title %}<span class="brand-title">{{ persona_title }}</span>{% endif %}</span>
       {% if internal_only %}<span class="brand-internal">Internal</span>{% endif %}
     </div>
     <button id="autospeak-btn" aria-label="Toggle speak mode" title="Speak — read every response aloud">
@@ -4015,6 +4019,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
     </button>
     <div class="presence-name">{{ cfg.avatar_name or cfg.persona_name }}</div>
+    {% if persona_title %}
+    <div class="presence-status" style="text-transform: none; letter-spacing: 0.02em;">{{ persona_title }}</div>
+    {% endif %}
     {% if client_org and client_org != (cfg.avatar_name or cfg.persona_name) %}
     <div class="presence-status" style="text-transform: none; letter-spacing: 0.02em;">{{ client_org }}</div>
     {% endif %}
@@ -8788,6 +8795,9 @@ def _advisors_ensure_table(conn):
         # read by _effective() on the chat page. Set from the organization
         # on the Add Client tab; None follows the site setting.
         "context_intake_override": "BOOLEAN",
+        # Add Client tab: the advisor's title ("Director, Thoracic Oncology"),
+        # shown beside their name in the page header and under the avatar.
+        "title": "TEXT",
     })
     conn.commit()
 
@@ -9026,7 +9036,8 @@ def list_advisors():
                        COALESCE(persona_principal, ''),
                        COALESCE(referral_email, ''),
                        COALESCE(principal_consent, ''),
-                       COALESCE(client_org, '')
+                       COALESCE(client_org, ''),
+                       COALESCE(title, '')
                 FROM advisors ORDER BY name
             """)
             for (slug, name, has_photo, no_photo, scheduling_url,
@@ -9036,7 +9047,7 @@ def list_advisors():
                  internal_only, brand_label, brand_logo_url,
                  brand_navy, brand_gold, brand_paper, has_brand_logo,
                  persona_principal, referral_email,
-                 principal_consent, client_org) in cur.fetchall():
+                 principal_consent, client_org, title) in cur.fetchall():
                 out.append({"slug": slug, "name": name,
                             "has_photo": bool(has_photo),
                             "no_photo": bool(no_photo),
@@ -9058,7 +9069,8 @@ def list_advisors():
                             "persona_principal": persona_principal or "",
                             "referral_email": referral_email or "",
                             "principal_consent": principal_consent or "",
-                            "client_org": client_org or ""})
+                            "client_org": client_org or "",
+                            "title": title or ""})
     except Exception as e:
         app.logger.error(f"[advisors] list failed: {e}")
     finally:
@@ -9111,7 +9123,8 @@ def get_advisor(slug: str):
                                   COALESCE(principal_consent, ''),
                                   (brand_logo IS NOT NULL),
                                   context_intake_override,
-                                  COALESCE(client_org, '')
+                                  COALESCE(client_org, ''),
+                                  COALESCE(title, '')
                            FROM advisors WHERE slug = %s""", (slug,))
             row = cur.fetchone()
         result = None if row is None else {
@@ -9135,7 +9148,8 @@ def get_advisor(slug: str):
                 "principal_consent": row[19] or "",
                 "has_brand_logo": bool(row[20]),
                 "context_intake_override": row[21],
-                "client_org": row[22] or ""}
+                "client_org": row[22] or "",
+                "title": row[23] or ""}
         if cache is not None:
             cache[slug] = result
         return result
@@ -13652,6 +13666,8 @@ def _render_chat(force_scheduling=None, advisor=None, participant_first_name=Non
                       else brand(RELEASE_BODY_HTML)),
         client_org=((advisor.get("brand_label") or "")
                     if _is_client_engagement(advisor) else ""),
+        persona_title=((advisor.get("title") or "")
+                       if _is_client_engagement(advisor) else ""),
         release_checkbox_label=RELEASE_CHECKBOX_LABEL,
         personality_questions=TIPI_ITEMS,
         # Both intakes are off for an internal session regardless of the
@@ -19134,6 +19150,9 @@ details.section[open] > summary {
           <label style="font-size: 0.8rem;">Advisor participants talk to
             <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
+          <label style="font-size: 0.8rem;">Title <span class="muted">(optional)</span>
+            <input type="text" name="title" placeholder="e.g. Director, Thoracic Oncology" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
           <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
             <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
           </label>
@@ -19577,7 +19596,7 @@ details.section[open] > summary {
       </details>
       {% endif %}
     <details class="advisor-section">
-      <summary>Name &amp; persona</summary>
+      <summary>Name, title &amp; persona</summary>
       <p class="muted" style="margin: 0 0 0.7rem; font-size: 0.8rem;">
         Logo and colors come from {{ adv.brand_label }} — change them in the
         organization's card above.</p>
@@ -19585,7 +19604,10 @@ details.section[open] > summary {
             style="display: flex; gap: 0.5rem; align-items: flex-end; flex-wrap: wrap;">
         <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">Advisor participants talk to
           <input type="text" name="name" value="{{ adv.name }}" required style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
-        <button type="submit" class="btn">Rename</button>
+        <label style="font-size: 0.8rem; flex: 1; min-width: 220px;">Title
+          <input type="text" name="title" value="{{ adv.title }}"
+                 placeholder="e.g. Director, Thoracic Oncology" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" /></label>
+        <button type="submit" class="btn">Save</button>
       </form>
       <div style="margin-top: 1.4rem; padding-top: 1.2rem;
                   border-top: 1px dashed var(--line);">
@@ -24741,14 +24763,16 @@ def admin_org_add_advisor(slug):
         flash("Could not create the advisor — the database was unavailable.")
         return redirect(url_for("admin_dashboard", tab="clients"))
     principal = (request.form.get("persona_principal") or "").strip()[:120]
+    adv_title = (request.form.get("title") or "").strip()[:120]
     conn = _settings_db_conn()
     ok = False
     if conn:
         try:
             with conn.cursor() as cur:
                 cur.execute("UPDATE advisors SET client_org = %s, brand_label = %s, "
-                            "persona_principal = NULLIF(%s, '') WHERE slug = %s",
-                            (slug, org["name"], principal, adv_slug))
+                            "persona_principal = NULLIF(%s, ''), title = NULLIF(%s, '') "
+                            "WHERE slug = %s",
+                            (slug, org["name"], principal, adv_title, adv_slug))
             conn.commit()
             ok = sync_org_to_advisors(slug, conn)
         except Exception as e:
@@ -24769,16 +24793,19 @@ def admin_org_add_advisor(slug):
 def admin_client_rename(slug):
     adv = get_advisor(slug)
     name = (request.form.get("name") or "").strip()[:80]
+    title = (request.form.get("title") or "").strip()[:120]
     if not _is_client_engagement(adv) or not name:
         flash("Nothing was changed.")
         return redirect(url_for("admin_dashboard", tab="clients"))
     conn = _settings_db_conn()
     try:
         with conn.cursor() as cur:
-            cur.execute("UPDATE advisors SET name = %s WHERE slug = %s", (name, slug))
+            cur.execute("UPDATE advisors SET name = %s, title = NULLIF(%s, '') "
+                        "WHERE slug = %s", (name, title, slug))
         conn.commit()
         _forget_cached_advisor(slug)
-        flash(f"\u2713 Renamed to {name}. Their link stays the same.")
+        flash(f"\u2713 Saved {name}" + (f", {title}" if title else "")
+              + ". Their link stays the same.")
     except Exception as e:
         app.logger.error(f"[orgs] rename failed: {type(e).__name__}")
         flash("Could not rename.")
