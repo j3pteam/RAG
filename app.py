@@ -11170,6 +11170,18 @@ def _personality_assessment_ensure_table(conn):
                 PRIMARY KEY (subject_type, subject_id)
             )
         """)
+        # The first release stored advisor results in an advisor-only table.
+        # Carry any rows saved there across; rows already in the new table
+        # are newer and win. Safe to repeat.
+        cur.execute("SELECT to_regclass('advisor_personality_assessment')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("""
+                INSERT INTO personality_assessment
+                    (subject_type, subject_id, answers, scores, completed_at)
+                SELECT 'advisor', advisor_id, answers, scores, completed_at
+                FROM advisor_personality_assessment
+                ON CONFLICT (subject_type, subject_id) DO NOTHING
+            """)
     conn.commit()
 
 
