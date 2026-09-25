@@ -44,6 +44,19 @@ for node in ast.walk(tree):
 # Flask provides this one itself.
 endpoints.add("static")
 
+# Routes registered from the assessment/ blueprint, as "<blueprint>.<view>".
+import os
+_bp_path = os.path.join(os.path.dirname(os.path.abspath(PATH)), "assessment", "routes.py")
+if os.path.exists(_bp_path):
+    _bp_src = open(_bp_path, encoding="utf-8").read()
+    _bp_name = re.search(r'Blueprint\(\s*["\'](\w+)["\']', _bp_src)
+    if _bp_name:
+        for node in ast.walk(ast.parse(_bp_src)):
+            if isinstance(node, ast.FunctionDef) and any(
+                    isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "route"
+                    for d in node.decorator_list):
+                endpoints.add(f"{_bp_name.group(1)}.{node.name}")
+
 bad = []
 for m in re.finditer(r'url_for\(\s*["\']([A-Za-z_][\w.]*)["\']', src):
     name = m.group(1)
