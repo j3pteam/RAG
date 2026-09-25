@@ -2334,8 +2334,8 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .brand-divider { width: 1px; height: 38px; background: rgba(210, 188, 141, 0.35); flex-shrink: 0; }
     .brand-title {
-      display: block; margin-top: 0.3rem; font-size: 0.78em;
-      letter-spacing: 0.08em; text-transform: none; opacity: 0.85;
+      display: block; margin-top: 0.35rem; font-size: 1.15em;
+      letter-spacing: 0.05em; text-transform: none; opacity: 0.9;
     }
     .brand-tag {
       font-size: 0.92rem; letter-spacing: 0.22em;
