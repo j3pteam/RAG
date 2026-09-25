@@ -1,47 +1,54 @@
-"""Flask blueprint for the advisor-portal assessments.
+"""Flask blueprint for the Personality assessment step of advisor onboarding.
 
-Storage is injected so this works with whatever DB layer the app already uses:
-  get_advisor(token)                     -> {"id", "name"} or None
-  get_result(advisor_id, instrument)     -> stored dict or None
-  save_result(advisor_id, instrument, answers, scores) -> None
-  portal_home(token)                     -> URL to return to when done
+Storage and auth are injected so this fits the app's existing layers:
+  get_advisor(token)                -> {"id", "name"} or None   (portal-link token)
+  get_advisor_by_id(advisor_id)     -> {"id", "name"} or None   (admin view)
+  get_result(advisor_id)            -> {"answers","scores","completed_at"} or None
+  save_result(advisor_id, answers, scores) -> None               (upsert)
+  onboarding_home(token)            -> URL of the advisor's onboarding page
+  admin_required                    -> the app's existing admin-auth decorator
 """
 import os
 from flask import Blueprint, abort, redirect, render_template, request
 
-from .items import INSTRUMENTS, LIKERT, score
-
-ORDER = ["personality", "behavioral"]
+from .items import ALL_ITEM_IDS, DERAILERS, LIKERT, PARTS, TRAITS, score
 
 
-def create_assessment_blueprint(get_advisor, get_result, save_result, portal_home):
-    bp = Blueprint("assessment", __name__,
+def create_assessment_blueprint(get_advisor, get_advisor_by_id, get_result, save_result,
+                                onboarding_home, admin_required):
+    bp = Blueprint("personality_assessment", __name__,
                    template_folder=os.path.join(os.path.dirname(__file__), "templates"))
 
-    @bp.route("/portal/<token>/assessment/<instrument>", methods=["GET", "POST"])
-    def take(token, instrument):
+    @bp.route("/portal/<token>/onboarding/personality", methods=["GET", "POST"])
+    def take(token):
         advisor = get_advisor(token)
-        if not advisor or instrument not in INSTRUMENTS:
+        if not advisor:
             abort(404)
-        inst = INSTRUMENTS[instrument]
         error, answers = None, {}
-
         if request.method == "POST":
-            answers = {k: request.form[k] for k, _ in inst["items"] if request.form.get(k)}
+            answers = {k: request.form[k] for k in ALL_ITEM_IDS if request.form.get(k)}
             try:
-                scores = score(instrument, answers)
+                scores = score(answers)
             except ValueError as e:
                 error = f"Please answer every statement ({e})."
             else:
-                save_result(advisor["id"], instrument, {k: int(v) for k, v in answers.items()}, scores)
-                nxt = next((i for i in ORDER[ORDER.index(instrument) + 1:]
-                            if not get_result(advisor["id"], i)), None)
-                return redirect(f"/portal/{token}/assessment/{nxt}" if nxt else portal_home(token))
-        elif get_result(advisor["id"], instrument):
-            answers = get_result(advisor["id"], instrument).get("answers", {})
+                save_result(advisor["id"], {k: int(v) for k, v in answers.items()}, scores)
+                return redirect(onboarding_home(token))
+        else:
+            prior = get_result(advisor["id"])
+            answers = prior["answers"] if prior else {}
+        return render_template("personality_assessment.html", advisor=advisor, parts=PARTS,
+                               likert=LIKERT, answers=answers, error=error,
+                               back_url=onboarding_home(token))
 
-        return render_template("assessment_form.html", advisor=advisor, inst=inst,
-                               instrument=instrument, likert=LIKERT, answers=answers,
-                               error=error, step=ORDER.index(instrument) + 1, steps=len(ORDER))
+    @bp.route("/admin/advisors/<advisor_id>/personality")
+    @admin_required
+    def admin_view(advisor_id):
+        advisor, result = get_advisor_by_id(advisor_id), get_result(advisor_id)
+        if not advisor:
+            abort(404)
+        return render_template("personality_results.html", advisor=advisor, result=result,
+                               trait_names={k: v[0] for k, v in TRAITS.items()},
+                               derailer_names={k: v[0] for k, v in DERAILERS.items()})
 
     return bp

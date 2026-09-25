@@ -46,10 +46,11 @@ DERAILER_COUNTERWEIGHT = {
 }
 
 
-def build_persona_block(advisor_name, personality=None, behavioral=None):
-    """personality/behavioral: output of items.score(), or None if not completed."""
-    if not personality and not behavioral:
+def build_persona_block(advisor_name, scores=None):
+    """scores: output of items.score(), or None if the assessment isn't completed."""
+    if not scores:
         return ""
+    personality, behavioral = scores.get("traits"), scores.get("derailers")
 
     lines = [f"## How {advisor_name} communicates",
              f"Reflect {advisor_name}'s natural style:"]

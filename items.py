@@ -62,28 +62,23 @@ DERAILERS = {
         "I seek approval from senior leaders before acting."]),
 }
 
-# Two instruments, mapped to the two onboarding slots in the admin panel.
-INSTRUMENTS = {
-    "personality": {
-        "title": "Personality assessment",
-        "intro": "How you tend to show up day to day. Answer based on how you usually are, not how you'd like to be.",
-        "items": [(f"{k}_{i}", t) for k, (_, its) in TRAITS.items() for i, (t, _) in enumerate(its)],
-    },
-    "behavioral": {
-        "title": "Self behavioral assessment",
-        "intro": "Think about stressful stretches, high stakes, or when you're tired or not being watched.",
-        "items": [(f"{k}_{i}", t) for k, (_, its) in DERAILERS.items() for i, t in enumerate(its)],
-    },
-}
-
-
 def _interleave(items, group_size):
     """Mix items so the same scale isn't answered back to back."""
     groups = [items[i:i + group_size] for i in range(0, len(items), group_size)]
     return [g[j] for j in range(group_size) for g in groups if j < len(g)]
 
-INSTRUMENTS["personality"]["items"] = _interleave(INSTRUMENTS["personality"]["items"], 3)
-INSTRUMENTS["behavioral"]["items"] = _interleave(INSTRUMENTS["behavioral"]["items"], 2)
+
+# One onboarding step ("Personality assessment") with two parts.
+# The existing Self behavioral assessment is separate and untouched.
+PARTS = [
+    {"key": "traits", "title": "Part 1: Everyday style",
+     "intro": "How you tend to show up day to day. Answer based on how you usually are, not how you'd like to be.",
+     "items": _interleave([(f"{k}_{i}", t) for k, (_, its) in TRAITS.items() for i, (t, _) in enumerate(its)], 3)},
+    {"key": "derailers", "title": "Part 2: Under pressure",
+     "intro": "Think about stressful stretches, high stakes, or when you're tired or not being watched.",
+     "items": _interleave([(f"{k}_{i}", t) for k, (_, its) in DERAILERS.items() for i, t in enumerate(its)], 2)},
+]
+ALL_ITEM_IDS = [i for part in PARTS for i, _ in part["items"]]
 
 
 def _pct(total, lo, hi):
@@ -98,24 +93,23 @@ def derailer_band(p):
     return "elevated" if p >= 70 else "moderate" if p >= 40 else "low"
 
 
-def score(instrument, answers):
-    """answers: {item_id: 1..5}. Returns {scale: {"score": 0-100, "band": str}}. Raises ValueError if incomplete."""
-    ids = [i for i, _ in INSTRUMENTS[instrument]["items"]]
-    missing = [i for i in ids if i not in answers]
+def score(answers):
+    """answers: {item_id: 1..5} for all 37 items.
+    Returns {"traits": {scale: {"score","band"}}, "derailers": {...}}. Raises ValueError if incomplete."""
+    missing = [i for i in ALL_ITEM_IDS if i not in answers]
     if missing:
-        raise ValueError(f"{len(missing)} items unanswered")
-    vals = {i: int(answers[i]) for i in ids}
+        raise ValueError(f"{len(missing)} statements unanswered")
+    vals = {i: int(answers[i]) for i in ALL_ITEM_IDS}
     if any(v < 1 or v > 5 for v in vals.values()):
         raise ValueError("answers must be 1-5")
 
-    out = {}
-    if instrument == "personality":
-        for k, (_, its) in TRAITS.items():
-            s = sum((6 - vals[f"{k}_{i}"]) if rev else vals[f"{k}_{i}"] for i, (_, rev) in enumerate(its))
-            p = _pct(s, 3, 15)
-            out[k] = {"score": p, "band": trait_band(p)}
-    else:
-        for k in DERAILERS:
-            p = _pct(vals[f"{k}_0"] + vals[f"{k}_1"], 2, 10)
-            out[k] = {"score": p, "band": derailer_band(p)}
-    return out
+    traits = {}
+    for k, (_, its) in TRAITS.items():
+        s = sum((6 - vals[f"{k}_{i}"]) if rev else vals[f"{k}_{i}"] for i, (_, rev) in enumerate(its))
+        p = _pct(s, 3, 15)
+        traits[k] = {"score": p, "band": trait_band(p)}
+    derailers = {}
+    for k in DERAILERS:
+        p = _pct(vals[f"{k}_0"] + vals[f"{k}_1"], 2, 10)
+        derailers[k] = {"score": p, "band": derailer_band(p)}
+    return {"traits": traits, "derailers": derailers}

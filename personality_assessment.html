@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personality assessment — J3P Health</title>
+<style>
+:root{--navy:#2A3247;--gold:#C9A96E;--cream:#F7F4EE;--line:#E4DED3;--muted:#6B7285;--err:#8A3B2E;--teal:#2B7A74;--amber:#A8651A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--navy);font:16px/1.55 -apple-system,"Segoe UI",system-ui,sans-serif}
+.wrap{max-width:760px;margin:0 auto;padding:32px 20px 80px}
+.back{color:var(--muted);text-decoration:none;font-size:.92rem}
+.step{color:var(--muted);font-size:.9rem;border-left:3px solid var(--gold);padding-left:10px;margin-top:22px}
+h1{font-size:1.9rem;margin:10px 0 6px}
+h2{font-size:1.3rem;margin:34px 0 4px}
+.intro{color:var(--muted);margin:0 0 14px}
+.note{font-size:.88rem;color:var(--muted);background:#fff;border:1px solid var(--line);border-radius:8px;padding:10px 14px;margin:14px 0 0}
+.err{color:var(--err);font-weight:600;margin:18px 0 0}
+fieldset{border:1px solid var(--line);background:#fff;border-radius:10px;padding:14px 16px;margin:0 0 10px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center}
+legend{float:left;padding:0}
+.opts{display:grid;grid-template-columns:repeat(5,52px);gap:4px}
+.opts label{position:relative;cursor:pointer}
+.opts input{position:absolute;opacity:0;inset:0}
+.opts span{display:grid;place-items:center;height:38px;border:1px solid var(--line);border-radius:8px;font-weight:600;color:var(--muted)}
+.opts input:checked+span{background:var(--navy);color:#fff;border-color:var(--navy)}
+.opts input:focus-visible+span{outline:3px solid var(--gold);outline-offset:2px}
+.key{display:grid;grid-template-columns:repeat(5,52px);gap:4px;justify-content:end;font-size:.68rem;color:var(--muted);text-align:center;margin-bottom:6px}
+button{margin-top:24px;font:600 1rem inherit;padding:12px 22px;border:0;border-radius:8px;background:var(--navy);color:#fff;cursor:pointer}
+@media (max-width:620px){fieldset{grid-template-columns:1fr}.opts,.key{grid-template-columns:repeat(5,1fr)}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="{{ back_url }}">← Back to onboarding</a>
+  <div class="step">Onboarding · Personality assessment</div>
+  <h1>Personality assessment</h1>
+  <p class="intro">37 statements, about 8 minutes. There are no right answers.</p>
+  <p class="note">Your answers shape how your J3P advisor communicates on your behalf. Responses and scores are visible only to you and J3P administrators, and are never shown to participants.</p>
+  {% if error %}<p class="err" role="alert">{{ error }}</p>{% endif %}
+  <form method="post">
+    {% set n = namespace(i=0) %}
+    {% for part in parts %}
+    <h2>{{ part.title }}</h2>
+    <p class="intro">{{ part.intro }}</p>
+    <div class="key" aria-hidden="true">{% for l in likert %}<span>{{ l }}</span>{% endfor %}</div>
+    {% for item_id, text in part["items"] %}{% set n.i = n.i + 1 %}
+    <fieldset>
+      <legend>{{ n.i }}. {{ text }}</legend>
+      <div class="opts">
+        {% for v in range(1, 6) %}
+        <label><input type="radio" name="{{ item_id }}" value="{{ v }}" required aria-label="{{ likert[v-1] }}"
+          {% if answers.get(item_id)|string == v|string %}checked{% endif %}><span>{{ v }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endfor %}
+    {% endfor %}
+    <button type="submit">Save and return to onboarding</button>
+  </form>
+</div>
+</body>
+</html>
