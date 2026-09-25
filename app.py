@@ -19204,6 +19204,13 @@ details.section[open] > summary {
     <div style="margin: 0.8rem 0 1.8rem 1.6rem; padding: 1rem 1.1rem 0.6rem;
                 border: 1px solid var(--line); border-left: 4px solid {{ org.gold or org.navy or cfg.gold }};
                 border-radius: 8px; background: var(--paper);">
+      <a id="advisors-{{ org.slug }}"></a>
+      {% if bulk_result and bulk_result.org == org.slug %}
+      <div style="margin: 0 0 0.8rem; padding: 0.6rem 0.8rem; border-radius: 6px;
+                  background: rgba(210,188,141,0.18); font-size: 0.84rem; line-height: 1.5;">
+        {% for ln in bulk_result.lines %}<div>{{ ln }}</div>{% endfor %}
+      </div>
+      {% endif %}
       <h3 style="margin: 0 0 0.8rem; font-size: 1rem;">
         Advisors at {{ org.name }}
         <span class="muted" style="font-weight: 400; font-size: 0.82rem;">
@@ -19232,13 +19239,14 @@ details.section[open] > summary {
         <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600;">
           Bulk upload advisors to {{ org.name }}</summary>
         <p class="muted" style="font-size: 0.8rem; margin: 0.6rem 0;">
-          A .csv or .xlsx with a <strong>Name</strong> column, and optionally
-          <strong>Title</strong> and <strong>Grounded in</strong>. Each row becomes an
+          A .xlsx or .csv with a <strong>Name</strong> column (or <strong>First</strong>
+          and <strong>Last</strong> name columns, plus optional <strong>Credentials</strong>),
+          and optionally <strong>Title</strong> and <strong>Grounded in</strong>. Each row becomes an
           advisor with {{ org.name }}'s branding and their own session link.
           <a href="/admin/orgs/advisor-template.csv">Download a template</a>.</p>
         <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors/bulk"
               enctype="multipart/form-data">
-          <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required />
+          <input type="file" name="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.numbers" required />
           <button type="submit" class="btn" style="margin-top: 0.5rem;">Upload advisors</button>
         </form>
       </details>
@@ -23302,6 +23310,7 @@ def admin_dashboard():
         org_short=ORG_SHORT,
         lookup=session.get("brand_lookup") if active_tab == "clients" else None,
         client_orgs=list_client_orgs() if active_tab in ("clients", "overview") else [],
+        bulk_result=session.pop("bulk_result", None) if active_tab == "clients" else None,
         has_lookup_logo=(bool(session.get("brand_lookup_logo"))
                          and active_tab == "clients"),
         has_internal_advisor=any(r.get("internal_only")
@@ -24831,47 +24840,98 @@ def admin_org_add_advisor(slug):
     return redirect(url_for("admin_dashboard", tab="clients"))
 
 
-_BULK_ADV_COLUMNS = {
-    "name": ("name", "advisor", "advisor name", "full name"),
-    "title": ("title", "position", "role", "job title"),
-    "principal": ("grounded in", "grounded in whose thinking", "principal",
-                  "persona principal", "thinking"),
-}
+def _bulk_header_map(row):
+    """Column positions for name / first / last / credentials / title /
+    principal in a header row, matched loosely. None if nothing looks like
+    a name column."""
+    m = {}
+    for i, raw in enumerate(row):
+        h = " ".join((raw or "").lower().replace("_", " ").split())
+        if not h:
+            continue
+        if any(w in h for w in ("organization", "organisation", "company", "file",
+                                "user name", "username", "email")):
+            continue
+        if ("first" in h or h == "given name") and "name" in h or h in ("first", "given"):
+            m.setdefault("first", i)
+        elif ("last" in h or "surname" in h or "family" in h) and ("name" in h or h in ("last", "surname")):
+            m.setdefault("last", i)
+        elif h in ("surname", "last"):
+            m.setdefault("last", i)
+        elif "name" in h or h in ("advisor", "coach", "physician", "leader", "person"):
+            m.setdefault("name", i)
+        elif any(w in h for w in ("credential", "degree", "suffix", "letters")):
+            m.setdefault("cred", i)
+        elif any(w in h for w in ("title", "position", "role")):
+            m.setdefault("title", i)
+        elif any(w in h for w in ("grounded", "principal", "thinking")):
+            m.setdefault("principal", i)
+    if "name" in m or "first" in m or "last" in m:
+        return m
+    return None
 
 
 def _read_advisor_rows(upload):
-    """Rows of {name, title, principal} from an uploaded .csv or .xlsx.
-    Header names are matched loosely (Name / Advisor, Title / Role, ...)."""
+    """Rows of {name, title, principal} from an uploaded .csv, .tsv or .xlsx.
+    Tolerant of real spreadsheets: the header can be on any of the first ten
+    rows, names can be one column or First/Last (plus Credentials), and a
+    file with no recognizable header is read as one name per row."""
     import csv, io
     fname = (upload.filename or "").lower()
     data = upload.read()
-    if fname.endswith((".xlsx", ".xlsm")):
+    if fname.endswith((".xls", ".numbers")):
+        raise ValueError("That is an older .xls or a Numbers file. In Excel or "
+                         "Numbers use File \u2192 Save As / Export \u2192 .xlsx or .csv, "
+                         "then upload that.")
+    text = None
+    if fname.endswith((".xlsx", ".xlsm")) or data[:2] == b"PK":
         import openpyxl
         wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
-        ws = wb.active
-        grid = [[("" if c is None else str(c)).strip() for c in row]
-                for row in ws.iter_rows(values_only=True)]
-    elif fname.endswith((".csv", ".txt")):
-        text = data.decode("utf-8-sig", errors="replace")
-        grid = [[c.strip() for c in row] for row in csv.reader(io.StringIO(text))]
+        grid = []
+        for ws in wb.worksheets:              # first sheet that has anything in it
+            grid = [[("" if c is None else str(c)).strip() for c in row]
+                    for row in ws.iter_rows(values_only=True)]
+            if any(any(r) for r in grid):
+                break
     else:
-        raise ValueError("Upload a .csv or .xlsx file.")
+        text = data.decode("utf-8-sig", errors="replace")
+        try:
+            dialect = csv.Sniffer().sniff(text[:4000], delimiters=",\t;|")
+        except Exception:
+            dialect = csv.excel
+        grid = [[c.strip() for c in row] for row in csv.reader(io.StringIO(text), dialect)]
     grid = [r for r in grid if any(r)]
     if not grid:
         raise ValueError("The file is empty.")
-    header = [h.lower().strip() for h in grid[0]]
-    idx = {}
-    for key, names in _BULK_ADV_COLUMNS.items():
-        for i, h in enumerate(header):
-            if h in names:
-                idx[key] = i
-                break
-    if "name" not in idx:
-        raise ValueError("No Name column found. The first row must be a header "
-                         "with a Name column (Title and Grounded in are optional).")
-    get = lambda r, k: (r[idx[k]] if k in idx and idx[k] < len(r) else "").strip()
-    return [{"name": get(r, "name"), "title": get(r, "title"),
-             "principal": get(r, "principal")} for r in grid[1:]]
+
+    hdr_at, cols = None, None
+    for i, row in enumerate(grid[:10]):
+        cols = _bulk_header_map(row)
+        if cols:
+            hdr_at = i
+            break
+    if cols is None:                           # no header: one name per row
+        cols = {"name": 0}
+        # A plain list of names: keep each line whole, so "Jane Doe, MD"
+        # is not split at its comma.
+        body = ([[ln.strip()] for ln in text.splitlines() if ln.strip()]
+                if text is not None else grid)
+    else:
+        body = grid[hdr_at + 1:]
+
+    def cell(r, k):
+        i = cols.get(k)
+        return (r[i] if i is not None and i < len(r) else "").strip()
+
+    out = []
+    for r in body:
+        name = cell(r, "name") or " ".join(x for x in (cell(r, "first"), cell(r, "last")) if x)
+        cred = cell(r, "cred")
+        if name and cred and cred.lower() not in name.lower():
+            name = f"{name}, {cred}"
+        out.append({"name": name, "title": cell(r, "title"),
+                    "principal": cell(r, "principal")})
+    return out
 
 
 @app.route("/admin/orgs/<slug>/advisors/bulk", methods=["POST"])
@@ -24890,11 +24950,14 @@ def admin_org_bulk_advisors(slug):
         rows = _read_advisor_rows(upload)
     except ValueError as e:
         flash(str(e))
-        return redirect(url_for("admin_dashboard", tab="clients"))
+        session["bulk_result"] = {"org": slug, "lines": [str(e)]}
+        return redirect(url_for("admin_dashboard", tab="clients") + f"#advisors-{slug}")
     except Exception as e:
-        app.logger.error(f"[orgs] bulk read failed: {type(e).__name__}")
-        flash("That file could not be read. Save it as .csv or .xlsx and try again.")
-        return redirect(url_for("admin_dashboard", tab="clients"))
+        app.logger.error(f"[orgs] bulk read failed: {type(e).__name__}: {e}")
+        msg = "That file could not be read. Save it as .xlsx or .csv and try again."
+        flash(msg)
+        session["bulk_result"] = {"org": slug, "lines": [msg]}
+        return redirect(url_for("admin_dashboard", tab="clients") + f"#advisors-{slug}")
     if len(rows) > 200:
         flash("That file has more than 200 advisors. Split it into smaller files.")
         return redirect(url_for("admin_dashboard", tab="clients"))
@@ -24904,16 +24967,20 @@ def admin_org_bulk_advisors(slug):
             continue
         ok, _, msg = _org_create_advisor(org, row["name"], row["title"], row["principal"])
         (added if ok else skipped).append(row["name"] if ok else f"row {n} ({row['name']}): {msg}")
+    lines = []
     if added:
-        flash(f"\u2713 Added {len(added)} advisor{'' if len(added) == 1 else 's'} "
-              f"to {org['name']}: " + ", ".join(added[:10])
-              + (f" and {len(added) - 10} more" if len(added) > 10 else "") + ".")
+        lines.append(f"\u2713 Added {len(added)} advisor{'' if len(added) == 1 else 's'}: "
+                     + ", ".join(added[:10])
+                     + (f" and {len(added) - 10} more" if len(added) > 10 else "") + ".")
     if skipped:
-        flash(f"Skipped {len(skipped)}: " + "; ".join(skipped[:8])
-              + (" …" if len(skipped) > 8 else ""))
+        lines.append(f"Skipped {len(skipped)}: " + "; ".join(skipped[:8])
+                     + (" \u2026" if len(skipped) > 8 else ""))
     if not added and not skipped:
-        flash("No advisor names were found in that file.")
-    return redirect(url_for("admin_dashboard", tab="clients"))
+        lines.append("No advisor names were found in that file.")
+    for ln in lines:
+        flash(ln)
+    session["bulk_result"] = {"org": slug, "lines": lines}
+    return redirect(url_for("admin_dashboard", tab="clients") + f"#advisors-{slug}")
 
 
 @app.route("/admin/orgs/advisor-template.csv")
