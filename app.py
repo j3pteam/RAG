@@ -19227,6 +19227,21 @@ details.section[open] > summary {
         </div>
         <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
       </form>
+      <details style="margin: 0 0 1rem; padding: 0.7rem 0.9rem; border: 1px dashed var(--line);
+                      border-radius: 6px;">
+        <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600;">
+          Bulk upload advisors to {{ org.name }}</summary>
+        <p class="muted" style="font-size: 0.8rem; margin: 0.6rem 0;">
+          A .csv or .xlsx with a <strong>Name</strong> column, and optionally
+          <strong>Title</strong> and <strong>Grounded in</strong>. Each row becomes an
+          advisor with {{ org.name }}'s branding and their own session link.
+          <a href="/admin/orgs/advisor-template.csv">Download a template</a>.</p>
+        <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors/bulk"
+              enctype="multipart/form-data">
+          <input type="file" name="file" accept=".csv,.xlsx,.xlsm" required />
+          <button type="submit" class="btn" style="margin-top: 0.5rem;">Upload advisors</button>
+        </form>
+      </details>
       {% endif %}
     {% for adv in org_advisors %}
     <details class="section">
@@ -24753,28 +24768,27 @@ def admin_org_logo(slug):
     return resp
 
 
-@app.route("/admin/orgs/<slug>/advisors", methods=["POST"])
-@require_permission("edit_advisors")
-def admin_org_add_advisor(slug):
-    org = get_client_org(slug)
-    if not org:
-        flash("That organization no longer exists.")
-        return redirect(url_for("admin_dashboard", tab="clients"))
-    name = (request.form.get("name") or "").strip()[:80]
+def _org_create_advisor(org: dict, name: str, title: str = "", principal: str = ""):
+    """Create one advisor inside an organization, branded from it.
+    Returns (ok, slug_or_None, message). Shared by the single form and the
+    bulk upload so both behave identically."""
+    name = (name or "").strip()[:80]
+    title = (title or "").strip()[:120]
+    principal = (principal or "").strip()[:120]
     if not name:
-        flash("Give the advisor a name.")
-        return redirect(url_for("admin_dashboard", tab="clients"))
+        return False, None, "no name given"
+    # The same person twice in one organization is almost always a repeated
+    # upload, not a second advisor — skip rather than duplicate.
+    if any(a.get("client_org") == org["slug"]
+           and a["name"].strip().lower() == name.lower() for a in list_advisors()):
+        return False, None, f"{name} is already in {org['name']}"
     adv_slug = slugify_advisor(name)
     if get_advisor(adv_slug):
         adv_slug = slugify_advisor(f"{name} {org['name']}")
         if get_advisor(adv_slug):
-            flash(f"An advisor named {name} already exists. Use a different name.")
-            return redirect(url_for("admin_dashboard", tab="clients"))
+            return False, None, f"an advisor named {name} already exists"
     if not save_advisor(adv_slug, name):
-        flash("Could not create the advisor — the database was unavailable.")
-        return redirect(url_for("admin_dashboard", tab="clients"))
-    principal = (request.form.get("persona_principal") or "").strip()[:120]
-    adv_title = (request.form.get("title") or "").strip()[:120]
+        return False, None, "the database was unavailable"
     conn = _settings_db_conn()
     ok = False
     if conn:
@@ -24783,20 +24797,134 @@ def admin_org_add_advisor(slug):
                 cur.execute("UPDATE advisors SET client_org = %s, brand_label = %s, "
                             "persona_principal = NULLIF(%s, ''), title = NULLIF(%s, '') "
                             "WHERE slug = %s",
-                            (slug, org["name"], principal, adv_title, adv_slug))
+                            (org["slug"], org["name"], principal, title, adv_slug))
             conn.commit()
-            ok = sync_org_to_advisors(slug, conn)
+            ok = sync_org_to_advisors(org["slug"], conn)
         except Exception as e:
             app.logger.error(f"[orgs] add advisor failed: {type(e).__name__}")
         finally:
             conn.close()
     if not ok:
         delete_advisor(adv_slug)          # never leave an unbranded advisor
-        flash("Could not attach the advisor to the organization, so nothing was created.")
+        return False, None, "could not attach it to the organization"
+    return True, adv_slug, ""
+
+
+@app.route("/admin/orgs/<slug>/advisors", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_add_advisor(slug):
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
         return redirect(url_for("admin_dashboard", tab="clients"))
-    flash(f"\u2713 {name} added to {org['name']}. Their session link and "
-          "participant links are in their card below.")
+    name = (request.form.get("name") or "").strip()
+    if not name:
+        flash("Give the advisor a name.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    ok, _, msg = _org_create_advisor(org, name, request.form.get("title"),
+                                     request.form.get("persona_principal"))
+    if ok:
+        flash(f"\u2713 {name} added to {org['name']}. Their session link and "
+              "participant links are in their card below.")
+    else:
+        flash(f"{name} was not added — {msg}.")
     return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+_BULK_ADV_COLUMNS = {
+    "name": ("name", "advisor", "advisor name", "full name"),
+    "title": ("title", "position", "role", "job title"),
+    "principal": ("grounded in", "grounded in whose thinking", "principal",
+                  "persona principal", "thinking"),
+}
+
+
+def _read_advisor_rows(upload):
+    """Rows of {name, title, principal} from an uploaded .csv or .xlsx.
+    Header names are matched loosely (Name / Advisor, Title / Role, ...)."""
+    import csv, io
+    fname = (upload.filename or "").lower()
+    data = upload.read()
+    if fname.endswith((".xlsx", ".xlsm")):
+        import openpyxl
+        wb = openpyxl.load_workbook(io.BytesIO(data), read_only=True, data_only=True)
+        ws = wb.active
+        grid = [[("" if c is None else str(c)).strip() for c in row]
+                for row in ws.iter_rows(values_only=True)]
+    elif fname.endswith((".csv", ".txt")):
+        text = data.decode("utf-8-sig", errors="replace")
+        grid = [[c.strip() for c in row] for row in csv.reader(io.StringIO(text))]
+    else:
+        raise ValueError("Upload a .csv or .xlsx file.")
+    grid = [r for r in grid if any(r)]
+    if not grid:
+        raise ValueError("The file is empty.")
+    header = [h.lower().strip() for h in grid[0]]
+    idx = {}
+    for key, names in _BULK_ADV_COLUMNS.items():
+        for i, h in enumerate(header):
+            if h in names:
+                idx[key] = i
+                break
+    if "name" not in idx:
+        raise ValueError("No Name column found. The first row must be a header "
+                         "with a Name column (Title and Grounded in are optional).")
+    get = lambda r, k: (r[idx[k]] if k in idx and idx[k] < len(r) else "").strip()
+    return [{"name": get(r, "name"), "title": get(r, "title"),
+             "principal": get(r, "principal")} for r in grid[1:]]
+
+
+@app.route("/admin/orgs/<slug>/advisors/bulk", methods=["POST"])
+@require_permission("edit_advisors")
+def admin_org_bulk_advisors(slug):
+    """Add many advisors to an organization from a spreadsheet."""
+    org = get_client_org(slug)
+    if not org:
+        flash("That organization no longer exists.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    upload = request.files.get("file")
+    if not (upload and upload.filename):
+        flash("Choose a .csv or .xlsx file first.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    try:
+        rows = _read_advisor_rows(upload)
+    except ValueError as e:
+        flash(str(e))
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    except Exception as e:
+        app.logger.error(f"[orgs] bulk read failed: {type(e).__name__}")
+        flash("That file could not be read. Save it as .csv or .xlsx and try again.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    if len(rows) > 200:
+        flash("That file has more than 200 advisors. Split it into smaller files.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    added, skipped = [], []
+    for n, row in enumerate(rows, start=2):
+        if not row["name"]:
+            continue
+        ok, _, msg = _org_create_advisor(org, row["name"], row["title"], row["principal"])
+        (added if ok else skipped).append(row["name"] if ok else f"row {n} ({row['name']}): {msg}")
+    if added:
+        flash(f"\u2713 Added {len(added)} advisor{'' if len(added) == 1 else 's'} "
+              f"to {org['name']}: " + ", ".join(added[:10])
+              + (f" and {len(added) - 10} more" if len(added) > 10 else "") + ".")
+    if skipped:
+        flash(f"Skipped {len(skipped)}: " + "; ".join(skipped[:8])
+              + (" …" if len(skipped) > 8 else ""))
+    if not added and not skipped:
+        flash("No advisor names were found in that file.")
+    return redirect(url_for("admin_dashboard", tab="clients"))
+
+
+@app.route("/admin/orgs/advisor-template.csv")
+@require_permission("edit_advisors")
+def admin_org_advisor_template():
+    body = ("Name,Title,Grounded in\r\n"
+            "\"John Sample, MD\",\"Director, Thoracic Oncology\",\r\n"
+            "\"Jane Example, RN\",Chief Nursing Officer,\r\n")
+    resp = app.response_class(body, mimetype="text/csv")
+    resp.headers["Content-Disposition"] = "attachment; filename=advisor-upload-template.csv"
+    return resp
 
 
 @app.route("/admin/clients/<slug>/rename", methods=["POST"])
