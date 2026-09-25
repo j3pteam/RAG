@@ -1,0 +1,31 @@
+{# Admin → J3P Advisors → Onboarding → "Personality assessment" column.
+   Replace the existing column contents with:
+   {% with result=personality_result, advisor=advisor, portal_token=advisor.portal_token %}
+     {% include "_admin_personality_tile.html" %}
+   {% endwith %}
+#}
+{% set take_url = "/portal/" ~ portal_token ~ "/onboarding/personality" %}
+<div class="pa-tile">
+  <div class="pa-status">
+    {% if result %}Completed {{ result.completed_at }}{% else %}Not yet completed{% endif %}
+  </div>
+  <div class="pa-actions">
+    {% if result %}
+      <a class="pa-btn" href="/admin/advisors/{{ advisor.id }}/personality">View results</a>
+    {% endif %}
+    {% if portal_token %}
+      <a class="pa-link" href="{{ take_url }}" target="_blank" rel="noopener">Open assessment</a>
+      <button type="button" class="pa-link" data-url="{{ take_url }}"
+        onclick="navigator.clipboard.writeText(location.origin + this.dataset.url).then(()=>{this.textContent='Link copied'; setTimeout(()=>this.textContent='Copy link for advisor',2000)})">Copy link for advisor</button>
+    {% else %}
+      <span class="pa-muted">Activate the portal link to enable the assessment.</span>
+    {% endif %}
+  </div>
+</div>
+<style>
+.pa-status{margin-bottom:8px}
+.pa-actions{display:flex;flex-direction:column;align-items:flex-start;gap:6px}
+.pa-btn{display:inline-block;background:#2A3247;color:#fff;padding:6px 12px;border-radius:6px;text-decoration:none;font-weight:600;font-size:.9rem}
+.pa-link{background:none;border:0;padding:0;color:#2A3247;text-decoration:underline;font:inherit;font-size:.9rem;cursor:pointer}
+.pa-muted{color:#6B7285;font-size:.85rem}
+</style>

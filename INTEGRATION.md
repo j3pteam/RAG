@@ -1,21 +1,17 @@
-# Advisor assessments → persona: integration
+# Personality assessment → advisor persona: integration
 
-Drops into j3pteam/RAG. Fills the **Personality assessment** (Big Five) and **Self behavioral assessment** (derailers) slots in Admin → J3P Advisors → Onboarding, and feeds the results into that advisor's system prompt.
+Drops into j3pteam/RAG. Fills the **Personality assessment** slot in the advisor's onboarding (Big Five + under-pressure derailers, one step, 37 items) and feeds the results into that advisor's system prompt. The existing **Self behavioral assessment** and **360 feedback** are untouched.
 
 ## 1. Copy
-Put the `assessment/` folder at the repo root (next to the Flask app).
+Put `assessment/` at the repo root, next to the Flask app.
 
 ## 2. Storage
-One table, any SQL DB:
-
 ```sql
-CREATE TABLE advisor_assessments (
-  advisor_id   TEXT NOT NULL,
-  instrument   TEXT NOT NULL,          -- 'personality' | 'behavioral'
+CREATE TABLE advisor_personality (
+  advisor_id   TEXT PRIMARY KEY,
   answers      JSON NOT NULL,
   scores       JSON NOT NULL,
-  completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  PRIMARY KEY (advisor_id, instrument)
+  completed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 ```
 
@@ -24,48 +20,57 @@ CREATE TABLE advisor_assessments (
 from assessment import create_assessment_blueprint
 
 app.register_blueprint(create_assessment_blueprint(
-    get_advisor=lambda token: ...,                 # advisor from portal-link token -> {"id","name"} or None
-    get_result=lambda advisor_id, inst: ...,       # row as {"answers","scores","completed_at"} or None
-    save_result=lambda advisor_id, inst, answers, scores: ...,  # upsert
-    portal_home=lambda token: f"/portal/{token}",
+    get_advisor=lambda token: ...,               # portal token -> {"id","name"} or None
+    get_advisor_by_id=lambda advisor_id: ...,    # -> {"id","name"} or None
+    get_result=lambda advisor_id: ...,           # row as dict or None
+    save_result=lambda advisor_id, answers, scores: ...,   # upsert, set completed_at
+    onboarding_home=lambda token: ...,           # URL of the advisor's onboarding page
+    admin_required=admin_required,               # existing admin decorator
 ))
 ```
-Advisor URL: `/portal/<token>/assessment/personality` (continues to `behavioral` automatically).
+Routes added:
+- `/portal/<token>/onboarding/personality` — advisor takes or reviews it; saving returns to onboarding
+- `/admin/advisors/<id>/personality` — admin results view
 
-## 4. Gate the portal
-The admin copy already says both are required before the portal opens. In the portal route:
-```python
-for inst in ("personality", "behavioral"):
-    if not get_result(advisor_id, inst):
-        return redirect(f"/portal/{token}/assessment/{inst}")
+## 4. Show it in onboarding
+
+**Admin → J3P Advisors → Onboarding (Personality assessment column).** Replace that column's "Not yet completed" text with:
+```jinja
+{% with result=personality_result, advisor=advisor, portal_token=advisor.portal_token %}
+  {% include "_admin_personality_tile.html" %}
+{% endwith %}
+```
+The admin view passes `personality_result = get_result(advisor.id)`. Use whatever field holds the advisor's portal-link token in place of `advisor.portal_token`. The column then shows:
+- the status, "Not yet completed" or "Completed <date>"
+- **View results**, once completed
+- **Open assessment**, which opens the advisor's assessment in a new tab
+- **Copy link for advisor**, a direct link you can send them
+
+**Advisor's own onboarding page:**
+```jinja
+{% with result=personality_result, token=token %}{% include "_onboarding_tile.html" %}{% endwith %}
 ```
 
-## 5. Admin status
-Replace "Not yet completed" with `completed_at` when a row exists. Optionally show the band per scale (from `scores`) to admins only.
+## 5. Completion gate
+Wherever the portal currently checks that the personality assessment is done before unlocking, point that check at `get_result(advisor_id)`. Leave the behavioral check as it is.
 
 ## 6. Inject into the persona
-Where the advisor's system prompt is assembled (next to Areas of Expertise):
+Where the advisor's system prompt is built, next to Areas of Expertise:
 ```python
 from assessment import build_persona_block
 
-p = get_result(advisor.id, "personality")
-b = get_result(advisor.id, "behavioral")
-system_prompt += "\n\n" + build_persona_block(
-    advisor.name,
-    p["scores"] if p else None,
-    b["scores"] if b else None,
-)
+r = get_result(advisor.id)
+system_prompt += "\n\n" + build_persona_block(advisor.name, r["scores"] if r else None)
 ```
-Returns an empty string until assessments exist, so nothing breaks for advisors mid-onboarding.
+Returns an empty string until the assessment exists.
 
 ## How results become persona
-- **High/low traits** set tone and structure (e.g. low Agreeableness → candid, direct). Moderate traits add nothing.
-- **Elevated derailers are not imitated.** Each adds a counterweight (e.g. elevated Arrogant → "invite the participant's view first"), so the bot carries the advisor's strengths without their stress behaviors.
-- **No scores or labels go into the prompt**, so the advisor's results can't leak to participants.
+- **High/low traits** set tone and structure. Moderate traits add nothing.
+- **Elevated derailers are not imitated.** Each adds a counterweight, so the bot keeps the advisor's strengths without their stress behaviors.
+- **No scores or labels go in the prompt**, so results can't leak to participants.
 
-Edit wording in `assessment/persona.py`; cut-offs in `items.py` (`trait_band`, `derailer_band`).
+Wording lives in `persona.py`; cut-offs in `items.py` (`trait_band`, `derailer_band`).
 
 ## Notes
-- Items are original, not Hogan content; not a validated instrument. Developmental use only.
-- Retakes overwrite the row (upsert); keep history by adding `completed_at` to the key.
-- If 360 feedback is later summarized, it can be passed into `build_persona_block` the same way.
+- Original items, not Hogan content; not validated. Developmental use only.
+- Retakes overwrite the row. To keep history, key on `(advisor_id, completed_at)`.
