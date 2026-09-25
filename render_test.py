@@ -1,8 +1,8 @@
 import re, datetime, random
-from jinja2 import Environment
+from jinja2 import Environment, FileSystemLoader
 src=open("app.py",encoding="utf-8").read()
 m=re.search(r'^ADMIN_HTML = (r?)"""(.*?)"""\n',src,re.S|re.M)
-tpl=Environment().from_string(m.group(2))
+tpl=Environment(loader=FileSystemLoader("assessment/templates")).from_string(m.group(2))
 class L(dict): __getattr__=dict.get
 now=datetime.datetime.now()
 perms={k:True for k in ["view_knowledge","edit_knowledge","view_advisors","edit_advisors",
@@ -25,6 +25,7 @@ def mkadv(slug,name):
       personality_override=None,portal_token="t"*32,client_bio=LOREM[:200],expertise=LOREM[:200],
       briefings=[L(when="2026-09-01",advisor=name,participant="X",summary=LOREM,emailed=True) for _ in range(3)],
       documents=[],personality={"scores":{"openness":5.5},"completed_at":now},
+      personality_result=({"answers":{},"scores":{},"completed_at":now} if slug=="david-nash" else None),
       behavioral={"scores":{"communication":4.0},"completed_at":now},
       feedback_360=L(id=1,filename="360.pdf",size_bytes=2_000_000,uploaded_at=now),
       voice_sample=VS,suggested_bio=LOREM[:200],internal_only=(slug=="alan-friedman"))

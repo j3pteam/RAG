@@ -99,6 +99,7 @@ def database_is_private() -> bool:
 
 import paywall
 import exports
+from assessment import create_assessment_blueprint, build_persona_block
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
@@ -2252,8 +2253,14 @@ def advisor_portal_onboarded_required(f):
         slug = session.get("advisor_owner_slug")
         if not slug or not get_advisor(slug):
             return redirect(url_for("advisor_portal_login_info"))
-        if not get_advisor_personality(slug):
-            return redirect(url_for("advisor_portal_personality"))
+        if not get_personality_assessment(slug):
+            # The assessment lives on the token-addressed blueprint route.
+            # A revoked link leaves no token to send them to, and revoking
+            # is meant to cut off portal access anyway.
+            token = (get_advisor(slug) or {}).get("portal_token")
+            if not token:
+                return redirect(url_for("advisor_portal_login_info"))
+            return redirect(url_for("personality_assessment.take", token=token))
         if not get_advisor_behavioral(slug):
             return redirect(url_for("advisor_portal_behavioral"))
         return f(*args, **kwargs)
@@ -8990,7 +8997,8 @@ def briefings_by_advisor(limit_per=10) -> dict:
 
 def advisors_with_detail(advisor_rows=None, doc_map=None, personality_map=None,
                           behavioral_map=None, meta_360_map=None,
-                          voice_map=None, briefings_map=None):
+                          voice_map=None, briefings_map=None,
+                          assessment_map=None):
     """Advisor profiles plus their own briefings, for the admin panel.
 
     advisor_rows and doc_map let a caller that's already fetched
@@ -9008,6 +9016,8 @@ def advisors_with_detail(advisor_rows=None, doc_map=None, personality_map=None,
     # fallbacks keep this function usable on its own.
     if personality_map is None:
         personality_map = advisor_personality_map()
+    if assessment_map is None:
+        assessment_map = personality_assessment_map()
     if behavioral_map is None:
         behavioral_map = advisor_behavioral_map()
     if meta_360_map is None:
@@ -9022,6 +9032,7 @@ def advisors_with_detail(advisor_rows=None, doc_map=None, personality_map=None,
         adv["documents"] = [t for t, slugs in doc_map.items()
                             if adv["slug"] in slugs]
         adv["personality"] = personality_map.get(adv["slug"]) or {}
+        adv["personality_result"] = assessment_map.get(adv["slug"])
         adv["behavioral"] = behavioral_map.get(adv["slug"]) or {}
         adv["feedback_360"] = meta_360_map.get(adv["slug"])
         adv["voice_sample"] = voice_map.get(adv["slug"])
@@ -11108,6 +11119,125 @@ def get_advisor_personality(slug: str) -> dict:
         conn.close()
 
 
+# ---------------------------------------------------------------------------
+# Advisor onboarding: the 37-item personality assessment (Big Five plus
+# under-pressure derailers) from the assessment/ package. This is the
+# required personality step of onboarding and feeds build_persona_block()
+# in the advisor's system prompt. Kept in its own table rather than
+# advisor_personality above, which already holds the older TIPI self-report
+# with a different shape (per-trait columns keyed by advisor_slug).
+# advisor_id is the advisor's slug, like every other advisor table.
+# ---------------------------------------------------------------------------
+
+def _advisor_personality_assessment_ensure_table(conn):
+    if _already_ensured("advisor_personality_assessment"):
+        return
+    with conn.cursor() as cur:
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS advisor_personality_assessment (
+                advisor_id   TEXT PRIMARY KEY,
+                answers      JSONB NOT NULL,
+                scores       JSONB NOT NULL,
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+        """)
+    conn.commit()
+
+
+def save_personality_assessment(advisor_id: str, answers: dict, scores: dict) -> None:
+    """Upsert; a retake overwrites the previous row and resets completed_at."""
+    if not advisor_id:
+        return
+    conn = _settings_db_conn()
+    if not conn:
+        return
+    try:
+        _advisor_personality_assessment_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                INSERT INTO advisor_personality_assessment
+                    (advisor_id, answers, scores, completed_at)
+                VALUES (%s, %s::jsonb, %s::jsonb, NOW())
+                ON CONFLICT (advisor_id) DO UPDATE SET
+                    answers = EXCLUDED.answers, scores = EXCLUDED.scores,
+                    completed_at = NOW()
+            """, (advisor_id, _json.dumps(answers), _json.dumps(scores)))
+        conn.commit()
+    except Exception as e:
+        app.logger.error(f"[personality-assessment] write failed: {e}")
+    finally:
+        conn.close()
+
+
+def _personality_assessment_row(row) -> dict:
+    answers, scores = row[1], row[2]
+    # psycopg decodes JSONB to Python objects already; tolerate text too.
+    if isinstance(answers, str):
+        answers = _json.loads(answers)
+    if isinstance(scores, str):
+        scores = _json.loads(scores)
+    return {"answers": answers, "scores": scores, "completed_at": row[3]}
+
+
+def get_personality_assessment(advisor_id: str):
+    """{answers, scores, completed_at} or None if never completed.
+    Memoized on flask.g for the request, like get_advisor(): the portal
+    gate and the prompt builder both ask within a single request."""
+    if not advisor_id:
+        return None
+    try:
+        cache = g.setdefault("_personality_assessment_cache", {})
+    except RuntimeError:
+        cache = None
+    else:
+        if advisor_id in cache:
+            return cache[advisor_id]
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    result = None
+    try:
+        _advisor_personality_assessment_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_id, answers, scores, completed_at
+                FROM advisor_personality_assessment WHERE advisor_id = %s
+            """, (advisor_id,))
+            row = cur.fetchone()
+        result = _personality_assessment_row(row) if row else None
+    except Exception as e:
+        app.logger.error(f"[personality-assessment] read failed: {e}")
+        return None
+    finally:
+        conn.close()
+    if cache is not None:
+        cache[advisor_id] = result
+    return result
+
+
+def personality_assessment_map() -> dict:
+    """{advisor_id: result} for every advisor in one query, for the admin
+    Advisors tab (same reason as advisor_personality_map below)."""
+    conn = _settings_db_conn()
+    if not conn:
+        return {}
+    out = {}
+    try:
+        _advisor_personality_assessment_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT advisor_id, answers, scores, completed_at
+                FROM advisor_personality_assessment
+            """)
+            for row in cur.fetchall():
+                out[row[0]] = _personality_assessment_row(row)
+    except Exception as e:
+        app.logger.error(f"[personality-assessment] bulk read failed: {e}")
+    finally:
+        conn.close()
+    return out
+
+
 def _advisor_behavioral_ensure_table(conn):
     if _already_ensured("advisor_behavioral"):
         return
@@ -12246,7 +12376,13 @@ def advisor_voice_guard(active) -> str:
         return ""
     expertise = (active.get("expertise") or "").strip()
     bio = (active.get("client_bio") or "").strip()
-    if not expertise and not bio:
+    # The advisor's own onboarding personality assessment, turned into
+    # communication guidance. Contains no scores or labels, so nothing about
+    # the assessment itself can reach a participant. Empty until completed.
+    assessment = get_personality_assessment(active.get("slug"))
+    persona = build_persona_block(
+        active["name"], assessment["scores"] if assessment else None)
+    if not expertise and not bio and not persona:
         return ""
     parts = [
         f"\n\n---\nTHIS SESSION'S ADVISOR — {active['name']}:\n\n"
@@ -12264,6 +12400,8 @@ def advisor_voice_guard(active) -> str:
             "in the voice rules above still applies to them: never assume "
             "the participant shares this specialty.\n"
         )
+    if persona:
+        parts.append("\n" + persona + "\n")
     if bio:
         parts.append(
             f"\nCOACHING STYLE: {bio}\n"
@@ -16755,25 +16893,7 @@ ADVISOR_PORTAL_HTML = """<!DOCTYPE html>
     </div>
 
     <div class="card">
-      <h2>Your personality assessment</h2>
-      {% if personality %}
-        <p style="margin: 0 0 0.6rem; font-size: 0.85rem;">
-          Completed {{ personality.completed_at.strftime("%Y-%m-%d") if personality.completed_at else "" }}.
-        </p>
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.82rem; line-height: 1.6;">
-          This is used to help present your style to J3P — it's never shown
-          to participants as scores, only ever considered by an admin when
-          writing your client-facing bio below.
-        </p>
-      {% else %}
-        <p class="muted" style="margin: 0 0 0.9rem; font-size: 0.85rem; line-height: 1.6;">
-          A short, ten-item self-report — about two minutes. Helps J3P
-          present your style to clients accurately.
-        </p>
-      {% endif %}
-      <a href="{{ url_for('advisor_portal_personality') }}" class="btn">
-        {% if personality %}Retake assessment{% else %}Take assessment{% endif %}
-      </a>
+      {% with result=personality_result, token=advisor.portal_token %}{% include "_onboarding_tile.html" %}{% endwith %}
     </div>
 
     <div class="card">
@@ -19537,13 +19657,9 @@ details.section[open] > summary {
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
               Personality assessment
             </div>
-            {% if adv.personality %}
-              <span style="color: #2D7D5F;">✓ Completed</span>
-              {{ adv.personality.completed_at.strftime("%Y-%m-%d") if adv.personality.completed_at else "" }}
-              — {{ personality_summary_tag(adv.personality.scores) }}
-            {% else %}
-              <span class="muted">Not yet completed</span>
-            {% endif %}
+            {% with result=adv.personality_result, advisor={"id": adv.slug, "name": adv.name}, portal_token=adv.portal_token %}
+              {% include "_admin_personality_tile.html" %}
+            {% endwith %}
           </div>
           <div style="font-size: 0.82rem;">
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
@@ -20442,13 +20558,9 @@ details.section[open] > summary {
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
               Personality assessment
             </div>
-            {% if adv.personality %}
-              <span style="color: #2D7D5F;">✓ Completed</span>
-              {{ adv.personality.completed_at.strftime("%Y-%m-%d") if adv.personality.completed_at else "" }}
-              — {{ personality_summary_tag(adv.personality.scores) }}
-            {% else %}
-              <span class="muted">Not yet completed</span>
-            {% endif %}
+            {% with result=adv.personality_result, advisor={"id": adv.slug, "name": adv.name}, portal_token=adv.portal_token %}
+              {% include "_admin_personality_tile.html" %}
+            {% endwith %}
           </div>
           <div style="font-size: 0.82rem;">
             <div class="muted" style="font-size: 0.68rem; letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 0.2rem;">
@@ -22886,23 +22998,23 @@ def advisor_portal_view():
         d = dict(d)
         d["shared_with"] = [adv_names.get(s, s) for s in assigned if s != slug]
         mine.append(d)
-    personality = get_advisor_personality(slug)
+    personality_result = get_personality_assessment(slug)
     behavioral = get_advisor_behavioral(slug)
     feedback_360 = get_advisor_360_meta(slug)
     onboarding_steps = [
         ("Add a photo", advisor and (advisor["has_photo"] or advisor.get("no_photo"))),
-        ("Complete your personality assessment (required)", bool(personality)),
+        ("Complete your personality assessment (required)", bool(personality_result)),
         ("Complete your self behavioral assessment (required)", bool(behavioral)),
         ("Upload your 360 feedback", bool(feedback_360)),
         ("Add at least one knowledge-base document", bool(mine)),
     ]
     return _cached_render(
         ADVISOR_PORTAL_HTML, cfg=CONFIG, advisor=advisor, documents=mine,
-        personality=personality, behavioral=behavioral, feedback_360=feedback_360,
+        personality_result=personality_result,
+        behavioral=behavioral, feedback_360=feedback_360,
         onboarding_steps=onboarding_steps,
         onboarding_done=sum(1 for _, done in onboarding_steps if done),
         onboarding_total=len(onboarding_steps),
-        tipi_items=TIPI_ITEMS,
     )
 
 
@@ -23239,6 +23351,8 @@ def admin_dashboard():
     if want_advisors:
         _personality_map = advisor_personality_map()
         _phase_mark("personality map")
+        _assessment_map = personality_assessment_map()
+        _phase_mark("personality assessment map")
         _behavioral_map = advisor_behavioral_map()
         _phase_mark("behavioral map")
         _meta_360_map = advisor_360_meta_map()
@@ -23251,6 +23365,7 @@ def admin_dashboard():
         _phase_mark("briefings map")
     else:
         _personality_map = _behavioral_map = _meta_360_map = {}
+        _assessment_map = {}
         _voice_map = _briefings_map = _voice_archive_map = {}
     _phase_mark("advisor detail assembly")
 
@@ -23334,7 +23449,7 @@ def admin_dashboard():
             advisor_rows=_advisor_rows, doc_map=_advisor_map,
             personality_map=_personality_map, behavioral_map=_behavioral_map,
             meta_360_map=_meta_360_map, voice_map=_voice_map,
-            briefings_map=_briefings_map),
+            briefings_map=_briefings_map, assessment_map=_assessment_map),
         advisor_map=_advisor_map,
         doc_owner_labels=document_advisor_labels(_advisor_map, _advisor_names),
         advisor_names=_advisor_names,
@@ -27285,6 +27400,50 @@ def _boot_background_once():
     FIRST_REQUEST_BOOT_MS = (time.perf_counter() - _boot_t0) * 1000
     print(f"[boot] cold-start work took {FIRST_REQUEST_BOOT_MS:.0f}ms "
           f"(paid by {request.path})", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Personality assessment (assessment/ package) — the required personality
+# step of advisor onboarding. Adds:
+#   /portal/<token>/onboarding/personality   advisor takes or reviews it
+#   /admin/advisors/<slug>/personality       admin results view
+# Storage is advisor_personality_assessment above; advisor ids are slugs.
+# ---------------------------------------------------------------------------
+
+def _assessment_advisor_by_token(token):
+    match = get_advisor_by_portal_token(token)
+    return {"id": match["slug"], "name": match["name"]} if match else None
+
+
+def _assessment_advisor_by_id(advisor_id):
+    advisor = get_advisor(advisor_id)
+    return {"id": advisor["slug"], "name": advisor["name"]} if advisor else None
+
+
+def _assessment_onboarding_home(token):
+    # Back through the portal's own entry link, so an advisor who arrived
+    # straight from a copied assessment link also gets a portal session.
+    match = get_advisor_by_portal_token(token)
+    if not match:
+        return url_for("advisor_portal_login_info")
+    return url_for("advisor_portal_enter", slug=match["slug"], token=token)
+
+
+def _assessment_admin_required(f):
+    # Same gate as the rest of the advisor onboarding data (360 download,
+    # the Onboarding panel itself): logged in, and a role with
+    # edit_onboarding_data.
+    return admin_required(require_permission("edit_onboarding_data")(f))
+
+
+app.register_blueprint(create_assessment_blueprint(
+    get_advisor=_assessment_advisor_by_token,
+    get_advisor_by_id=_assessment_advisor_by_id,
+    get_result=get_personality_assessment,
+    save_result=save_personality_assessment,
+    onboarding_home=_assessment_onboarding_home,
+    admin_required=_assessment_admin_required,
+))
 
 
 print("[boot] routes registered, ready to serve", flush=True)
