@@ -99,7 +99,8 @@ def database_is_private() -> bool:
 
 import paywall
 import exports
-from assessment import create_assessment_blueprint, build_persona_block
+from assessment import (create_assessment_blueprint,
+                        create_participant_assessment_blueprint, build_persona_block)
 
 
 # Ensure paywall schema exists (no-op if DB unavailable)
@@ -10150,6 +10151,29 @@ def get_participant_link(token: str):
         conn.close()
 
 
+def get_participant_link_by_id(link_id):
+    """Same row shape as get_participant_link(), looked up by id — for
+    admin views that address a participant by link id rather than token."""
+    try:
+        link_id = int(link_id)
+    except (TypeError, ValueError):
+        return None
+    conn = _settings_db_conn()
+    if not conn:
+        return None
+    try:
+        _participant_links_ensure_table(conn)
+        with conn.cursor() as cur:
+            cur.execute("SELECT token FROM participant_links WHERE id = %s", (link_id,))
+            row = cur.fetchone()
+    except Exception as e:
+        app.logger.error(f"[participant-links] read by id failed: {e}")
+        return None
+    finally:
+        conn.close()
+    return get_participant_link(row[0]) if row else None
+
+
 def touch_participant_link(token: str):
     """Best-effort 'last used' stamp — failure here should never block the
     participant from getting into their chat."""
@@ -11120,49 +11144,71 @@ def get_advisor_personality(slug: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Advisor onboarding: the 37-item personality assessment (Big Five plus
-# under-pressure derailers) from the assessment/ package. This is the
-# required personality step of onboarding and feeds build_persona_block()
-# in the advisor's system prompt. Kept in its own table rather than
-# advisor_personality above, which already holds the older TIPI self-report
-# with a different shape (per-trait columns keyed by advisor_slug).
-# advisor_id is the advisor's slug, like every other advisor table.
+# The 37-item personality assessment (Big Five plus under-pressure
+# derailers) from the assessment/ package, for anyone who takes it:
+#   subject_type "advisor"     subject_id = advisor slug. Required step of
+#                              advisor onboarding; feeds build_persona_block()
+#                              in that advisor's system prompt.
+#   subject_type "participant" subject_id = participant_links.id. For the
+#                              participant's own development; never read
+#                              into any prompt.
+# Kept apart from advisor_personality above, which already holds the older
+# TIPI self-report with a different shape (per-trait columns by slug).
 # ---------------------------------------------------------------------------
 
-def _advisor_personality_assessment_ensure_table(conn):
-    if _already_ensured("advisor_personality_assessment"):
+def _personality_assessment_ensure_table(conn):
+    if _already_ensured("personality_assessment"):
         return
     with conn.cursor() as cur:
         cur.execute("""
-            CREATE TABLE IF NOT EXISTS advisor_personality_assessment (
-                advisor_id   TEXT PRIMARY KEY,
+            CREATE TABLE IF NOT EXISTS personality_assessment (
+                subject_type TEXT NOT NULL,
+                subject_id   TEXT NOT NULL,
                 answers      JSONB NOT NULL,
                 scores       JSONB NOT NULL,
-                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (subject_type, subject_id)
             )
         """)
+        # The first release stored advisor results in an advisor-only table.
+        # Carry any rows saved there across; rows already in the new table
+        # are newer and win. Safe to repeat.
+        cur.execute("SELECT to_regclass('advisor_personality_assessment')")
+        if cur.fetchone()[0] is not None:
+            cur.execute("""
+                INSERT INTO personality_assessment
+                    (subject_type, subject_id, answers, scores, completed_at)
+                SELECT 'advisor', advisor_id, answers, scores, completed_at
+                FROM advisor_personality_assessment
+                ON CONFLICT (subject_type, subject_id) DO NOTHING
+            """)
     conn.commit()
 
 
-def save_personality_assessment(advisor_id: str, answers: dict, scores: dict) -> None:
+def save_personality_assessment(subject_id, answers: dict, scores: dict,
+                                subject_type: str = "advisor") -> None:
     """Upsert; a retake overwrites the previous row and resets completed_at."""
-    if not advisor_id:
+    if not subject_id:
         return
     conn = _settings_db_conn()
     if not conn:
         return
     try:
-        _advisor_personality_assessment_ensure_table(conn)
+        _personality_assessment_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO advisor_personality_assessment
-                    (advisor_id, answers, scores, completed_at)
-                VALUES (%s, %s::jsonb, %s::jsonb, NOW())
-                ON CONFLICT (advisor_id) DO UPDATE SET
+                INSERT INTO personality_assessment
+                    (subject_type, subject_id, answers, scores, completed_at)
+                VALUES (%s, %s, %s::jsonb, %s::jsonb, NOW())
+                ON CONFLICT (subject_type, subject_id) DO UPDATE SET
                     answers = EXCLUDED.answers, scores = EXCLUDED.scores,
                     completed_at = NOW()
-            """, (advisor_id, _json.dumps(answers), _json.dumps(scores)))
+            """, (subject_type, str(subject_id), _json.dumps(answers), _json.dumps(scores)))
         conn.commit()
+        try:
+            g.pop("_personality_assessment_cache", None)
+        except RuntimeError:
+            pass
     except Exception as e:
         app.logger.error(f"[personality-assessment] write failed: {e}")
     finally:
@@ -11179,30 +11225,32 @@ def _personality_assessment_row(row) -> dict:
     return {"answers": answers, "scores": scores, "completed_at": row[3]}
 
 
-def get_personality_assessment(advisor_id: str):
+def get_personality_assessment(subject_id, subject_type: str = "advisor"):
     """{answers, scores, completed_at} or None if never completed.
     Memoized on flask.g for the request, like get_advisor(): the portal
     gate and the prompt builder both ask within a single request."""
-    if not advisor_id:
+    if not subject_id:
         return None
+    key = (subject_type, str(subject_id))
     try:
         cache = g.setdefault("_personality_assessment_cache", {})
     except RuntimeError:
         cache = None
     else:
-        if advisor_id in cache:
-            return cache[advisor_id]
+        if key in cache:
+            return cache[key]
     conn = _settings_db_conn()
     if not conn:
         return None
     result = None
     try:
-        _advisor_personality_assessment_ensure_table(conn)
+        _personality_assessment_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT advisor_id, answers, scores, completed_at
-                FROM advisor_personality_assessment WHERE advisor_id = %s
-            """, (advisor_id,))
+                SELECT subject_id, answers, scores, completed_at
+                FROM personality_assessment
+                WHERE subject_type = %s AND subject_id = %s
+            """, key)
             row = cur.fetchone()
         result = _personality_assessment_row(row) if row else None
     except Exception as e:
@@ -11211,24 +11259,24 @@ def get_personality_assessment(advisor_id: str):
     finally:
         conn.close()
     if cache is not None:
-        cache[advisor_id] = result
+        cache[key] = result
     return result
 
 
-def personality_assessment_map() -> dict:
-    """{advisor_id: result} for every advisor in one query, for the admin
-    Advisors tab (same reason as advisor_personality_map below)."""
+def personality_assessment_map(subject_type: str = "advisor") -> dict:
+    """{subject_id: result} for every advisor (or participant) in one query,
+    for the admin panel (same reason as advisor_personality_map below)."""
     conn = _settings_db_conn()
     if not conn:
         return {}
     out = {}
     try:
-        _advisor_personality_assessment_ensure_table(conn)
+        _personality_assessment_ensure_table(conn)
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT advisor_id, answers, scores, completed_at
-                FROM advisor_personality_assessment
-            """)
+                SELECT subject_id, answers, scores, completed_at
+                FROM personality_assessment WHERE subject_type = %s
+            """, (subject_type,))
             for row in cur.fetchall():
                 out[row[0]] = _personality_assessment_row(row)
     except Exception as e:
@@ -18789,6 +18837,7 @@ details.section[open] > summary {
             <th style="width: 10%;">Status</th>
             <th style="width: 13%;">Booking</th>
             {% if return_tab == "clients" %}<th style="width: 16%;">Intake</th>{% endif %}
+            <th style="width: 14%;">Assessment</th>
             <th style="width: 12%;">Last used</th>
             {% if can_edit %}<th style="width: 14%;"></th>{% endif %}
           </tr>
@@ -18867,6 +18916,23 @@ details.section[open] > summary {
               {% endfor %}
             </td>
             {% endif %}
+            <td>
+              {# The personality assessment (assessment/ package), taken from
+                 the participant's own link at /p/<token>/personality. #}
+              {% set pa = (participant_assessments or {}).get(l.id|string) %}
+              {% if pa %}
+                <span style="color: #2D7D5F;">✓ Completed</span>
+                <span class="muted" style="font-size: 0.72rem;">{{ pa.completed_at.strftime("%Y-%m-%d") if pa.completed_at else "" }}</span>
+                {% if admin_perms.edit_onboarding_data %}
+                <br /><a href="/admin/participants/{{ l.id }}/personality/coach-report" target="_blank"
+                         style="font-size: 0.74rem;">Coach report</a>
+                {% endif %}
+              {% else %}
+                <span class="muted">Not taken</span>
+              {% endif %}
+              <br /><button type="button" class="copy-link" style="margin-top: 0.25rem;"
+                      data-url="{{ base_url }}/p/{{ l.token }}/personality">Copy assessment link</button>
+            </td>
             <td class="muted">{{ l.last_used_at.strftime("%Y-%m-%d") if l.last_used_at else "Never" }}</td>
             {% if can_edit %}
             <td>
@@ -23340,6 +23406,8 @@ def admin_dashboard():
     # Grouped once here rather than filtered per card in the template.
     # "" is the default persona, which has no row in the advisors table.
     _participant_links = list_participant_links() if want_advisor_data else []
+    _participant_assessments = (personality_assessment_map("participant")
+                                if _participant_links else {})
     _phase_mark("participant links")
     _links_by_advisor = {}
     for _l in _participant_links:
@@ -23472,6 +23540,7 @@ def admin_dashboard():
         behavioral_summary_tag=behavioral_summary_tag,
         participant_links=_participant_links,
         participant_links_by_advisor=_links_by_advisor,
+        participant_assessments=_participant_assessments,
         default_persona_export_slug=DEFAULT_PERSONA_EXPORT_SLUG,
         biometric_files=_biometric_files,
         avatar_version=int(datetime.now().timestamp()),
@@ -27403,11 +27472,15 @@ def _boot_background_once():
 
 
 # ---------------------------------------------------------------------------
-# Personality assessment (assessment/ package) — the required personality
-# step of advisor onboarding. Adds:
-#   /portal/<token>/onboarding/personality   advisor takes or reviews it
+# Personality assessment (assessment/ package), for advisors and participants.
+# Advisors (required step of onboarding):
+#   /portal/<token>/onboarding/personality   take or review it
 #   /admin/advisors/<slug>/personality       admin results view
-# Storage is advisor_personality_assessment above; advisor ids are slugs.
+# Participants (from their own link):
+#   /p/<token>/personality                   take or review it
+#   /admin/participants/<link id>/personality admin results view
+# Each has /report (the person's development report) and, on the admin
+# side, /coach-report. Storage is personality_assessment above.
 # ---------------------------------------------------------------------------
 
 def _assessment_advisor_by_token(token):
@@ -27443,6 +27516,37 @@ app.register_blueprint(create_assessment_blueprint(
     save_result=save_personality_assessment,
     onboarding_home=_assessment_onboarding_home,
     admin_required=_assessment_admin_required,
+))
+
+
+def _assessment_participant_by_token(token):
+    # Participant-facing, so only their first name: the link's label is the
+    # admin's own free-text note and must never be shown to them.
+    link = get_participant_link(token)
+    if not link or not link["enabled"]:
+        return None
+    return {"id": str(link["id"]), "name": link.get("first_name") or "Your results"}
+
+
+def _assessment_participant_by_id(link_id):
+    link = get_participant_link_by_id(link_id)
+    if not link:
+        return None
+    first, label = link.get("first_name") or "", link.get("label") or ""
+    name = f"{first} ({label})" if first and label and first != label else (first or label)
+    return {"id": str(link["id"]), "name": name or f"Participant {link['id']}"}
+
+
+app.register_blueprint(create_participant_assessment_blueprint(
+    get_participant=_assessment_participant_by_token,
+    get_participant_by_id=_assessment_participant_by_id,
+    get_result=lambda pid: get_personality_assessment(pid, "participant"),
+    save_result=lambda pid, answers, scores: save_personality_assessment(
+        pid, answers, scores, "participant"),
+    home_url=lambda token: url_for("participant_link_index", token=token),
+    admin_required=_assessment_admin_required,
+    # Same gate as the participant's chat link itself.
+    participant_required=paywall.paywall_required,
 ))
 
 

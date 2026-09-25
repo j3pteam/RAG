@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ advisor.name }} — Personality results</title>
+<title>{{ person.name }} — Personality results</title>
 <style>
 :root{--navy:#2A3247;--gold:#C9A96E;--cream:#F7F4EE;--line:#E4DED3;--muted:#6B7285;--err:#8A3B2E;--teal:#2B7A74;--amber:#A8651A}
 *{box-sizing:border-box}
@@ -20,17 +20,22 @@ h2{font-size:1.3rem;margin:34px 0 4px}
 .m{height:8px;border-radius:4px;background:#EEE9DF;overflow:hidden}.m i{display:block;height:100%}
 .t .m i{background:var(--teal)} .d .m i{background:var(--amber)}
 .b{font-size:.85rem;color:var(--muted);text-align:right}.b.elev{color:var(--err);font-weight:600}
+.reports{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 6px}
+.reports a{color:var(--navy)}
+.rbtn{background:var(--navy);color:#fff!important;padding:7px 14px;border-radius:6px;text-decoration:none;font-weight:600;font-size:.92rem}
 @media (max-width:560px){.row{grid-template-columns:1fr 90px}.m{grid-column:1/-1;order:3}}
 </style>
 </head>
 <body>
 <div class="wrap">
-  <a class="back" href="/admin?tab=advisors">← J3P Advisors</a>
-  <h1>{{ advisor.name }}</h1>
+  <a class="back" href="{{ copy.admin_back_url }}">← {{ copy.admin_back_label }}</a>
+  <h1>{{ person.name }}</h1>
   {% if not result %}
     <p class="intro">Personality assessment not yet completed.</p>
   {% else %}
     <p class="intro">Completed {{ result.completed_at }}. Admin only — never shown to participants.</p>
+    <p class="reports"><a class="rbtn" href="{{ admin_base }}/coach-report">Coach report</a>
+      <a href="{{ admin_base }}/report">Development report ({{ person.name }}'s copy)</a></p>
     <h2>Everyday style</h2>
     <div class="card t">{% for k, v in result.scores.traits.items() %}
       <div class="row"><span>{{ trait_names[k] }}</span><div class="m"><i style="width:{{ [v.score,3]|max }}%"></i></div><span class="b">{{ v.band|capitalize }} · {{ v.score }}</span></div>

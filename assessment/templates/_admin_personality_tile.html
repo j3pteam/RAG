@@ -12,6 +12,7 @@
   <div class="pa-actions">
     {% if result %}
       <a class="pa-btn" href="/admin/advisors/{{ advisor.id }}/personality">View results</a>
+      <a class="pa-link" href="/admin/advisors/{{ advisor.id }}/personality/coach-report">Coach report</a>
     {% endif %}
     {% if portal_token %}
       <a class="pa-link" href="{{ take_url }}" target="_blank" rel="noopener">Open assessment</a>

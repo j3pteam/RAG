@@ -4,7 +4,8 @@
   <div class="label">Personality assessment</div>
   {% if result %}
     <div>Completed {{ result.completed_at }}</div>
-    {% if token %}<a href="/portal/{{ token }}/onboarding/personality">Review answers</a>
+    {% if token %}<a href="/portal/{{ token }}/onboarding/personality/report">Your development report</a>
+      · <a href="/portal/{{ token }}/onboarding/personality">Review answers</a>
     {% else %}<a href="/admin/advisors/{{ advisor_id }}/personality">View results</a>{% endif %}
   {% else %}
     <div>Not yet completed</div>
