@@ -27407,6 +27407,7 @@ def _boot_background_once():
 # step of advisor onboarding. Adds:
 #   /portal/<token>/onboarding/personality   advisor takes or reviews it
 #   /admin/advisors/<slug>/personality       admin results view
+#   .../personality/report and /coach-report  development and coach reports
 # Storage is advisor_personality_assessment above; advisor ids are slugs.
 # ---------------------------------------------------------------------------
 

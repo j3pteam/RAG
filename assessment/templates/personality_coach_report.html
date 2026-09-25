@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ report.name }} — Coach report</title>
+<style>
+:root{--navy:#2A3247;--gold:#C9A96E;--cream:#F7F4EE;--line:#E4DED3;--muted:#6B7285;--err:#8A3B2E;--teal:#2B7A74;--amber:#A8651A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--navy);font:16px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif}
+.wrap{max-width:860px;margin:0 auto;padding:32px 20px 80px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.top a{color:var(--muted);text-decoration:none;font-size:.92rem}
+.print{font:600 .9rem inherit;padding:8px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--navy);cursor:pointer}
+.eyebrow{color:var(--muted);font-size:.85rem;letter-spacing:.08em;text-transform:uppercase;border-left:3px solid var(--gold);padding-left:10px;margin-top:22px}
+h1{font-size:2rem;margin:8px 0 4px;line-height:1.2}
+h2{font-size:1.3rem;margin:38px 0 6px}
+h3{font-size:1.05rem;margin:0 0 4px}
+.lede{color:var(--muted);margin:0 0 6px}
+.conf{font-size:.85rem;background:#fff;border:1px solid var(--line);border-left:4px solid var(--gold);border-radius:8px;padding:10px 14px;margin:14px 0 0}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-top:12px;break-inside:avoid}
+ul{margin:6px 0 0;padding-left:20px} li{margin:4px 0}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th{text-align:left;font-weight:600;color:var(--muted);font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;padding:0 8px 6px}
+td{padding:8px;border-top:1px solid var(--line);vertical-align:top}
+td.n{width:190px} td.s{width:44px;text-align:right;font-variant-numeric:tabular-nums} td.b{width:96px}
+.m{height:8px;border-radius:4px;background:#EEE9DF;overflow:hidden;margin-top:8px}.m i{display:block;height:100%}
+.t .m i{background:var(--teal)} .d .m i{background:var(--amber)}
+.band{font-size:.85rem;color:var(--muted)} .band.elevated{color:var(--err);font-weight:600}
+.lbl{font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 2px}
+.watch{border-left:4px solid var(--amber)}
+.focus{border-left:4px solid var(--teal)}
+.q{font-style:italic}
+.note{font-size:.85rem;color:var(--muted)}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media (max-width:640px){.cols{grid-template-columns:1fr} td.n{width:auto} .hide-sm{display:none}}
+@media print{body{background:#fff;font-size:11pt}.top{display:none}.card{border-color:#ccc}.wrap{padding:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <span>
+      <a href="{{ back_url }}">← Results</a>
+      {% if self_report_url %} · <a href="{{ self_report_url }}">See what {{ report.first_name }} receives</a>{% endif %}
+    </span>
+    <button type="button" class="print" onclick="window.print()">Print or save as PDF</button>
+  </div>
+  <div class="eyebrow">Personality assessment · Coach report</div>
+  <h1>{{ report.name }}</h1>
+  {% if completed_at %}<p class="lede">Completed {{ completed_at.strftime("%B %-d, %Y") if completed_at.strftime is defined else completed_at }}.</p>{% endif %}
+  <p class="conf"><strong>Confidential — for the person working with {{ report.first_name }}.</strong> {{ report.first_name }} receives a separate development report with the same themes in strengths-first language and no scores. Treat everything here as a hypothesis to test in conversation, not a conclusion.</p>
+
+  <h2>Snapshot</h2>
+  <div class="card">{% for line in report.snapshot %}<p style="margin:{{ '0' if loop.first else '8px 0 0' }}">{{ line }}</p>{% endfor %}</div>
+
+  <h2>Scores</h2>
+  <p class="lede">0–100 is the position on each scale's own range, not a percentile against other people. Everyday traits: high ≥ 65, low ≤ 35. Pressure tendencies: elevated ≥ 70.</p>
+  <div class="cols">
+    <div class="card t">
+      <h3>Everyday style</h3>
+      <table><tbody>{% for r in report.traits %}
+        <tr><td class="n">{{ r.name }}<div class="m"><i style="width:{{ [r.score,3]|max }}%"></i></div></td><td class="s">{{ r.score }}</td><td class="b band">{{ r.band|capitalize }}</td></tr>
+      {% endfor %}</tbody></table>
+    </div>
+    <div class="card d">
+      <h3>Under pressure</h3>
+      <table><tbody>{% for r in report.derailers %}
+        <tr><td class="n">{{ r.name }}<div class="m"><i style="width:{{ [r.score,3]|max }}%"></i></div></td><td class="s">{{ r.score }}</td><td class="b band {{ r.band }}">{{ r.band|capitalize }}</td></tr>
+      {% endfor %}</tbody></table>
+    </div>
+  </div>
+
+  <h2>Working with {{ report.first_name }}</h2>
+  <div class="card">
+    <table>
+      <thead><tr><th>Trait</th><th class="hide-sm">What you may notice</th><th>How to work with it</th></tr></thead>
+      <tbody>{% for r in report.traits %}
+        <tr><td class="n"><strong>{{ r.name }}</strong><br><span class="band">{{ r.band|capitalize }}</span></td><td class="hide-sm">{{ r.see }}</td><td>{{ r.work }}</td></tr>
+      {% endfor %}</tbody>
+    </table>
+  </div>
+
+  <h2>Under pressure: what you may see</h2>
+  {% for w in report.to_watch %}
+  <div class="card watch">
+    <h3>{{ w.name }} <span class="band elevated">· elevated ({{ w.score }})</span></h3>
+    <div class="lbl">What it may look like</div><div>{{ w.see }}</div>
+    <div class="lbl">How to respond</div><div>{{ w.respond }}</div>
+    <div class="lbl">A question to ask</div><div class="q">“{{ w.question }}”</div>
+  </div>
+  {% else %}
+  <div class="card"><p style="margin:0">No pressure tendencies are elevated.</p></div>
+  {% endfor %}
+  {% if report.keep_eye %}
+  <p class="lede" style="margin-top:14px">Moderate, but worth keeping an eye on: {{ report.keep_eye|join(", ") }}.</p>
+  {% endif %}
+
+  {% if report.patterns %}
+  <h2>Patterns worth exploring</h2>
+  <div class="card"><ul>{% for p in report.patterns %}<li>{{ p }}</li>{% endfor %}</ul></div>
+  {% endif %}
+
+  <h2>Suggested development focus</h2>
+  <p class="lede">In priority order. The same practices appear in {{ report.first_name }}'s development report, so you can refer to them directly.</p>
+  <div class="card focus">
+    {% for f in report.focus %}
+    <div{% if not loop.first %} style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px"{% endif %}>
+      <h3>{{ loop.index }}. {{ f.coach_title }}</h3>
+      <div class="lbl">Practice to suggest</div><div>{{ f.try }}</div>
+      {% if f.notice %}<div class="lbl">Early sign to help them notice</div><div>When {{ f.notice }}</div>{% endif %}
+    </div>
+    {% else %}
+    <p style="margin:0">No strong leanings or elevated tendencies. Let {{ report.first_name }}'s own goals set the focus.</p>
+    {% endfor %}
+  </div>
+
+  <h2>Conversation starters</h2>
+  <div class="card"><ul>{% for q in report.questions %}<li class="q">{{ q }}</li>{% endfor %}</ul></div>
+
+  <h2>Reading these results</h2>
+  <div class="card note"><ul>
+    <li>Each everyday trait comes from 3 statements and each pressure tendency from 2, so a single answer can move a score a lot. Look for the themes, not the exact numbers.</li>
+    <li>These are self-ratings: how {{ report.first_name }} sees themselves, not how others see them. The 360 feedback, where available, is the natural cross-check.</li>
+    <li>Original items, not normed and not scientifically validated. Use for development conversations only, never for selection, promotion, or performance decisions.</li>
+    <li>Share what's useful with {{ report.first_name }} in their own development report's language. Avoid quoting the scale labels here (for example "arrogant"), which read as judgments out of context.</li>
+  </ul></div>
+</div>
+</body>
+</html>

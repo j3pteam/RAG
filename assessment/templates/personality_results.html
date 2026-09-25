@@ -20,6 +20,9 @@ h2{font-size:1.3rem;margin:34px 0 4px}
 .m{height:8px;border-radius:4px;background:#EEE9DF;overflow:hidden}.m i{display:block;height:100%}
 .t .m i{background:var(--teal)} .d .m i{background:var(--amber)}
 .b{font-size:.85rem;color:var(--muted);text-align:right}.b.elev{color:var(--err);font-weight:600}
+.reports{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin:0 0 6px}
+.reports a{color:var(--navy)}
+.rbtn{background:var(--navy);color:#fff!important;padding:7px 14px;border-radius:6px;text-decoration:none;font-weight:600;font-size:.92rem}
 @media (max-width:560px){.row{grid-template-columns:1fr 90px}.m{grid-column:1/-1;order:3}}
 </style>
 </head>
@@ -31,6 +34,8 @@ h2{font-size:1.3rem;margin:34px 0 4px}
     <p class="intro">Personality assessment not yet completed.</p>
   {% else %}
     <p class="intro">Completed {{ result.completed_at }}. Admin only — never shown to participants.</p>
+    <p class="reports"><a class="rbtn" href="/admin/advisors/{{ advisor.id }}/personality/coach-report">Coach report</a>
+      <a href="/admin/advisors/{{ advisor.id }}/personality/report">Development report ({{ advisor.name }}'s copy)</a></p>
     <h2>Everyday style</h2>
     <div class="card t">{% for k, v in result.scores.traits.items() %}
       <div class="row"><span>{{ trait_names[k] }}</span><div class="m"><i style="width:{{ [v.score,3]|max }}%"></i></div><span class="b">{{ v.band|capitalize }} · {{ v.score }}</span></div>

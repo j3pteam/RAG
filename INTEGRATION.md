@@ -31,6 +31,16 @@ app.register_blueprint(create_assessment_blueprint(
 Routes added:
 - `/portal/<token>/onboarding/personality` — advisor takes or reviews it; saving returns to onboarding
 - `/admin/advisors/<id>/personality` — admin results view
+- `/portal/<token>/onboarding/personality/report` — the advisor's own development report
+- `/admin/advisors/<id>/personality/coach-report` — coach report for whoever works with them
+- `/admin/advisors/<id>/personality/report` — admin view of the advisor's development report
+
+## Reports
+`reports.py` turns scores into two written reports; neither goes to the AI.
+- **Development report** (`build_self_report`) — what the person receives. Strengths first, pressure tendencies under neutral names ("High standards", not "Perfectionistic"), a spectrum instead of numbers, up to three focus areas with something to try, reflection questions.
+- **Coach report** (`build_coach_report`) — for whoever works with them. Snapshot, scores and bands, how to work with each trait, what pressure may look like with a response and a question for each elevated tendency, trait-and-tendency patterns, suggested focus, conversation starters, and notes on reading the results.
+
+Both take `(name, scores)`, so they work for anyone who has taken the assessment.
 
 ## 4. Show it in onboarding
 

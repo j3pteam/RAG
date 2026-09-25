@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ report.name }} — Development report</title>
+<style>
+:root{--navy:#2A3247;--gold:#C9A96E;--cream:#F7F4EE;--line:#E4DED3;--muted:#6B7285;--teal:#2B7A74;--amber:#A8651A}
+*{box-sizing:border-box}
+body{margin:0;background:var(--cream);color:var(--navy);font:16px/1.6 -apple-system,"Segoe UI",system-ui,sans-serif}
+.wrap{max-width:780px;margin:0 auto;padding:32px 20px 80px}
+.top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.back{color:var(--muted);text-decoration:none;font-size:.92rem}
+.print{font:600 .9rem inherit;padding:8px 14px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--navy);cursor:pointer}
+.eyebrow{color:var(--muted);font-size:.85rem;letter-spacing:.08em;text-transform:uppercase;border-left:3px solid var(--gold);padding-left:10px;margin-top:22px}
+h1{font-size:2rem;margin:8px 0 4px;line-height:1.2}
+h2{font-size:1.3rem;margin:38px 0 6px}
+h3{font-size:1.05rem;margin:0 0 4px}
+.lede{color:var(--muted);margin:0 0 6px}
+.card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px 20px;margin-top:12px;break-inside:avoid}
+ul{margin:6px 0 0;padding-left:20px} li{margin:4px 0}
+.spec{display:grid;grid-template-columns:1fr 2fr 1fr;gap:12px;align-items:center;font-size:.8rem;color:var(--muted);margin:10px 0 12px}
+.spec span:last-child{text-align:right}
+.bar{position:relative;height:8px;border-radius:4px;background:linear-gradient(90deg,#E9E3D7,#D9E7E5)}
+.bar i{position:absolute;top:50%;width:16px;height:16px;border-radius:50%;background:var(--teal);border:3px solid #fff;box-shadow:0 0 0 1px var(--teal);transform:translate(-50%,-50%)}
+.lbl{font-size:.75rem;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:10px 0 2px}
+.watch{border-left:4px solid var(--amber)}
+.focus{border-left:4px solid var(--teal)}
+.try{background:#F2F7F6;border-radius:8px;padding:10px 12px;margin-top:10px}
+.note{font-size:.85rem;color:var(--muted);margin-top:40px;border-top:1px solid var(--line);padding-top:14px}
+@media (max-width:560px){.spec{grid-template-columns:1fr 1fr}.bar{grid-column:1/-1;order:3}}
+@media print{body{background:#fff;font-size:12pt}.top{display:none}.card{border-color:#ccc}.wrap{padding:0}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <a class="back" href="{{ back_url }}">← Back</a>
+    <button type="button" class="print" onclick="window.print()">Print or save as PDF</button>
+  </div>
+  <div class="eyebrow">Personality assessment · Development report</div>
+  <h1>{{ report.name }}</h1>
+  {% if completed_at %}<p class="lede">Based on your answers on {{ completed_at.strftime("%B %-d, %Y") if completed_at.strftime is defined else completed_at }}.</p>{% endif %}
+  <p>This report describes how you tend to show up day to day and what can happen under pressure, based on your own answers. It isn't a test you pass or fail. Every style has strengths, and every strength has a flip side. Use it to notice patterns and choose a few things to try.</p>
+
+  <h2>Your strengths</h2>
+  <div class="card"><ul>{% for s in report.strengths %}<li>{{ s }}</li>{% endfor %}</ul></div>
+
+  <h2>Your everyday style</h2>
+  <p class="lede">Where you placed yourself between two ends of each scale. Neither end is better.</p>
+  {% for t in report.style %}
+  <div class="card">
+    <h3>{{ t.name }}</h3>
+    <div class="spec" aria-label="{{ t.name }}: between {{ t.low }} and {{ t.high }}">
+      <span>{{ t.low }}</span><div class="bar"><i style="left:{{ [[t.position, 3]|max, 97]|min }}%"></i></div><span>{{ t.high }}</span>
+    </div>
+    <p style="margin:0">{{ t.headline }}</p>
+    <div class="lbl">At your best</div><div>{{ t.best }}</div>
+    <div class="lbl">Watch for</div><div>{{ t.watch }}</div>
+  </div>
+  {% endfor %}
+
+  <h2>Under pressure</h2>
+  {% if report.watch %}
+    <p class="lede">Most people have a few tendencies that show up when they're stressed, tired, or under high stakes. These stood out in your answers. Each is usually a strength pushed too far.</p>
+    {% for w in report.watch %}
+    <div class="card watch">
+      <h3>{{ w.name }}</h3>
+      <div>{{ w.looks }} {{ w.strength }}</div>
+      {% if not w.in_focus %}<div class="try"><strong>Try:</strong> {{ w.try }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  {% else %}
+    <div class="card"><p style="margin:0">None of the pressure tendencies stood out strongly in your answers.</p></div>
+  {% endif %}
+  {% if report.occasional %}
+    <p class="lede" style="margin-top:14px">Also worth noticing now and then: {{ report.occasional|join(", ")|lower }}.</p>
+  {% endif %}
+
+  <h2>Where to focus</h2>
+  <p class="lede">Pick one or two. Small, repeated changes matter more than big plans.</p>
+  {% for f in report.focus %}
+  <div class="card focus">
+    <h3>{{ loop.index }}. {{ f.title }}</h3>
+    {% if f.notice %}<div><strong>Notice when</strong> {{ f.notice }}</div>{% else %}<div>{{ f.why }}</div>{% endif %}
+    <div class="try"><strong>Try:</strong> {{ f.try }}</div>
+  </div>
+  {% else %}
+  <div class="card"><p style="margin:0">Your answers show a balanced style. Choose the area above that you'd most like to strengthen.</p></div>
+  {% endfor %}
+
+  <h2>Questions to reflect on</h2>
+  <div class="card"><ul>{% for q in report.reflections %}<li>{{ q }}</li>{% endfor %}</ul></div>
+
+  <p class="note">This is a short self-report for development only. It reflects how you see yourself right now, not a fixed type, and it hasn't been scientifically validated. Your answers are private to you and the J3P team supporting your development.</p>
+</div>
+</body>
+</html>

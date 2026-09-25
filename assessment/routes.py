@@ -12,6 +12,7 @@ import os
 from flask import Blueprint, abort, redirect, render_template, request
 
 from .items import ALL_ITEM_IDS, DERAILERS, LIKERT, PARTS, TRAITS, score
+from .reports import build_coach_report, build_self_report
 
 
 def create_assessment_blueprint(get_advisor, get_advisor_by_id, get_result, save_result,
@@ -40,6 +41,42 @@ def create_assessment_blueprint(get_advisor, get_advisor_by_id, get_result, save
         return render_template("personality_assessment.html", advisor=advisor, parts=PARTS,
                                likert=LIKERT, answers=answers, error=error,
                                back_url=onboarding_home(token))
+
+    @bp.route("/portal/<token>/onboarding/personality/report")
+    def self_report(token):
+        advisor = get_advisor(token)
+        if not advisor:
+            abort(404)
+        result = get_result(advisor["id"])
+        if not result:
+            return redirect(f"/portal/{token}/onboarding/personality")
+        return render_template("personality_self_report.html",
+                               report=build_self_report(advisor["name"], result["scores"]),
+                               completed_at=result["completed_at"], back_url=onboarding_home(token))
+
+    @bp.route("/admin/advisors/<advisor_id>/personality/report")
+    @admin_required
+    def admin_self_report(advisor_id):
+        """The development report exactly as the advisor sees it."""
+        advisor, result = get_advisor_by_id(advisor_id), get_result(advisor_id)
+        if not advisor or not result:
+            abort(404)
+        return render_template("personality_self_report.html",
+                               report=build_self_report(advisor["name"], result["scores"]),
+                               completed_at=result["completed_at"],
+                               back_url=f"/admin/advisors/{advisor_id}/personality/coach-report")
+
+    @bp.route("/admin/advisors/<advisor_id>/personality/coach-report")
+    @admin_required
+    def coach_report(advisor_id):
+        advisor, result = get_advisor_by_id(advisor_id), get_result(advisor_id)
+        if not advisor or not result:
+            abort(404)
+        return render_template("personality_coach_report.html",
+                               report=build_coach_report(advisor["name"], result["scores"]),
+                               completed_at=result["completed_at"],
+                               back_url=f"/admin/advisors/{advisor_id}/personality",
+                               self_report_url=f"/admin/advisors/{advisor_id}/personality/report")
 
     @bp.route("/admin/advisors/<advisor_id>/personality")
     @admin_required
