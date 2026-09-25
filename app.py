@@ -18412,7 +18412,7 @@ details.section[open] > summary {
     {% if admin_perms.edit_advisors %}
     <a class="tab-btn {{ 'active' if active_tab == 'clients' else '' }}" href="{{ url_for('admin_dashboard', tab='clients') }}">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21h18"/><path d="M5 21V7l7-4 7 4v14"/><path d="M10 21v-6h4v6"/></svg>
-      Add Client
+      Client
     </a>
     {% endif %}
     {% if admin_perms.edit_biometric %}
@@ -19142,23 +19142,6 @@ details.section[open] > summary {
       {% endif %}
 
       {% if admin_perms.edit_advisors %}
-      <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
-            style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;">
-        <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">
-          Add an advisor to {{ org.name }}</div>
-        <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
-          <label style="font-size: 0.8rem;">Advisor participants talk to
-            <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Title <span class="muted">(optional)</span>
-            <input type="text" name="title" placeholder="e.g. Director, Thoracic Oncology" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-          <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
-            <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
-          </label>
-        </div>
-        <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
-      </form>
       <form method="POST" action="/admin/orgs/{{ org.slug }}/intake"
             style="margin: 0 0 1rem; padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;
                    display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap;">
@@ -19218,8 +19201,35 @@ details.section[open] > summary {
         {% endif %}
       </details>
     </details>
+    <div style="margin: 0.8rem 0 1.8rem 1.6rem; padding: 1rem 1.1rem 0.6rem;
+                border: 1px solid var(--line); border-left: 4px solid {{ org.gold or org.navy or cfg.gold }};
+                border-radius: 8px; background: var(--paper);">
+      <h3 style="margin: 0 0 0.8rem; font-size: 1rem;">
+        Advisors at {{ org.name }}
+        <span class="muted" style="font-weight: 400; font-size: 0.82rem;">
+          · {{ org_advisors|length }}</span>
+      </h3>
+      {% if admin_perms.edit_advisors %}
+      <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors"
+            style="margin: 0 0 1rem; background: var(--card, #fff); padding: 0.9rem; border: 1px solid var(--line); border-radius: 6px;">
+        <div style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.5rem;">
+          Add an advisor to {{ org.name }}</div>
+        <div style="display: grid; gap: 0.6rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));">
+          <label style="font-size: 0.8rem;">Advisor participants talk to
+            <input type="text" name="name" required placeholder="e.g. John Sample, MD" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Title <span class="muted">(optional)</span>
+            <input type="text" name="title" placeholder="e.g. Director, Thoracic Oncology" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+          <label style="font-size: 0.8rem;">Grounded in whose thinking <span class="muted">(optional)</span>
+            <input type="text" name="persona_principal" placeholder="{{ org_principal }}" style="width: 100%; box-sizing: border-box; padding: 0.45rem; border: 1px solid var(--line); border-radius: 5px;" />
+          </label>
+        </div>
+        <button type="submit" class="btn" style="margin-top: 0.7rem;">Add advisor</button>
+      </form>
+      {% endif %}
     {% for adv in org_advisors %}
-    <details class="section" style="margin-left: 1.6rem;">
+    <details class="section">
       <summary>
         <h2>{{ adv.name }}</h2>
         <span class="section-note">
@@ -19679,9 +19689,10 @@ details.section[open] > summary {
     </details>
     {% endfor %}
     {% if not org_advisors %}
-    <p class="muted" style="margin: 0.4rem 0 0 0.4rem; font-size: 0.82rem;">
-      No advisors in {{ org.name }} yet — add one in its card above.</p>
+    <p class="muted" style="margin: 0 0 0.6rem; font-size: 0.82rem;">
+      No advisors yet — add the first one above.</p>
     {% endif %}
+    </div>
     {% endfor %}
     {% else %}
     <p class="muted">
