@@ -3101,6 +3101,10 @@ INDEX_HTML = r"""<!DOCTYPE html>
     }
     .presence.speaking .presence-status,
     .presence.thinking .presence-status { color: var(--navy); }
+    /* Client pages: larger advisor name, title and organization */
+    .presence-name.is-client { font-size: 0.95rem; font-weight: 600; }
+    .presence-title { margin-top: 0.2rem; font-size: 0.82rem; line-height: 1.3; color: var(--navy); }
+    .presence-org { margin-top: 0.15rem; font-size: 0.74rem; line-height: 1.3; color: var(--muted); }
     /* A video takes over the frame when a talking head is generated */
     .presence-video {
       position: absolute; inset: 0; width: 100%; height: 100%;
@@ -3118,6 +3122,9 @@ INDEX_HTML = r"""<!DOCTYPE html>
       .presence { right: 0.7rem; bottom: 14rem; width: 76px; }
       .presence-frame { width: 60px; height: 60px; margin: 0 auto; }
       .presence-name { font-size: 0.62rem; }
+      .presence-name.is-client { font-size: 0.74rem; }
+      .presence-title { font-size: 0.66rem; }
+      .presence-org { display: none; }
       .presence-status { display: none; }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -4018,12 +4025,12 @@ INDEX_HTML = r"""<!DOCTYPE html>
       <span class="presence-pulse"></span>
       <span class="presence-pulse"></span>
     </button>
-    <div class="presence-name">{{ cfg.avatar_name or cfg.persona_name }}</div>
+    <div class="presence-name{% if client_org %} is-client{% endif %}">{{ cfg.avatar_name or cfg.persona_name }}</div>
     {% if persona_title %}
-    <div class="presence-status" style="text-transform: none; letter-spacing: 0.02em;">{{ persona_title }}</div>
+    <div class="presence-title">{{ persona_title }}</div>
     {% endif %}
     {% if client_org and client_org != (cfg.avatar_name or cfg.persona_name) %}
-    <div class="presence-status" style="text-transform: none; letter-spacing: 0.02em;">{{ client_org }}</div>
+    <div class="presence-org">{{ client_org }}</div>
     {% endif %}
     <div class="presence-status" id="presence-status">Ready</div>
   </div>
