@@ -19237,18 +19237,29 @@ details.section[open] > summary {
       <details style="margin: 0 0 1rem; padding: 0.7rem 0.9rem; border: 1px dashed var(--line);
                       border-radius: 6px;">
         <summary style="cursor: pointer; font-size: 0.85rem; font-weight: 600;">
-          Bulk upload advisors to {{ org.name }}</summary>
-        <p class="muted" style="font-size: 0.8rem; margin: 0.6rem 0;">
-          A .xlsx or .csv with a <strong>Name</strong> column (or <strong>First</strong>
-          and <strong>Last</strong> name columns, plus optional <strong>Credentials</strong>),
-          and optionally <strong>Title</strong> and <strong>Grounded in</strong>. Each row becomes an
-          advisor with {{ org.name }}'s branding and their own session link.
-          <a href="/admin/orgs/advisor-template.csv">Download a template</a>.</p>
+          Export or import {{ org.name }} advisors</summary>
+        <p class="muted" style="font-size: 0.8rem; margin: 0.6rem 0; line-height: 1.55;">
+          The export is {{ org.name }}'s roster — names, titles, booking links and who is
+          set up — in the same shape the importer reads, so an edited export can be
+          uploaded straight back. Matching is by name: a row for an existing advisor
+          updates them, a new name adds an advisor with {{ org.name }}'s branding and
+          their own session link. Blank cells leave things as they are. Photos, voice
+          samples, documents and participant links are never touched by an import.</p>
+        <div style="display: flex; gap: 0.5rem; flex-wrap: wrap; margin-bottom: 0.7rem;">
+          <a class="btn-quiet" href="/admin/orgs/{{ org.slug }}/advisors/export.csv">Export CSV</a>
+          <a class="btn-quiet" href="/admin/orgs/{{ org.slug }}/advisors/export.xlsx">Export Excel</a>
+          <a class="btn-quiet" href="/admin/orgs/advisor-template.csv">Blank template</a>
+        </div>
         <form method="POST" action="/admin/orgs/{{ org.slug }}/advisors/bulk"
               enctype="multipart/form-data">
           <input type="file" name="file" accept=".csv,.tsv,.txt,.xlsx,.xlsm,.xls,.numbers" required />
-          <button type="submit" class="btn" style="margin-top: 0.5rem;">Upload advisors</button>
+          <button type="submit" class="btn" style="margin-top: 0.5rem;">Upload</button>
         </form>
+        <p class="muted" style="font-size: 0.78rem; margin: 0.6rem 0 0;">
+          A <strong>Name</strong> column is required (or <strong>First</strong> and
+          <strong>Last</strong>, plus optional <strong>Credentials</strong>).
+          <strong>Title</strong>, <strong>Grounded in</strong>, <strong>Scheduling URL</strong>
+          and <strong>Booking button</strong> (show / hide / blank) are optional.</p>
       </details>
       {% endif %}
     {% for adv in org_advisors %}
@@ -24850,7 +24861,16 @@ def _bulk_header_map(row):
         if not h:
             continue
         if any(w in h for w in ("organization", "organisation", "company", "file",
-                                "user name", "username", "email")):
+                                "user name", "username", "email", "slug",
+                                "session link", "participant", "document",
+                                "voice", "portal")):
+            continue
+        if "booking button" in h or h in ("booking", "show booking"):
+            m.setdefault("booking", i)
+            continue
+        if any(w in h for w in ("scheduling", "calendar", "booking url",
+                                "booking link", "calendly")):
+            m.setdefault("scheduling", i)
             continue
         if ("first" in h or h == "given name") and "name" in h or h in ("first", "given"):
             m.setdefault("first", i)
@@ -24930,7 +24950,11 @@ def _read_advisor_rows(upload):
         if name and cred and cred.lower() not in name.lower():
             name = f"{name}, {cred}"
         out.append({"name": name, "title": cell(r, "title"),
-                    "principal": cell(r, "principal")})
+                    "principal": cell(r, "principal"),
+                    "scheduling": cell(r, "scheduling"),
+                    "booking": cell(r, "booking"),
+                    "has_scheduling": "scheduling" in cols,
+                    "has_booking": "booking" in cols})
     return out
 
 
@@ -24961,21 +24985,39 @@ def admin_org_bulk_advisors(slug):
     if len(rows) > 200:
         flash("That file has more than 200 advisors. Split it into smaller files.")
         return redirect(url_for("admin_dashboard", tab="clients"))
-    added, skipped = [], []
+    existing = {x["name"].strip().lower(): x["slug"] for x in list_advisors()
+                if x.get("client_org") == org["slug"]}
+    added, updated, skipped = [], [], []
     for n, row in enumerate(rows, start=2):
         if not row["name"]:
             continue
-        ok, _, msg = _org_create_advisor(org, row["name"], row["title"], row["principal"])
-        (added if ok else skipped).append(row["name"] if ok else f"row {n} ({row['name']}): {msg}")
+        key = row["name"].strip().lower()
+        if key in existing:
+            ok, msg = _org_update_advisor(existing[key], row)
+            (updated if ok else skipped).append(
+                row["name"] if ok else f"row {n} ({row['name']}): {msg}")
+            continue
+        ok, new_slug, msg = _org_create_advisor(org, row["name"], row["title"], row["principal"])
+        if ok:
+            existing[key] = new_slug
+            if row.get("scheduling") or row.get("booking"):
+                _org_update_advisor(new_slug, {**row, "title": "", "principal": ""})
+            added.append(row["name"])
+        else:
+            skipped.append(f"row {n} ({row['name']}): {msg}")
     lines = []
     if added:
         lines.append(f"\u2713 Added {len(added)} advisor{'' if len(added) == 1 else 's'}: "
                      + ", ".join(added[:10])
                      + (f" and {len(added) - 10} more" if len(added) > 10 else "") + ".")
+    if updated:
+        lines.append(f"\u2713 Updated {len(updated)} existing advisor"
+                     f"{'' if len(updated) == 1 else 's'}: " + ", ".join(updated[:10])
+                     + (f" and {len(updated) - 10} more" if len(updated) > 10 else "") + ".")
     if skipped:
         lines.append(f"Skipped {len(skipped)}: " + "; ".join(skipped[:8])
                      + (" \u2026" if len(skipped) > 8 else ""))
-    if not added and not skipped:
+    if not added and not updated and not skipped:
         lines.append("No advisor names were found in that file.")
     for ln in lines:
         flash(ln)
@@ -24983,12 +25025,114 @@ def admin_org_bulk_advisors(slug):
     return redirect(url_for("admin_dashboard", tab="clients") + f"#advisors-{slug}")
 
 
+def _org_update_advisor(adv_slug: str, row: dict):
+    """Apply an import row to an existing organization advisor. Blank cells
+    leave a field as it is; Booking button 'show'/'hide' sets it and
+    'follow'/'default' clears it. Photos, voice, documents and links are
+    never touched."""
+    sets, params = [], []
+    if row.get("title"):
+        sets.append("title = %s"); params.append(row["title"][:120])
+    if row.get("principal"):
+        sets.append("persona_principal = %s"); params.append(row["principal"][:120])
+    if row.get("scheduling"):
+        url = row["scheduling"].strip()
+        if not url.lower().startswith(("http://", "https://")):
+            url = "https://" + url
+        sets.append("scheduling_url = %s"); params.append(url[:500])
+    b = (row.get("booking") or "").strip().lower()
+    if b in ("show", "on", "yes", "true", "1"):
+        sets.append("show_scheduling_override = TRUE")
+    elif b in ("hide", "off", "no", "false", "0"):
+        sets.append("show_scheduling_override = FALSE")
+    elif b in ("follow", "default", "site default"):
+        sets.append("show_scheduling_override = NULL")
+    if not sets:
+        return True, ""
+    conn = _settings_db_conn()
+    if not conn:
+        return False, "the database was unavailable"
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"UPDATE advisors SET {', '.join(sets)} WHERE slug = %s",
+                        (*params, adv_slug))
+        conn.commit()
+        _forget_cached_advisor(adv_slug)
+        return True, ""
+    except Exception as e:
+        app.logger.error(f"[orgs] update advisor failed: {type(e).__name__}")
+        return False, "could not be updated"
+    finally:
+        conn.close()
+
+
+ORG_ADVISOR_EXPORT_HEADERS = [
+    "Name", "Title", "Grounded in", "Scheduling URL", "Booking button",
+    "Session link", "Participant links", "Documents", "Voice sample", "Slug",
+]
+
+
+@app.route("/admin/orgs/<slug>/advisors/export.<fmt>")
+@require_permission("edit_advisors")
+def admin_org_export_advisors(slug, fmt):
+    """One organization's advisors as a file — the same shape its bulk
+    upload reads, so an edited export can be uploaded straight back."""
+    org = get_client_org(slug)
+    if not org or fmt not in ("csv", "xlsx"):
+        flash("Nothing to export.")
+        return redirect(url_for("admin_dashboard", tab="clients"))
+    base = public_base_url()
+    rows = []
+    for a in advisors_with_detail():
+        if a.get("client_org") != slug:
+            continue
+        rows.append([
+            a["name"], a.get("title") or "", a.get("persona_principal") or "",
+            a.get("scheduling_url") or "",
+            ("" if a.get("show_scheduling_override") is None
+             else "show" if a["show_scheduling_override"] else "hide"),
+            f"{base}/a/{a['slug']}",
+            a.get("participant_link_count", 0), a.get("doc_count", 0),
+            "yes" if a.get("voice_sample") else "no", a["slug"],
+        ])
+    stamp = datetime.now().strftime("%Y%m%d")
+    fname = f"{slugify_advisor(org['name'])}_advisors_{stamp}"
+    from flask import send_file
+    import io as _io
+    if fmt == "csv":
+        import csv as _csv
+        buf = _io.StringIO()
+        w = _csv.writer(buf)
+        w.writerow(ORG_ADVISOR_EXPORT_HEADERS)
+        w.writerows(rows)
+        return send_file(_io.BytesIO(buf.getvalue().encode("utf-8-sig")),
+                         mimetype="text/csv", as_attachment=True,
+                         download_name=f"{fname}.csv")
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Advisors"
+    ws.append(ORG_ADVISOR_EXPORT_HEADERS)
+    for cell in ws[1]:
+        cell.font = Font(bold=True)
+    for r in rows:
+        ws.append(r)
+    for i in range(1, len(ORG_ADVISOR_EXPORT_HEADERS) + 1):
+        ws.column_dimensions[ws.cell(row=1, column=i).column_letter].width = 24
+    data = _io.BytesIO()
+    wb.save(data)
+    data.seek(0)
+    return send_file(data, as_attachment=True, download_name=f"{fname}.xlsx",
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
 @app.route("/admin/orgs/advisor-template.csv")
 @require_permission("edit_advisors")
 def admin_org_advisor_template():
-    body = ("Name,Title,Grounded in\r\n"
-            "\"John Sample, MD\",\"Director, Thoracic Oncology\",\r\n"
-            "\"Jane Example, RN\",Chief Nursing Officer,\r\n")
+    body = ("Name,Title,Grounded in,Scheduling URL,Booking button\r\n"
+            "\"John Sample, MD\",\"Director, Thoracic Oncology\",,,\r\n"
+            "\"Jane Example, RN\",Chief Nursing Officer,,calendly.com/jane-example,show\r\n")
     resp = app.response_class(body, mimetype="text/csv")
     resp.headers["Content-Disposition"] = "attachment; filename=advisor-upload-template.csv"
     return resp
