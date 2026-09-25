@@ -44,18 +44,19 @@ for node in ast.walk(tree):
 # Flask provides this one itself.
 endpoints.add("static")
 
-# Routes registered from the assessment/ blueprint, as "<blueprint>.<view>".
+# Routes registered from the assessment/ blueprints, as "<blueprint>.<view>".
+# Every blueprint there is built from the same views, so each blueprint name
+# (a literal Blueprint("...") or a _build("...", ...) call) gets every view.
 import os
 _bp_path = os.path.join(os.path.dirname(os.path.abspath(PATH)), "assessment", "routes.py")
 if os.path.exists(_bp_path):
     _bp_src = open(_bp_path, encoding="utf-8").read()
-    _bp_name = re.search(r'Blueprint\(\s*["\'](\w+)["\']', _bp_src)
-    if _bp_name:
-        for node in ast.walk(ast.parse(_bp_src)):
-            if isinstance(node, ast.FunctionDef) and any(
-                    isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "route"
-                    for d in node.decorator_list):
-                endpoints.add(f"{_bp_name.group(1)}.{node.name}")
+    _bp_names = set(re.findall(r'(?:Blueprint|_build)\(\s*["\'](\w+)["\']', _bp_src))
+    _views = [node.name for node in ast.walk(ast.parse(_bp_src))
+              if isinstance(node, ast.FunctionDef) and any(
+                  isinstance(d, ast.Call) and getattr(d.func, "attr", "") == "route"
+                  for d in node.decorator_list)]
+    endpoints.update(f"{b}.{v}" for b in _bp_names for v in _views)
 
 bad = []
 for m in re.finditer(r'url_for\(\s*["\']([A-Za-z_][\w.]*)["\']', src):

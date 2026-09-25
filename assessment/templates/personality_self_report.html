@@ -92,6 +92,7 @@ ul{margin:6px 0 0;padding-left:20px} li{margin:4px 0}
   <h2>Questions to reflect on</h2>
   <div class="card"><ul>{% for q in report.reflections %}<li>{{ q }}</li>{% endfor %}</ul></div>
 
+  {% if retake_url %}<p class="lede" style="margin-top:28px"><a href="{{ retake_url }}" style="color:var(--navy)">Review or change your answers</a></p>{% endif %}
   <p class="note">This is a short self-report for development only. It reflects how you see yourself right now, not a fixed type, and it hasn't been scientifically validated. Your answers are private to you and the J3P team supporting your development.</p>
 </div>
 </body>

@@ -6,6 +6,7 @@ Drops into j3pteam/RAG. Fills the **Personality assessment** slot in the advisor
 Put `assessment/` at the repo root, next to the Flask app.
 
 ## 2. Storage
+(In this app the table is `personality_assessment`, keyed by `(subject_type, subject_id)`; see Participants below.)
 ```sql
 CREATE TABLE advisor_personality (
   advisor_id   TEXT PRIMARY KEY,
@@ -41,6 +42,18 @@ Routes added:
 - **Coach report** (`build_coach_report`) — for whoever works with them. Snapshot, scores and bands, how to work with each trait, what pressure may look like with a response and a question for each elevated tendency, trait-and-tendency patterns, suggested focus, conversation starters, and notes on reading the results.
 
 Both take `(name, scores)`, so they work for anyone who has taken the assessment.
+
+## Participants
+`create_participant_assessment_blueprint` gives participants the same assessment and reports from their own participant link:
+- `/p/<token>/personality`: take or review it. Finishing goes straight to their development report.
+- `/p/<token>/personality/report`: their development report
+- `/admin/participants/<link id>/personality` (+ `/report`, `/coach-report`): admin views
+
+In this app:
+- **Storage:** results for both kinds of person live in one `personality_assessment` table keyed by `(subject_type, subject_id)`. `subject_id` is the advisor slug or the participant link id.
+- **Access:** participant pages sit behind the same paywall as the chat link. Only the participant's first name is shown to them, never the link's admin label.
+- **Admin panel:** each participant link row shows assessment status, a **Copy assessment link** button, and a **Coach report** link.
+- **Not in the prompt:** participant results are never read into any prompt.
 
 ## 4. Show it in onboarding
 
