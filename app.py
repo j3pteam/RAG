@@ -463,6 +463,25 @@ if SESSION_KEY_IS_EPHEMERAL:
           "generated its own session key, so sessions will be dropped "
           "unpredictably between workers and on every restart. Set "
           "FLASK_SECRET_KEY to a fixed random value.", flush=True)
+# A key that was ever committed to the (public) repo, or one too short to
+# resist guessing, lets anyone forge session cookies and sign-in links.
+# Only a fingerprint is kept here, never the key itself.
+_LEAKED_SECRET_FINGERPRINTS = {
+    "88afd3ebf21fceea3276152aac84943a1245166821a7b25b1f5f5f75c7a6de19",   # meridian.env, public repo, Sep 2026
+}
+if _secret_from_env:
+    import hashlib as _hashlib
+    if _hashlib.sha256(_secret_from_env.encode()).hexdigest() in _LEAKED_SECRET_FINGERPRINTS:
+        print("[config] SECURITY WARNING: FLASK_SECRET_KEY is a key that was "
+              "published in the public repository. Anyone can forge sessions "
+              "and sign-in links for this deployment. Replace it in Railway "
+              "now (python3 -c 'import secrets; print(secrets.token_hex(32))').",
+              flush=True)
+    elif len(_secret_from_env) < 32:
+        print(f"[config] SECURITY WARNING: FLASK_SECRET_KEY is only "
+              f"{len(_secret_from_env)} characters. Use at least 32 random "
+              "characters (python3 -c 'import secrets; print(secrets.token_hex(32))').",
+              flush=True)
 # The whole request has to fit several files plus multipart overhead
 app.config["MAX_CONTENT_LENGTH"] = int(MAX_UPLOAD_BYTES * 3.5)
 client = anthropic.Anthropic()
